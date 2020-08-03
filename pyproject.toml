@@ -1,0 +1,17 @@
+[metadata]
+name = 'ensureconda'
+version = '0.0.1'
+description = 'Ensure that a conda is installed in a standard place if one cannot be found from the system'
+author = 'Marius van Niekerk'
+author_email = 'marius.v.niekerk@gmail.com'
+license = 'MIT'
+url = 'https://github.com/mariusvniekerk/ensureconda'
+
+[requires]
+python_version = ['3.6', '3.7', '3.8', '3.9', 'pypy3']
+
+[build-system]
+requires = ['setuptools', 'wheel']
+
+[tool.hatch.commands]
+prerelease = 'hatch build'

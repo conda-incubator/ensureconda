@@ -1,0 +1,16 @@
+site_name: ensureconda
+site_description: Simple lightweight conda installer that just works
+
+theme:
+  name: "material"
+repo_name: mariusvniekerk/ensureconda
+repo_url: https://github.com/mariusvniekerk/ensureconda
+
+nav:
+  - Home: "index.md"
+  - Installation: "installation.md"
+  - Commands: "commands.md"
+  - Configuration: "config.md"
+  - How condax works: "how-this-works.md"
+  - Contributing: "contributing.md"
+  - Changelog: "changelog.md"
