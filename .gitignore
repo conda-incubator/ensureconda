@@ -6,6 +6,7 @@
 .mypy_cache/
 .vscode/
 *.egg-info/
+.tox/
 build/
 dist/
 docs/build/
