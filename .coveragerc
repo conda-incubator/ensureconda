@@ -1,10 +1,10 @@
 [run]
 source =
     ensureconda
-    tests
+    test
 branch = True
 omit =
-    ensureconda/cli.py
+    ensureconda/__main__.py
 
 [report]
 exclude_lines =
