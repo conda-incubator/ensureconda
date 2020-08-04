@@ -5,7 +5,7 @@
 .idea/
 .mypy_cache/
 .vscode/
-condax.egg-info/
+*.egg-info/
 build/
 dist/
 docs/build/

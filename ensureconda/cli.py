@@ -1,36 +1,49 @@
-from pathlib import Path
-import sys
-
-import os
-import typing
-from typing import Iterator, Optional, IO
 import contextlib
-import click
-import appdirs
+import os
 import pathlib
 import platform
 import shutil
+import stat
+import sys
 import time
+import typing
+from pathlib import Path
+from typing import IO, Iterator, Optional, Union
+
+import requests
+
+import appdirs
+import click
 
 if typing.TYPE_CHECKING:
-    from pathlib import PathLike
+    from os import PathLike
 
 is_windows = platform.system() == "Windows"
-site_path = pathlib.Path(appdirs.user_data_dir('ensure-conda'))
+site_path = pathlib.Path(appdirs.user_data_dir("ensure-conda"))
 
 
 @click.command(help="Ensures that a conda/mamba is installed.")
-@click.option("--mamba/--no-mamba", default=True,
-    help='Search for mamba')
-@click.option("--micromamba/--no-micromamba", default=True,
-    help="Search for mamba/micromamba, Install if not present")
-@click.option("--conda/--no-conda", default=True,
-    help="Search for conda")
-@click.option("--conda-exe/--no-conda-exe", default=True,
-    help="Search for conda.exe / conda-standalone, install if not present")
+@click.option("--mamba/--no-mamba", default=True, help="Search for mamba")
+@click.option(
+    "--micromamba/--no-micromamba",
+    default=True,
+    help="Search for mamba/micromamba, Install if not present",
+)
+@click.option("--conda/--no-conda", default=True, help="Search for conda")
+@click.option(
+    "--conda-exe/--no-conda-exe",
+    default=True,
+    help="Search for conda.exe / conda-standalone, install if not present",
+)
 @click.option("--no-install", is_flag=True)
 def ensureconda_cli(mamba, micromamba, conda, conda_exe, no_install):
-    exe = ensure_conda(mamba, micromamba, conda, conda_exe, no_install)
+    exe = ensure_conda(
+        mamba=mamba,
+        micromamba=micromamba,
+        conda=conda,
+        conda_exe=conda_exe,
+        no_install=no_install,
+    )
     if exe:
         print("Found compatible executable", file=sys.stderr, flush=True)
         # silly thing to force correct output order
@@ -42,7 +55,7 @@ def ensureconda_cli(mamba, micromamba, conda, conda_exe, no_install):
         sys.exit(1)
 
 
-def ext_candidates(fpath):
+def ext_candidates(fpath: str) -> Iterator[str]:
     if is_windows:
         exts = os.environ.get("PATHEXT", "").split(os.pathsep)
     else:
@@ -54,14 +67,17 @@ def ext_candidates(fpath):
 def is_exe(fpath: Optional[Path]):
     if fpath is None:
         return False
-    return os.path.exists(fpath) and  os.access(fpath, os.X_OK) and os.path.isfile(fpath)
+    return os.path.exists(fpath) and os.access(fpath, os.X_OK) and os.path.isfile(fpath)
 
 
-def resolve_executable(exe_name, path_prefix=site_path) -> Iterator[Path]:
+def resolve_executable(
+    exe_name: str, path_prefix: Optional[Path] = site_path
+) -> Iterator[Path]:
     for candidate in ext_candidates(exe_name):
-        site_exe = site_path / candidate
-        if is_exe(site_exe):
-            yield site_exe
+        if path_prefix is not None:
+            prefixed_exe = path_prefix / candidate
+            if is_exe(prefixed_exe):
+                yield prefixed_exe
 
         # which based exe
         exe = shutil.which(candidate)
@@ -71,24 +87,24 @@ def resolve_executable(exe_name, path_prefix=site_path) -> Iterator[Path]:
                 yield exe_path
 
 
-def conda_executables() -> Iterator[str]:
+def conda_executables() -> Iterator[PathLike]:
     conda_exe_from_env = os.environ.get("CONDA_EXE")
     if conda_exe_from_env:
         if is_exe(Path(conda_exe_from_env)):
             yield Path(conda_exe_from_env)
-    yield from resolve_executable('conda')
+    yield from resolve_executable("conda")
 
 
-def conda_standalone_executables() -> Iterator[str]:
-    yield from resolve_executable('conda_standalone')
+def conda_standalone_executables() -> Iterator[PathLike]:
+    yield from resolve_executable("conda_standalone")
 
 
-def mamba_executables():
-    yield from resolve_executable('mamba')
+def mamba_executables() -> Iterator[PathLike]:
+    yield from resolve_executable("mamba")
 
 
-def micromamba_executables():
-    yield from resolve_executable('micromamba')
+def micromamba_executables() -> Iterator[PathLike]:
+    yield from resolve_executable("micromamba")
 
 
 def safe_next(it):
@@ -98,7 +114,14 @@ def safe_next(it):
         return None
 
 
-def ensure_conda(mamba, micromamba, conda, conda_exe, force_reinstall) -> pathlib.Path:
+def ensure_conda(
+    *,
+    mamba: bool = True,
+    micromamba: bool = True,
+    conda: bool = True,
+    conda_exe: bool = True,
+    no_install: bool = False,
+) -> Optional[PathLike]:
     if mamba:
         exe = safe_next(mamba_executables())
         if exe:
@@ -107,7 +130,8 @@ def ensure_conda(mamba, micromamba, conda, conda_exe, force_reinstall) -> pathli
         exe = safe_next(micromamba_executables())
         if exe:
             return exe
-        return install_micromamba()
+        if not no_install:
+            return install_micromamba()
     if conda:
         exe = safe_next(conda_executables())
         if exe:
@@ -116,7 +140,9 @@ def ensure_conda(mamba, micromamba, conda, conda_exe, force_reinstall) -> pathli
         exe = safe_next(conda_standalone_executables())
         if exe:
             return exe
-        return install_conda_exe()
+        if not no_install:
+            return install_conda_exe()
+    return None
 
 
 @contextlib.contextmanager
@@ -145,10 +171,9 @@ def install_conda_exe() -> Optional[Path]:
     site_path.mkdir(parents=True, exist_ok=True)
     ext = ".exe" if is_windows else ""
     target_filename = site_path / f"conda_standalone{ext}"
-    with new_executable(target_filename, "wb") as fo:
+    with new_executable(target_filename) as fo:
         fo.write(resp.content)
     return pathlib.Path(target_filename)
-
 
 
 def install_micromamba() -> Optional[Path]:
@@ -180,6 +205,5 @@ def install_micromamba() -> Optional[Path]:
         return target_path
 
 
-
 if __name__ == "__main__":
-    ensure_conda_cli()
+    ensureconda_cli()
