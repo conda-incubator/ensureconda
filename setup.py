@@ -14,7 +14,7 @@ REQUIRES = ["click", "requests", "appdirs"]
 
 setup(
     name="ensureconda",
-    version="0.0.2",
+    version="0.0.3",
     description="Install and run applications packaged with conda in isolated environments",
     long_description=readme,
     long_description_content_type="text/markdown",
