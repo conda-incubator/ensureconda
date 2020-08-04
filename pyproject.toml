@@ -1,6 +1,6 @@
 [metadata]
 name = 'ensureconda'
-version = "0.0.1"
+version = "0.0.2"
 description = 'Ensure that a conda is installed in a standard place if one cannot be found from the system'
 author = 'Marius van Niekerk'
 author_email = 'marius.v.niekerk@gmail.com'
