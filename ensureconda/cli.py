@@ -7,15 +7,13 @@ import stat
 import sys
 import time
 import typing
+from os import PathLike
 from pathlib import Path
 from typing import IO, Iterator, Optional, Union
 
-import requests
-
 import appdirs
 import click
-
-from os import PathLike
+import requests
 
 is_windows = platform.system() == "Windows"
 site_path = pathlib.Path(appdirs.user_data_dir("ensure-conda"))
