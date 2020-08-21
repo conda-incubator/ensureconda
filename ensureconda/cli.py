@@ -7,16 +7,13 @@ import stat
 import sys
 import time
 import typing
+from os import PathLike
 from pathlib import Path
 from typing import IO, Iterator, Optional, Union
 
-import requests
-
 import appdirs
 import click
-
-if typing.TYPE_CHECKING:
-    from os import PathLike
+import requests
 
 is_windows = platform.system() == "Windows"
 site_path = pathlib.Path(appdirs.user_data_dir("ensure-conda"))
@@ -37,13 +34,23 @@ site_path = pathlib.Path(appdirs.user_data_dir("ensure-conda"))
 )
 @click.option("--no-install", is_flag=True)
 def ensureconda_cli(mamba, micromamba, conda, conda_exe, no_install):
+    # We run the loop twice, once to find all the eligible condas without installation
+    # and once if you haven't found anything after installation
     exe = ensure_conda(
         mamba=mamba,
         micromamba=micromamba,
         conda=conda,
         conda_exe=conda_exe,
-        no_install=no_install,
+        no_install=True,
     )
+    if not exe and not no_install:
+        exe = ensure_conda(
+            mamba=mamba,
+            micromamba=micromamba,
+            conda=conda,
+            conda_exe=conda_exe,
+            no_install=False,
+        )
     if exe:
         print("Found compatible executable", file=sys.stderr, flush=True)
         # silly thing to force correct output order
