@@ -3,8 +3,8 @@ site_description: Simple lightweight conda installer that just works
 
 theme:
   name: "material"
-repo_name: mariusvniekerk/ensureconda
-repo_url: https://github.com/mariusvniekerk/ensureconda
+repo_name: conda-incubator/ensureconda
+repo_url: https://github.com/conda-incubator/ensureconda
 
 nav:
   - Home: "index.md"

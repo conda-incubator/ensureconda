@@ -5,7 +5,7 @@ description = 'Ensure that a conda is installed in a standard place if one canno
 author = 'Marius van Niekerk'
 author_email = 'marius.v.niekerk@gmail.com'
 license = 'MIT'
-url = 'https://github.com/mariusvniekerk/ensureconda'
+url = 'https://github.com/conda-incubator/ensureconda'
 
 [requires]
 python_version = ['3.6', '3.7', '3.8', '3.9', 'pypy3']

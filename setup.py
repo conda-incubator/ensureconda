@@ -22,7 +22,7 @@ setup(
     author_email="marius.v.niekerk@gmail.com",
     maintainer="Marius van Niekerk",
     maintainer_email="marius.v.niekerk@gmail.com",
-    url="https://github.com/mariusvniekerk/ensureconda",
+    url="https://github.com/conda-incubator/ensureconda",
     license="MIT",
     classifiers=[
         "Development Status :: 4 - Beta",

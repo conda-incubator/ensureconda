@@ -9,7 +9,7 @@ $ACTIVITIES = [
 	# 'ghrelease'
 ]
 
-$GITHUB_ORG = 'mariusvniekerk'
+$GITHUB_ORG = 'conda-incubator'
 $GITHUB_REPO = 'ensureconda'
 
 $VERSION_BUMP_PATTERNS = [
