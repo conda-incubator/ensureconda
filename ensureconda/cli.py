@@ -77,6 +77,23 @@ def is_exe(fpath: Optional[Path]):
     return os.path.exists(fpath) and os.access(fpath, os.X_OK) and os.path.isfile(fpath)
 
 
+def which_no_shims(executable: str) -> Optional[str]:
+    """Ensure that environment manager tools like pyenv don't break us
+
+    Certain tools like pyenv make use of magic shim directories that contain
+    executables that are unsuitable for our use case.
+
+    These executables will exist but may fail on use due to not being in the right
+    pyenv execution environment.
+    """
+    path_list = [
+        p
+        for p in os.environ["PATH"].split(os.pathsep)
+        if os.path.join(".pyenv", "shims") not in p
+    ]
+    return shutil.which(executable, path=os.pathsep.join(path_list))
+
+
 def resolve_executable(
     exe_name: str, path_prefix: Optional[Path] = site_path
 ) -> Iterator[Path]:
@@ -87,7 +104,7 @@ def resolve_executable(
                 yield prefixed_exe
 
         # which based exe
-        exe = shutil.which(candidate)
+        exe = which_no_shims(candidate)
         if exe:
             exe_path = pathlib.Path(exe)
             if is_exe(exe_path):
