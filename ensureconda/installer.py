@@ -34,8 +34,8 @@ def install_micromamba() -> Optional[Path]:
     url = f"https://micromamba.snakepit.net/api/micromamba/{subdir}/latest"
     resp = requests.get(url, allow_redirects=True)
     resp.raise_for_status()
-    import tarfile
     import io
+    import tarfile
 
     tarball = io.BytesIO(resp.content)
     tarball.seek(0)
