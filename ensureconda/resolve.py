@@ -92,32 +92,33 @@ def safe_next(it):
 def platform_subdir():
     # Adapted from conda.context
     _platform_map = {
-        'linux2': 'linux',
-        'linux': 'linux',
-        'darwin': 'osx',
-        'win32': 'win',
+        "linux2": "linux",
+        "linux": "linux",
+        "darwin": "osx",
+        "win32": "win",
     }
     non_x86_machines = {
-        'aarch64',  # for linux
-        'arm64',    # for osx
-        'ppc64',
-        'ppc64le',
+        "aarch64",  # for linux
+        "arm64",  # for osx
+        "ppc64",
+        "ppc64le",
     }
     _arch_names = {
-        32: 'x86',
-        64: 'x86_64',
+        32: "x86",
+        64: "x86_64",
     }
 
     import struct
+
     bits = 8 * struct.calcsize("P")
     plat = _platform_map[sys.platform]
     machine = platform.machine()
     if machine in non_x86_machines:
-        return f'{plat}-{machine}'
-    elif platform == 'zos':
-        return 'zos-z'
+        return f"{plat}-{machine}"
+    elif platform == "zos":
+        return "zos-z"
     else:
-        return f'{plat}-{bits}'
+        return f"{plat}-{bits}"
 
 
 is_windows = platform.system() == "Windows"

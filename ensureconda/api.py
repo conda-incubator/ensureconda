@@ -1,15 +1,14 @@
+from os import PathLike
 from typing import Optional
 
-from os import PathLike
-
+from ensureconda.installer import install_conda_exe, install_micromamba
 from ensureconda.resolve import (
     conda_executables,
     conda_standalone_executables,
     mamba_executables,
     micromamba_executables,
-    safe_next
+    safe_next,
 )
-from ensureconda.installer import install_micromamba, install_conda_exe
 
 
 def ensureconda(

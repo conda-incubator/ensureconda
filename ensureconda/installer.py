@@ -2,13 +2,14 @@ import contextlib
 import os
 import pathlib
 import stat
+from os import PathLike
 from pathlib import Path
-from typing import Optional, Iterator, IO
+from typing import IO, Iterator, Optional
 
 import filelock
 import requests
 
-from ensureconda.resolve import platform_subdir, is_windows, site_path
+from ensureconda.resolve import is_windows, platform_subdir, site_path
 
 
 def install_conda_exe() -> Optional[Path]:
