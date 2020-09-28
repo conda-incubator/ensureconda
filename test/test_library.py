@@ -1,11 +1,5 @@
-def test_nothing():
-    assert True
-
-
-import io
+import sys
 import pathlib
-import textwrap
-from sys import stderr, stdout
 from typing import List
 
 import docker
@@ -43,6 +37,22 @@ def test_container_full(docker_client: docker.client.DockerClient):
     return image
 
 
+def _run_container_test(args, docker_client, expected, container):
+    container_inst: docker.models.containers.Container = docker_client.containers.run(
+        container, detach=True, command=["ensureconda", *args]
+    )
+    try:
+        res = container_inst.wait()
+        stdout = container_inst.logs(stdout=True, stderr=False).decode().strip()
+        stderr = container_inst.logs(stdout=False, stderr=True).decode().strip()
+        print(f"container stdout:\n{stdout}", file=sys.stdout)
+        print(f"container stderr:\n{stderr}", file=sys.stderr)
+        assert res["StatusCode"] == 0
+        assert stdout == expected
+    finally:
+        container_inst.remove()
+
+
 @pytest.mark.parametrize(
     "args, expected",
     [
@@ -60,15 +70,7 @@ def test_ensure_simple(
     docker_client: docker.client.DockerClient,
     test_container,
 ):
-    container: docker.models.containers.Container = docker_client.containers.run(
-        test_container, detach=True, command=["ensureconda", *args]
-    )
-    try:
-        res = container.wait()
-        assert res["StatusCode"] == 0
-        assert container.logs(stdout=True, stderr=False).decode().strip() == expected
-    finally:
-        container.remove()
+    _run_container_test(args, docker_client, expected, test_container)
 
 
 @pytest.mark.parametrize(
@@ -90,12 +92,5 @@ def test_ensure_full(
     docker_client: docker.client.DockerClient,
     test_container_full,
 ):
-    container: docker.models.containers.Container = docker_client.containers.run(
-        test_container_full, detach=True, command=["ensureconda", *args]
-    )
-    try:
-        res = container.wait()
-        assert res["StatusCode"] == 0
-        assert container.logs(stdout=True, stderr=False).decode().strip() == expected
-    finally:
-        container.remove()
+    _run_container_test(args, docker_client, expected, test_container_full)
+

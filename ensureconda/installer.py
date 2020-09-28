@@ -53,7 +53,7 @@ def install_micromamba() -> Optional[Path]:
 
 @contextlib.contextmanager
 def new_executable(target_filename: "PathLike") -> Iterator[IO[bytes]]:
-    with filelock.FileLock(f"{target_filename:s}.lock"):
+    with filelock.FileLock(f"{str(target_filename)}.lock"):
         with open(target_filename, "wb") as fo:
             yield fo
         st = os.stat(target_filename)
