@@ -1,4 +1,6 @@
+import os
 import pathlib
+import subprocess
 import sys
 from typing import List
 
@@ -93,3 +95,43 @@ def test_ensure_full(
     test_container_full,
 ):
     _run_container_test(args, docker_client, expected, test_container_full)
+
+
+def test_locally_install(tmp_path, monkeypatch):
+    # The order of these tests matter
+    import appdirs
+
+    def user_data_dir(*args, **kwargs):
+        return str(tmp_path)
+
+    monkeypatch.setattr(appdirs, "user_data_dir", user_data_dir)
+
+    from ensureconda.api import ensureconda
+    from ensureconda.resolve import is_windows
+
+    # remove all paths from $PATH until we don't have a conda executable
+    conda_executable = ensureconda(no_install=True)
+    while conda_executable is not None:
+        paths = os.environ["PATH"].split(os.pathsep)
+        dirname = str(os.path.dirname(conda_executable))
+        print(dirname)
+        print(paths)
+        paths.remove(dirname)
+        monkeypatch.setenv("PATH", os.pathsep.join(paths))
+        conda_executable = ensureconda(no_install=True)
+
+    # Ensure that we can install conda_standalone in the desired directory
+    executable = ensureconda(
+        mamba=False, micromamba=False, conda=False, conda_exe=True, no_install=False
+    )
+    ext = ".exe" if is_windows else ""
+    assert str(executable) == f"{str(tmp_path)}/conda_standalone{ext}"
+    subprocess.check_call([executable, "--help"])
+
+    # Ensure that we can install micromamba in the desired directory
+    executable = ensureconda(
+        mamba=False, micromamba=True, conda=False, conda_exe=False, no_install=False
+    )
+    ext = ".exe" if is_windows else ""
+    assert str(executable) == f"{str(tmp_path)}/micromamba{ext}"
+    subprocess.check_call([executable, "--help"])

@@ -42,12 +42,12 @@ def which_no_shims(executable: str) -> Optional[str]:
     return shutil.which(executable, path=os.pathsep.join(path_list))
 
 
-site_path = pathlib.Path(appdirs.user_data_dir("ensure-conda"))
+def site_path() -> pathlib.Path:
+    return pathlib.Path(appdirs.user_data_dir("ensure-conda"))
 
 
-def resolve_executable(
-    exe_name: str, path_prefix: Optional[Path] = site_path
-) -> Iterator[Path]:
+def resolve_executable(exe_name: str) -> Iterator[Path]:
+    path_prefix = site_path()
     for candidate in ext_candidates(exe_name):
         if path_prefix is not None:
             prefixed_exe = path_prefix / candidate
