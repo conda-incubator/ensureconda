@@ -1,5 +1,5 @@
-import sys
 import pathlib
+import sys
 from typing import List
 
 import docker
@@ -93,4 +93,3 @@ def test_ensure_full(
     test_container_full,
 ):
     _run_container_test(args, docker_client, expected, test_container_full)
-
