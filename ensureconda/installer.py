@@ -1,7 +1,9 @@
 import contextlib
+import math
 import os
 import pathlib
 import stat
+import time
 from os import PathLike
 from pathlib import Path
 from typing import IO, Iterator, Optional
@@ -32,8 +34,20 @@ def install_micromamba() -> Optional[Path]:
     """Install micromamba into the installation"""
     subdir = platform_subdir()
     url = f"https://micromamba.snakepit.net/api/micromamba/{subdir}/latest"
-    resp = requests.get(url, allow_redirects=True)
-    resp.raise_for_status()
+    # the micromamba api here is a little unreliable, so try a few times
+    for i in range(10):
+        resp = requests.get(url, allow_redirects=True)
+        try:
+            resp.raise_for_status()
+            break
+        except requests.exceptions.HTTPError as e:
+            if e.response.status_code == 500:
+                timeout = math.e ** (i / 4)
+                print(f"Failed to retrieve, retrying in {timeout:.2f} seconds")
+                time.sleep(timeout)
+
+        raise TimeoutError("Could not retrieve micromamba in 10 tries")
+
     import io
     import tarfile
 
