@@ -54,7 +54,11 @@ def install_micromamba() -> Optional[Path]:
     tarball = io.BytesIO(resp.content)
     tarball.seek(0)
     with tarfile.open(mode="r:bz2", fileobj=tarball) as tf:
-        fo = tf.extractfile("bin/micromamba")
+        if is_windows:
+            filename = "Library/bin/micromamba.exe"
+        else:
+            filename = "bin/micromamba"
+        fo = tf.extractfile(filename)
         if fo is None:
             raise RuntimeError("Could not extract micromamba executable!")
         ext = ".exe" if is_windows else ""

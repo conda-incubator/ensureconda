@@ -7,36 +7,63 @@ from typing import List
 import docker
 import docker.models.containers
 import pytest
-from _pytest import mark
 
 
 @pytest.fixture(scope="session")
-def docker_client():
-    return docker.from_env()
+def in_github_actions():
+    return os.environ.get("GITHUB_WORKFLOW") is not None
 
 
 @pytest.fixture(scope="session")
-def test_container(docker_client: docker.client.DockerClient):
-    test_root = pathlib.Path(__file__).parent
-    root = test_root.parent
-    image, logs = docker_client.images.build(
-        path=str(root),
-        tag="ensureconda:test",
-        dockerfile=str((test_root / "docker-simple" / "Dockerfile").relative_to(root)),
-    )
-    return image
+def platform():
+    import sys
+
+    return sys.platform.lower()
 
 
 @pytest.fixture(scope="session")
-def test_container_full(docker_client: docker.client.DockerClient):
-    test_root = pathlib.Path(__file__).parent
-    root = test_root.parent
-    image, logs = docker_client.images.build(
-        path=str(pathlib.Path(__file__).parent.parent),
-        tag="ensureconda:test-full",
-        dockerfile=str((test_root / "docker-full" / "Dockerfile").relative_to(root)),
-    )
-    return image
+def can_i_docker(in_github_actions, platform):
+    """Some platforms can't docker under certain conditions"""
+    if in_github_actions and platform in {"win32", "darwin"}:
+        return False
+    else:
+        return True
+
+
+@pytest.fixture(scope="session")
+def docker_client(can_i_docker):
+    if can_i_docker:
+        return docker.from_env()
+
+
+@pytest.fixture(scope="session")
+def ensureconda_container(can_i_docker, docker_client: docker.client.DockerClient):
+    if can_i_docker:
+        test_root = pathlib.Path(__file__).parent
+        root = test_root.parent
+        image, logs = docker_client.images.build(
+            path=str(root),
+            tag="ensureconda:test",
+            dockerfile=str(
+                (test_root / "docker-simple" / "Dockerfile").relative_to(root)
+            ),
+        )
+        return image
+
+
+@pytest.fixture(scope="session")
+def ensureconda_container_full(can_i_docker, docker_client: docker.client.DockerClient):
+    if can_i_docker:
+        test_root = pathlib.Path(__file__).parent
+        root = test_root.parent
+        image, logs = docker_client.images.build(
+            path=str(pathlib.Path(__file__).parent.parent),
+            tag="ensureconda:test-full",
+            dockerfile=str(
+                (test_root / "docker-full" / "Dockerfile").relative_to(root)
+            ),
+        )
+        return image
 
 
 def _run_container_test(args, docker_client, expected, container):
@@ -69,10 +96,14 @@ def _run_container_test(args, docker_client, expected, container):
 def test_ensure_simple(
     args: List[str],
     expected: str,
+    can_i_docker,
     docker_client: docker.client.DockerClient,
-    test_container,
+    ensureconda_container,
 ):
-    _run_container_test(args, docker_client, expected, test_container)
+    if not can_i_docker:
+        raise pytest.skip("Docker not available")
+
+    _run_container_test(args, docker_client, expected, ensureconda_container)
 
 
 @pytest.mark.parametrize(
@@ -92,9 +123,13 @@ def test_ensure_full(
     args: List[str],
     expected: str,
     docker_client: docker.client.DockerClient,
-    test_container_full,
+    ensureconda_container_full,
+    can_i_docker,
 ):
-    _run_container_test(args, docker_client, expected, test_container_full)
+    if not can_i_docker:
+        raise pytest.skip("Docker not available")
+
+    _run_container_test(args, docker_client, expected, ensureconda_container_full)
 
 
 def test_locally_install(tmp_path, monkeypatch):
@@ -125,13 +160,13 @@ def test_locally_install(tmp_path, monkeypatch):
         mamba=False, micromamba=False, conda=False, conda_exe=True, no_install=False
     )
     ext = ".exe" if is_windows else ""
-    assert str(executable) == f"{str(tmp_path)}/conda_standalone{ext}"
-    subprocess.check_call([executable, "--help"])
+    assert str(executable) == f"{str(tmp_path)}{os.path.sep}conda_standalone{ext}"
+    subprocess.check_call([str(executable), "--help"])
 
     # Ensure that we can install micromamba in the desired directory
     executable = ensureconda(
         mamba=False, micromamba=True, conda=False, conda_exe=False, no_install=False
     )
     ext = ".exe" if is_windows else ""
-    assert str(executable) == f"{str(tmp_path)}/micromamba{ext}"
-    subprocess.check_call([executable, "--help"])
+    assert str(executable) == f"{str(tmp_path)}{os.path.sep}micromamba{ext}"
+    subprocess.check_call([str(executable), "--help"])
