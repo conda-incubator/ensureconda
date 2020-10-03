@@ -9,60 +9,61 @@ import docker.models.containers
 import pytest
 
 
-@pytest.fixture()
+@pytest.fixture(scope="session")
 def in_github_actions():
-    # return True
     return os.environ.get("GITHUB_WORKFLOW") is not None
 
 
-@pytest.fixture()
+@pytest.fixture(scope="session")
 def platform():
     import sys
 
     return sys.platform.lower()
 
 
-@pytest.fixture(autouse=True)
-def skip_by_platform_if_github_action(request, platform, in_github_actions):
-    if in_github_actions:
-        skip_platform_marker = request.node.get_closest_marker("skip_platform")
-        if skip_platform_marker and (platform in set(skip_platform_marker.args)):
-            pytest.skip("skipped on this platform")
-
-
-@pytest.mark.skip_platform("darwin", "win32")
-def test_skip_by_platform():
-    assert True
+@pytest.fixture(scope="session")
+def can_i_docker(in_github_actions, platform):
+    """Some platforms can't docker under certain conditions"""
+    if in_github_actions and platform in {"win32", "darwin"}:
+        return False
+    else:
+        return True
 
 
 @pytest.fixture(scope="session")
-@pytest.mark.skip_platform("darwin", "win32")
-def docker_client():
-    return docker.from_env()
+def docker_client(can_i_docker):
+    if can_i_docker:
+        return docker.from_env()
 
 
 @pytest.fixture(scope="session")
-def ensureconda_container(docker_client: docker.client.DockerClient):
-    test_root = pathlib.Path(__file__).parent
-    root = test_root.parent
-    image, logs = docker_client.images.build(
-        path=str(root),
-        tag="ensureconda:test",
-        dockerfile=str((test_root / "docker-simple" / "Dockerfile").relative_to(root)),
-    )
-    return image
+def ensureconda_container(can_i_docker, docker_client: docker.client.DockerClient):
+    if can_i_docker:
+        test_root = pathlib.Path(__file__).parent
+        root = test_root.parent
+        image, logs = docker_client.images.build(
+            path=str(root),
+            tag="ensureconda:test",
+            dockerfile=str(
+                (test_root / "docker-simple" / "Dockerfile").relative_to(root)
+            ),
+        )
+        return image
 
 
 @pytest.fixture(scope="session")
-def ensureconda_container_full(docker_client: docker.client.DockerClient):
-    test_root = pathlib.Path(__file__).parent
-    root = test_root.parent
-    image, logs = docker_client.images.build(
-        path=str(pathlib.Path(__file__).parent.parent),
-        tag="ensureconda:test-full",
-        dockerfile=str((test_root / "docker-full" / "Dockerfile").relative_to(root)),
-    )
-    return image
+def ensureconda_container_full(can_i_docker, docker_client: docker.client.DockerClient):
+    if can_i_docker:
+        test_root = pathlib.Path(__file__).parent
+        root = test_root.parent
+        image, logs = docker_client.images.build(
+            path=str(pathlib.Path(__file__).parent.parent),
+            tag="ensureconda:test-full",
+            dockerfile=str(
+                (test_root / "docker-full" / "Dockerfile").relative_to(root)
+            ),
+        )
+        return image
 
 
 def _run_container_test(args, docker_client, expected, container):
@@ -92,17 +93,19 @@ def _run_container_test(args, docker_client, expected, container):
         ),
     ],
 )
-@pytest.mark.skip_platform("darwin", "win32")
 def test_ensure_simple(
     args: List[str],
     expected: str,
+    can_i_docker,
     docker_client: docker.client.DockerClient,
     ensureconda_container,
 ):
+    if not can_i_docker:
+        raise pytest.skip("Docker not available")
+
     _run_container_test(args, docker_client, expected, ensureconda_container)
 
 
-@pytest.mark.skip_platform("darwin", "win32")
 @pytest.mark.parametrize(
     "args, expected",
     [
@@ -121,7 +124,11 @@ def test_ensure_full(
     expected: str,
     docker_client: docker.client.DockerClient,
     ensureconda_container_full,
+    can_i_docker,
 ):
+    if not can_i_docker:
+        raise pytest.skip("Docker not available")
+
     _run_container_test(args, docker_client, expected, ensureconda_container_full)
 
 
