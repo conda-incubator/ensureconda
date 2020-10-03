@@ -55,7 +55,7 @@ def install_micromamba() -> Optional[Path]:
     tarball.seek(0)
     with tarfile.open(mode="r:bz2", fileobj=tarball) as tf:
         if is_windows:
-            filename = 'Library/bin/micromamba.exe'
+            filename = "Library/bin/micromamba.exe"
         else:
             filename = "bin/micromamba"
         fo = tf.extractfile(filename)
