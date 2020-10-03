@@ -36,6 +36,7 @@ def test_skip_by_platform():
 
 
 @pytest.fixture(scope="session")
+@pytest.mark.skip_platform("darwin", "win32")
 def docker_client():
     return docker.from_env()
 
