@@ -161,7 +161,7 @@ def test_locally_install(tmp_path, monkeypatch):
     )
     ext = ".exe" if is_windows else ""
     assert str(executable) == f"{str(tmp_path)}{os.path.sep}conda_standalone{ext}"
-    subprocess.check_call([executable, "--help"])
+    subprocess.check_call([str(executable), "--help"])
 
     # Ensure that we can install micromamba in the desired directory
     executable = ensureconda(
@@ -169,4 +169,4 @@ def test_locally_install(tmp_path, monkeypatch):
     )
     ext = ".exe" if is_windows else ""
     assert str(executable) == f"{str(tmp_path)}{os.path.sep}micromamba{ext}"
-    subprocess.check_call([executable, "--help"])
+    subprocess.check_call([str(executable), "--help"])
