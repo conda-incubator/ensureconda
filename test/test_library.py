@@ -11,6 +11,7 @@ import pytest
 
 @pytest.fixture()
 def in_github_actions():
+    # return True
     return os.environ.get("GITHUB_WORKFLOW") is not None
 
 
@@ -29,13 +30,19 @@ def skip_by_platform_if_github_action(request, platform, in_github_actions):
             pytest.skip("skipped on this platform")
 
 
+@pytest.mark.skip_platform("darwin", "win32")
+def test_skip_by_platform():
+    assert 1 == 2
+
+
+@pytest.mark.skip_platform("darwin", "win32")
 @pytest.fixture(scope="session")
 def docker_client():
     return docker.from_env()
 
 
 @pytest.fixture(scope="session")
-def test_container(docker_client: docker.client.DockerClient):
+def ensureconda_container(docker_client: docker.client.DockerClient):
     test_root = pathlib.Path(__file__).parent
     root = test_root.parent
     image, logs = docker_client.images.build(
@@ -47,7 +54,7 @@ def test_container(docker_client: docker.client.DockerClient):
 
 
 @pytest.fixture(scope="session")
-def test_container_full(docker_client: docker.client.DockerClient):
+def ensureconda_container_full(docker_client: docker.client.DockerClient):
     test_root = pathlib.Path(__file__).parent
     root = test_root.parent
     image, logs = docker_client.images.build(
@@ -74,7 +81,7 @@ def _run_container_test(args, docker_client, expected, container):
         container_inst.remove()
 
 
-@pytest.mark.skip_platform("darwin", "windows")
+@pytest.mark.skip_platform("darwin", "win32")
 @pytest.mark.parametrize(
     "args, expected",
     [
@@ -90,12 +97,12 @@ def test_ensure_simple(
     args: List[str],
     expected: str,
     docker_client: docker.client.DockerClient,
-    test_container,
+    ensureconda_container,
 ):
-    _run_container_test(args, docker_client, expected, test_container)
+    _run_container_test(args, docker_client, expected, ensureconda_container)
 
 
-@pytest.mark.skip_platform("darwin", "windows")
+@pytest.mark.skip_platform("darwin", "win32")
 @pytest.mark.parametrize(
     "args, expected",
     [
@@ -113,9 +120,9 @@ def test_ensure_full(
     args: List[str],
     expected: str,
     docker_client: docker.client.DockerClient,
-    test_container_full,
+    ensureconda_container_full,
 ):
-    _run_container_test(args, docker_client, expected, test_container_full)
+    _run_container_test(args, docker_client, expected, ensureconda_container_full)
 
 
 def test_locally_install(tmp_path, monkeypatch):
