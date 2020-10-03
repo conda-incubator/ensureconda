@@ -7,7 +7,26 @@ from typing import List
 import docker
 import docker.models.containers
 import pytest
-from _pytest import mark
+
+
+@pytest.fixture()
+def in_github_actions():
+    return os.environ.get("GITHUB_WORKFLOW") is not None
+
+
+@pytest.fixture()
+def platform():
+    import sys
+
+    return sys.platform.lower()
+
+
+@pytest.fixture(autouse=True)
+def skip_by_platform_if_github_action(request, platform, in_github_actions):
+    if in_github_actions:
+        skip_platform_marker = request.node.get_closest_marker("skip_platform")
+        if platform in set(skip_platform_marker.args):
+            pytest.skip("skipped on this platform")
 
 
 @pytest.fixture(scope="session")
@@ -55,6 +74,7 @@ def _run_container_test(args, docker_client, expected, container):
         container_inst.remove()
 
 
+@pytest.mark.skip_platform("darwin", "windows")
 @pytest.mark.parametrize(
     "args, expected",
     [
@@ -75,6 +95,7 @@ def test_ensure_simple(
     _run_container_test(args, docker_client, expected, test_container)
 
 
+@pytest.mark.skip_platform("darwin", "windows")
 @pytest.mark.parametrize(
     "args, expected",
     [
