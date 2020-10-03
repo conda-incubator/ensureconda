@@ -32,10 +32,9 @@ def skip_by_platform_if_github_action(request, platform, in_github_actions):
 
 @pytest.mark.skip_platform("darwin", "win32")
 def test_skip_by_platform():
-    assert 1 == 2
+    assert True
 
 
-@pytest.mark.skip_platform("darwin", "win32")
 @pytest.fixture(scope="session")
 def docker_client():
     return docker.from_env()
@@ -81,7 +80,6 @@ def _run_container_test(args, docker_client, expected, container):
         container_inst.remove()
 
 
-@pytest.mark.skip_platform("darwin", "win32")
 @pytest.mark.parametrize(
     "args, expected",
     [
@@ -93,6 +91,7 @@ def _run_container_test(args, docker_client, expected, container):
         ),
     ],
 )
+@pytest.mark.skip_platform("darwin", "win32")
 def test_ensure_simple(
     args: List[str],
     expected: str,
