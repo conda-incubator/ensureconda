@@ -25,7 +25,7 @@ def platform():
 def skip_by_platform_if_github_action(request, platform, in_github_actions):
     if in_github_actions:
         skip_platform_marker = request.node.get_closest_marker("skip_platform")
-        if platform in set(skip_platform_marker.args):
+        if skip_platform_marker and (platform in set(skip_platform_marker.args)):
             pytest.skip("skipped on this platform")
 
 
