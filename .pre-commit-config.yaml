@@ -15,3 +15,11 @@ repos:
   rev: v0.782
   hooks:
   - id: mypy
+
+- repo: https://github.com/TekWizely/pre-commit-golang
+  rev: v0.8.0
+  hooks:
+    - id: go-fmt
+      args:
+        - "-w"
+        - "-s"
