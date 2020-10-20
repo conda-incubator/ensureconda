@@ -13,6 +13,8 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
+      - uses: actions/checkout@v2
+
       - name: Set up Go
         uses: actions/setup-go@v2
         with:
@@ -24,35 +26,35 @@ jobs:
       - name: Build executables
         run: |
           cd go
-          python ./build-local.py
+          python ./build.py
 
       - name: Setup test suite
         run: |
           python -m pip install pytest
 
       - name: Test executables linux
-        run:
+        run: |
           cd go
-          python -m pytest test_binaries
-        if: ${{ matrix.os }} == 'ubuntu-latest'
+          python -m pytest test_binaries.py
+        if: ${{ matrix.os == 'ubuntu-latest' }}
         env:
           ENSURECONDA_EXE: ensureconda-linux-amd64
 
       - name: Test executables darwin
-        run:
+        run: |
           cd go
-          python -m pytest test_binaries
-        if: ${{ matrix.os }} == 'macos-latest'
+          python -m pytest test_binaries.py
+        if: ${{ matrix.os == 'macos-latest' }}
         env:
           ENSURECONDA_EXE: ensureconda-darwin-amd64
 
       - name: Test executables windows
-        run:
+        run: |
           cd go
-          python -m pytest test_binaries
-        if: ${{ matrix.os }} == 'windows-latest'
+          python -m pytest test_binaries.py
+        if: ${{ matrix.os == 'windows-latest' }}
         env:
-          ENSURECONDA_EXE: ensureconda-windows-amd64
+          ENSURECONDA_EXE: ensureconda-windows-amd64.exe
 
   build:
     runs-on: ${{ matrix.os }}
@@ -63,7 +65,7 @@ jobs:
         python-version: [3.6, 3.7, 3.8]
 
     steps:
-    - uses: actions/checkout@v1
+    - uses: actions/checkout@v2
 
     - name: Set up Python ${{ matrix.python-version }}
       uses: actions/setup-python@v1
