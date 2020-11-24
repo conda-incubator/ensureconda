@@ -1,5 +1,6 @@
 import sys
 import time
+from distutils.version import LooseVersion
 
 import click
 
@@ -20,7 +21,17 @@ from ensureconda.api import ensureconda
     help="Search for conda.exe / conda-standalone, install if not present",
 )
 @click.option("--no-install", is_flag=True)
-def ensureconda_cli(mamba, micromamba, conda, conda_exe, no_install):
+@click.option("--min-conda-version", default=LooseVersion("4.8.2"), type=LooseVersion)
+@click.option("--min-mamba-version", default=LooseVersion("0.7.3"), type=LooseVersion)
+def ensureconda_cli(
+    mamba,
+    micromamba,
+    conda,
+    conda_exe,
+    no_install,
+    min_conda_version,
+    min_mamba_version,
+):
     # We run the loop twice, once to find all the eligible condas without installation
     # and once if you haven't found anything after installation
     exe = ensureconda(
@@ -29,6 +40,8 @@ def ensureconda_cli(mamba, micromamba, conda, conda_exe, no_install):
         conda=conda,
         conda_exe=conda_exe,
         no_install=True,
+        min_mamba_version=min_mamba_version,
+        min_conda_version=min_conda_version,
     )
     if not exe and not no_install:
         exe = ensureconda(
@@ -37,6 +50,8 @@ def ensureconda_cli(mamba, micromamba, conda, conda_exe, no_install):
             conda=conda,
             conda_exe=conda_exe,
             no_install=False,
+            min_mamba_version=min_mamba_version,
+            min_conda_version=min_conda_version,
         )
     if exe:
         print("Found compatible executable", file=sys.stderr, flush=True)
