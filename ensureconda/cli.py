@@ -1,10 +1,20 @@
 import sys
 import time
 from distutils.version import LooseVersion
+from typing import Union
 
 import click
 
 from ensureconda.api import ensureconda
+
+
+def _as_loose_version(obj: Union[str, LooseVersion, None]) -> LooseVersion:
+    if isinstance(obj, LooseVersion):
+        return obj
+    elif obj is None:
+        return LooseVersion("0.0.0")
+    else:
+        return LooseVersion(obj)
 
 
 @click.command(help="Ensures that a conda/mamba is installed.")
@@ -21,8 +31,12 @@ from ensureconda.api import ensureconda
     help="Search for conda.exe / conda-standalone, install if not present",
 )
 @click.option("--no-install", is_flag=True)
-@click.option("--min-conda-version", default=LooseVersion("4.8.2"), type=LooseVersion)
-@click.option("--min-mamba-version", default=LooseVersion("0.7.3"), type=LooseVersion)
+@click.option(
+    "--min-conda-version", default=LooseVersion("4.8.2"), type=_as_loose_version
+)
+@click.option(
+    "--min-mamba-version", default=LooseVersion("0.7.3"), type=_as_loose_version
+)
 def ensureconda_cli(
     mamba,
     micromamba,
