@@ -17,25 +17,46 @@ def _as_loose_version(obj: Union[str, LooseVersion, None]) -> LooseVersion:
         return LooseVersion(obj)
 
 
+_DEFAULT_MIN_CONDA = "4.8.2"
+_DEFAULT_MIN_MAMBA = "0.7.3"
+
+
+class VersionNumber(click.ParamType):
+    name = "VersionNumber"
+
+    def convert(self, value, param, ctx):
+        return _as_loose_version(value)
+
+
 @click.command(help="Ensures that a conda/mamba is installed.")
-@click.option("--mamba/--no-mamba", default=True, help="Search for mamba")
+@click.option("--mamba/--no-mamba", default=True, help="search for mamba")
 @click.option(
     "--micromamba/--no-micromamba",
     default=True,
-    help="Search for mamba/micromamba, Install if not present",
+    help="search for micromamba, install if not present",
 )
-@click.option("--conda/--no-conda", default=True, help="Search for conda")
+@click.option("--conda/--no-conda", default=True, help="search for conda")
 @click.option(
     "--conda-exe/--no-conda-exe",
     default=True,
-    help="Search for conda.exe / conda-standalone, install if not present",
-)
-@click.option("--no-install", is_flag=True)
-@click.option(
-    "--min-conda-version", default=LooseVersion("4.8.2"), type=_as_loose_version
+    help="search for conda.exe / conda-standalone, install if not present",
 )
 @click.option(
-    "--min-mamba-version", default=LooseVersion("0.7.3"), type=_as_loose_version
+    "--no-install",
+    is_flag=True,
+    help="don't install conda/mamba if no version can be discovered",
+)
+@click.option(
+    "--min-conda-version",
+    default=LooseVersion(_DEFAULT_MIN_CONDA),
+    type=VersionNumber(),
+    help=f"minimum version of conda to accept (defaults to {_DEFAULT_MIN_CONDA})",
+)
+@click.option(
+    "--min-mamba-version",
+    default=LooseVersion(_DEFAULT_MIN_MAMBA),
+    type=VersionNumber(),
+    help=f"minimum version of mamba/micromamba to accept (defaults to {_DEFAULT_MIN_MAMBA})",
 )
 def ensureconda_cli(
     mamba,
