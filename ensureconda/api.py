@@ -1,7 +1,8 @@
 import subprocess
 from distutils.version import LooseVersion
+from functools import partial
 from os import PathLike
-from typing import Optional
+from typing import Callable, Optional
 
 from ensureconda.installer import install_conda_exe, install_micromamba
 from ensureconda.resolve import (
@@ -65,36 +66,52 @@ def ensureconda(
 
     Returns the path to a conda executable.
     """
+
+    def version_constraint_met(
+        executable: PathLike,
+        min_version: Optional[LooseVersion],
+        version_fn: Callable[[PathLike], LooseVersion],
+    ):
+        return (min_version is None) or (version_fn(executable) >= min_version)
+
+    conda_constraints_met = partial(
+        version_constraint_met,
+        min_version=min_conda_version,
+        version_fn=determine_conda_version,
+    )
+    mamba_constraints_met = partial(
+        version_constraint_met,
+        min_version=min_mamba_version,
+        version_fn=determine_mamba_version,
+    )
+    micromamba_constraints_met = partial(
+        version_constraint_met,
+        min_version=min_mamba_version,
+        version_fn=determine_micromamba_version,
+    )
+
     if mamba:
         for exe in mamba_executables():
-            if exe and (
-                (min_mamba_version is None)
-                or (determine_mamba_version(exe) >= min_mamba_version)
-            ):
+            if exe and mamba_constraints_met(exe):
                 return exe
     if micromamba:
         for exe in micromamba_executables():
-            if exe and (
-                (min_mamba_version is None)
-                or (determine_micromamba_version(exe) >= min_mamba_version)
-            ):
+            if exe and micromamba_constraints_met(exe):
                 return exe
         if not no_install:
-            return install_micromamba()
+            maybe_exe = install_micromamba()
+            if maybe_exe is not None and micromamba_constraints_met(maybe_exe):
+                return maybe_exe
     if conda:
         for exe in conda_executables():
-            if exe and (
-                (min_conda_version is None)
-                or (determine_conda_version(exe) >= min_conda_version)
-            ):
+            if exe and conda_constraints_met(exe):
                 return exe
     if conda_exe:
         for exe in conda_standalone_executables():
-            if exe and (
-                (min_conda_version is None)
-                or (determine_conda_version(exe) >= min_conda_version)
-            ):
+            if exe and conda_constraints_met(exe):
                 return exe
         if not no_install:
-            return install_conda_exe()
+            maybe_exe = install_conda_exe()
+            if maybe_exe is not None and conda_constraints_met(maybe_exe):
+                return maybe_exe
     return None

@@ -91,6 +91,15 @@ def _run_container_test(args, docker_client, expected, container):
         pytest.param(
             ["--no-micromamba", "--no-conda-exe"], "", marks=[pytest.mark.xfail]
         ),
+        pytest.param(
+            ["--min-mamba-version", "100.0.0"],
+            "/root/.local/share/ensure-conda/conda_standalone",
+        ),
+        pytest.param(
+            ["--min-conda-version", "100.0.0", "--min-mamba-version", "100.0.0"],
+            "",
+            marks=[pytest.mark.xfail],
+        ),
     ],
 )
 def test_ensure_simple(
