@@ -17,8 +17,8 @@ func executableHasMinVersion(minVersion *version.Version, prefix string) func(ex
 		}
 		lines := strings.Split(string(stdout), "\n")
 		for _, line := range lines {
-			if strings.HasPrefix(prefix, line) {
-				parts := strings.Split(" ", line)
+			if strings.HasPrefix(line, prefix) {
+				parts := strings.Split(line, " ")
 				if exeVersion, err := version.NewVersion(parts[len(parts)-1]); err == nil && exeVersion.GreaterThanOrEqual(minVersion) {
 					return true, nil
 				}

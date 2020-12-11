@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"github.com/hashicorp/go-version"
 	"io/ioutil"
 	"log"
 	"os"
@@ -74,6 +75,16 @@ func TestInstallCondaStandalone(t *testing.T) {
 			if got != tt.want {
 				t.Errorf("InstallCondaStandalone() got = %v, want %v", got, tt.want)
 			}
+
+			version, _ := version.NewVersion("4.8.0")
+			hasVersion, err := executableHasMinVersion(version, "conda")(got)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("InstallCondaStandalone() error = %v", err)
+			}
+			if !hasVersion {
+				t.Errorf("InstallCondaStandalone() didn't match minimal versions")
+			}
+
 		})
 	}
 }
