@@ -74,7 +74,7 @@ var (
 	}
 )
 
-func ResolveExecutable(executableName string, dataDir string) (string, error) {
+func ResolveExecutable(executableName string, dataDir string, versionPredicate func(path string) (bool, error)) (string, error) {
 	path := os.Getenv("PATH")
 	defer os.Setenv("PATH", path)
 	var filteredPaths []string
@@ -89,7 +89,39 @@ func ResolveExecutable(executableName string, dataDir string) (string, error) {
 	}
 	newPathEnv := filepath.Join(filteredPaths...)
 	os.Setenv("PATH", newPathEnv)
-	return exec.LookPath(executableName)
+	return FindExecutable(executableName, versionPredicate)
+}
+
+func assertExecutable(file string) error {
+	d, err := os.Stat(file)
+	if err != nil {
+		return err
+	}
+	if m := d.Mode(); !m.IsDir() && m&0111 != 0 {
+		return nil
+	}
+	return os.ErrPermission
+}
+
+func FindExecutable(file string, predicate func(path string) (bool, error)) (string, error) {
+	// NOTE(rsc): I wish we could use the Plan 9 behavior here
+	// (only bypass the path if file begins with / or ./ or ../)
+	// but that would not match all the Unix shells.
+
+	path := os.Getenv("PATH")
+	for _, dir := range filepath.SplitList(path) {
+		if dir == "" {
+			// Unix shell semantics: path element "" means "."
+			dir = "."
+		}
+		path := filepath.Join(dir, file)
+		if err := assertExecutable(path); err == nil {
+			if result, err := predicate(path); err == nil && result == true {
+				return path, nil
+			}
+		}
+	}
+	return "", errors.New("could not find executable")
 }
 
 var TestSitePath string
@@ -101,17 +133,43 @@ func sitePath() string {
 	return appdirs.UserDataDir("ensure-conda", "", "", false)
 }
 
+func executableHasMinVersion(minVersion *version.Version, prefix string) func(executable string) (bool, error) {
+	return func(executable string) (bool, error) {
+		stdout, err := exec.Command(executable, "--version").Output()
+		if err != nil {
+			return false, err
+		}
+		lines := strings.Split(string(stdout), "\n")
+		for _, line := range lines {
+			if strings.HasPrefix(prefix, line) {
+				parts := strings.Split(" ", line)
+				if exeVersion, err := version.NewVersion(parts[len(parts)-1]); err == nil && exeVersion.GreaterThanOrEqual(minVersion) {
+					return true, nil
+				}
+			}
+		}
+		return false, nil
+	}
+}
+
 func EnsureConda(mamba bool, micromamba bool, conda bool, condaExe bool, noInstall bool) (string, error) {
 	var executable string
 	dataDir := sitePath()
+	minMambaVersion, _ := version.NewVersion("0.7.3")
+	minCondaVersion, _ := version.NewVersion("4.8.2")
+
+	mambaVersionCheck := executableHasMinVersion(minMambaVersion, "mamba")
+	microMambaVersionCheck := executableHasMinVersion(minMambaVersion, "")
+	condaVersionCheck := executableHasMinVersion(minCondaVersion, "conda")
+
 	if mamba {
-		executable, _ = ResolveExecutable("mamba", dataDir)
+		executable, _ = ResolveExecutable("mamba", dataDir, mambaVersionCheck)
 		if executable != "" {
 			return executable, nil
 		}
 	}
 	if micromamba {
-		executable, _ = ResolveExecutable("micromamba", dataDir)
+		executable, _ = ResolveExecutable("micromamba", dataDir, microMambaVersionCheck)
 		if executable != "" {
 			return executable, nil
 		}
@@ -120,18 +178,20 @@ func EnsureConda(mamba bool, micromamba bool, conda bool, condaExe bool, noInsta
 			if err != nil {
 				return "", err
 			}
-			return exe, nil
+			if valid, _ := microMambaVersionCheck(exe); valid {
+				return exe, nil
+			}
 		}
 	}
 	if conda {
 		// TODO: check $CONDA_EXE
-		executable, _ = ResolveExecutable("conda", dataDir)
+		executable, _ = ResolveExecutable("conda", dataDir, condaVersionCheck)
 		if executable != "" {
 			return executable, nil
 		}
 	}
 	if condaExe {
-		executable, _ = ResolveExecutable("conda_standalone", dataDir)
+		executable, _ = ResolveExecutable("conda_standalone", dataDir, condaVersionCheck)
 		if executable != "" {
 			return executable, nil
 		}
@@ -140,8 +200,10 @@ func EnsureConda(mamba bool, micromamba bool, conda bool, condaExe bool, noInsta
 			if err != nil {
 				return "", err
 			}
-			return exe, nil
 
+			if valid, _ := condaVersionCheck(exe); valid {
+				return exe, nil
+			}
 		}
 	}
 
