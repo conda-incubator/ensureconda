@@ -92,7 +92,12 @@ func ResolveExecutable(executableName string, dataDir string) (string, error) {
 	return exec.LookPath(executableName)
 }
 
+var TestSitePath string
+
 func sitePath() string {
+	if TestSitePath != "" {
+		return TestSitePath
+	}
 	return appdirs.UserDataDir("ensure-conda", "", "", false)
 }
 
@@ -229,31 +234,39 @@ func InstallMicromamba() (string, error) {
 }
 
 type AnacondaPkgAttr struct {
-	subdir       string
-	version      string
-	build_number int32
-	timestamp    int32
-	source_url   string
+	Subdir       string
+	Version      string
+	Build_number int32
+	Timestamp    uint64
+	Source_url   string
+	Md5          string
 }
 
 type AnacondaPkg struct {
-	attrs AnacondaPkgAttr
+	Size  uint32
+	Attrs AnacondaPkgAttr
+	Type  string
 }
 
 type AnacondaPkgAttrs []AnacondaPkgAttr
 
 func (a AnacondaPkgAttrs) Len() int { return len(a) }
 func (a AnacondaPkgAttrs) Less(i, j int) bool {
-	versioni, _ := version.NewVersion(a[i].version)
-	versionj, _ := version.NewVersion(a[i].version)
+	versioni, _ := version.NewVersion(a[i].Version)
+	versionj, _ := version.NewVersion(a[j].Version)
 	if versioni.LessThan(versionj) {
 		return true
-	} else if a[i].build_number < a[j].build_number {
-		return true
-	} else if a[i].timestamp < a[j].timestamp {
-		return true
+	} else if versionj.LessThan(versioni) {
+		return false
+	} else {
+		if a[i].Build_number < a[j].Build_number {
+			return true
+		} else if a[j].Build_number < a[i].Build_number {
+			return false
+		} else {
+			return a[i].Timestamp < a[j].Timestamp
+		}
 	}
-	return false
 }
 func (a AnacondaPkgAttrs) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
 
@@ -281,8 +294,8 @@ func InstallCondaStandalone() (string, error) {
 
 	var candidates = make([]AnacondaPkgAttr, 0)
 	for _, datum := range data {
-		if datum.attrs.subdir == subdir {
-			candidates = append(candidates, datum.attrs)
+		if datum.Attrs.Subdir == subdir {
+			candidates = append(candidates, datum.Attrs)
 		}
 	}
 	sort.Sort(AnacondaPkgAttrs(candidates))
@@ -290,8 +303,8 @@ func InstallCondaStandalone() (string, error) {
 	chosen := candidates[len(candidates)-1]
 
 	installedExe, err := downloadAndUnpackCondaTarBz2(
-		chosen.source_url, map[string]string{
-			"stanalone_conda/conda.exe": targetExeFilename("conda_standalone"),
+		chosen.Source_url, map[string]string{
+			"standalone_conda/conda.exe": targetExeFilename("conda_standalone"),
 		})
 
 	return installedExe, err
