@@ -2,11 +2,11 @@ package cmd
 
 import (
 	"fmt"
+	"io/ioutil"
 	"log"
 	"os"
 	"testing"
 )
-import "io/ioutil"
 
 func TestInstallMicromamba(t *testing.T) {
 	dir, err := ioutil.TempDir(".", "")
