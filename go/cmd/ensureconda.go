@@ -9,6 +9,8 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+
+	log "github.com/sirupsen/logrus"
 )
 
 var (
@@ -38,6 +40,15 @@ var (
 			noInstall, err := cmd.Flags().GetBool("no-install")
 			if err != nil {
 				panic(err)
+			}
+
+			verbosity, err := cmd.Flags().GetInt("verbosity")
+			if verbosity >= 2 {
+				log.SetLevel(log.TraceLevel)
+			} else if verbosity >= 1 {
+				log.SetLevel(log.DebugLevel)
+			} else if verbosity == 0 {
+				log.SetLevel(log.InfoLevel)
 			}
 
 			executable, err := EnsureConda(mamba, micromamba, conda, condaExe, true)
@@ -72,7 +83,7 @@ func sitePath() string {
 	return appdirs.UserDataDir("ensure-conda", "", "", false)
 }
 
-func EnsureConda(mamba bool, micromamba bool, conda bool, condaExe bool, noInstall bool) (string, error) {
+func EnsureConda(mamba bool, micromamba bool, conda bool, condaStandalone bool, noInstall bool) (string, error) {
 	var executable string
 	dataDir := sitePath()
 	minMambaVersion, _ := version.NewVersion(DefaultMinMambaVersion)
@@ -83,12 +94,14 @@ func EnsureConda(mamba bool, micromamba bool, conda bool, condaExe bool, noInsta
 	condaVersionCheck := executableHasMinVersion(minCondaVersion, "conda")
 
 	if mamba {
+		log.Debug("Checking for mamba")
 		executable, _ = ResolveExecutable("mamba", dataDir, mambaVersionCheck)
 		if executable != "" {
 			return executable, nil
 		}
 	}
 	if micromamba {
+		log.Debug("Checking for micromamba")
 		executable, _ = ResolveExecutable("micromamba", dataDir, microMambaVersionCheck)
 		if executable != "" {
 			return executable, nil
@@ -104,13 +117,15 @@ func EnsureConda(mamba bool, micromamba bool, conda bool, condaExe bool, noInsta
 		}
 	}
 	if conda {
+		log.Debug("Checking for conda")
 		// TODO: check $CONDA_EXE
 		executable, _ = ResolveExecutable("conda", dataDir, condaVersionCheck)
 		if executable != "" {
 			return executable, nil
 		}
 	}
-	if condaExe {
+	if condaStandalone {
+		log.Debug("Checking for conda_standalone")
 		executable, _ = ResolveExecutable("conda_standalone", dataDir, condaVersionCheck)
 		if executable != "" {
 			return executable, nil
@@ -156,7 +171,7 @@ func Execute() error {
 }
 
 func er(msg interface{}) {
-	fmt.Println("Error:", msg)
+	log.Error(msg)
 	os.Exit(1)
 }
 

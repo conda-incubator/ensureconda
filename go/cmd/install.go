@@ -9,6 +9,7 @@ import (
 	"github.com/flowchartsman/retry"
 	"github.com/gofrs/flock"
 	"github.com/hashicorp/go-version"
+	log "github.com/sirupsen/logrus"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -167,6 +168,11 @@ func extractTarFiles(tarReader *tar.Reader, fileNameMap map[string]string) (stri
 }
 
 func extractTarFile(header *tar.Header, targetFileName string, tarReader *tar.Reader) error {
+	log.WithFields(log.Fields{
+		"srcPath": header.Name,
+		"dstPath": targetFileName,
+	}).Debug("extracting from tarball")
+
 	fileInfo := header.FileInfo()
 	r := retry.NewRetrier(10, 100*time.Millisecond, 5*time.Second)
 	fileLock := flock.New(targetFileName + ".lock")

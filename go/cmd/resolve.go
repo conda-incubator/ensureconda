@@ -3,6 +3,7 @@ package cmd
 import (
 	"errors"
 	"github.com/hashicorp/go-version"
+	log "github.com/sirupsen/logrus"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,11 @@ import (
 func executableHasMinVersion(minVersion *version.Version, prefix string) func(executable string) (bool, error) {
 	return func(executable string) (bool, error) {
 		stdout, err := exec.Command(executable, "--version").Output()
+		log.WithFields(log.Fields{
+			"executable":    executable,
+			"versionOutput": stdout,
+			"minVersion":    minVersion.String(),
+		}).Debug("Detecting executable version")
 		if err != nil {
 			return false, err
 		}
@@ -30,7 +36,6 @@ func executableHasMinVersion(minVersion *version.Version, prefix string) func(ex
 
 func ResolveExecutable(executableName string, dataDir string, versionPredicate func(path string) (bool, error)) (string, error) {
 	path := os.Getenv("PATH")
-	defer os.Setenv("PATH", path)
 	var filteredPaths []string
 	// Append our special path first
 	filteredPaths = append(filteredPaths, dataDir)
@@ -42,8 +47,7 @@ func ResolveExecutable(executableName string, dataDir string, versionPredicate f
 		}
 	}
 	newPathEnv := filepath.Join(filteredPaths...)
-	os.Setenv("PATH", newPathEnv)
-	return FindExecutable(executableName, versionPredicate)
+	return FindExecutable(executableName, newPathEnv, versionPredicate)
 }
 
 func assertExecutable(file string) error {
@@ -57,14 +61,17 @@ func assertExecutable(file string) error {
 	return os.ErrPermission
 }
 
-func FindExecutable(file string, predicate func(path string) (bool, error)) (string, error) {
-	path := os.Getenv("PATH")
-	for _, dir := range filepath.SplitList(path) {
+func FindExecutable(executableFileName string, searchPath string, predicate func(path string) (bool, error)) (string, error) {
+	log.
+		WithField("searchPath", searchPath).
+		WithField("executable", executableFileName).
+		Debug("Searching for executable")
+	for _, dir := range filepath.SplitList(searchPath) {
 		if dir == "" {
-			// Unix shell semantics: path element "" means "."
+			// Unix shell semantics: searchPath element "" means "."
 			dir = "."
 		}
-		path := filepath.Join(dir, file)
+		path := filepath.Join(dir, executableFileName)
 		if err := assertExecutable(path); err == nil {
 			if result, err := predicate(path); err == nil && result == true {
 				return path, nil
