@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"syscall"
 	"time"
 )
 
@@ -34,12 +35,12 @@ func InstallMicromamba() (string, error) {
 }
 
 type AnacondaPkgAttr struct {
-	Subdir       string
-	Version      string
-	Build_number int32
-	Timestamp    uint64
-	Source_url   string
-	Md5          string
+	Subdir      string
+	Version     string
+	BuildNumber int32
+	Timestamp   uint64
+	SourceUrl   string
+	Md5         string
 }
 
 type AnacondaPkg struct {
@@ -59,9 +60,9 @@ func (a AnacondaPkgAttrs) Less(i, j int) bool {
 	} else if versionj.LessThan(versioni) {
 		return false
 	} else {
-		if a[i].Build_number < a[j].Build_number {
+		if a[i].BuildNumber < a[j].BuildNumber {
 			return true
-		} else if a[j].Build_number < a[i].Build_number {
+		} else if a[j].BuildNumber < a[i].BuildNumber {
 			return false
 		} else {
 			return a[i].Timestamp < a[j].Timestamp
@@ -73,7 +74,7 @@ func (a AnacondaPkgAttrs) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
 func InstallCondaStandalone() (string, error) {
 	// Get the most recent conda-standalone
 	subdir := PlatformSubdir()
-	url := "https://api.anaconda.org/package/anaconda/conda-standalone/files"
+	const url = "https://api.anaconda.org/package/anaconda/conda-standalone/files"
 	resp, err := http.Get(url)
 	if err != nil {
 		panic(err)
@@ -103,7 +104,7 @@ func InstallCondaStandalone() (string, error) {
 	chosen := candidates[len(candidates)-1]
 
 	installedExe, err := downloadAndUnpackCondaTarBz2(
-		chosen.Source_url, map[string]string{
+		chosen.SourceUrl, map[string]string{
 			"standalone_conda/conda.exe": targetExeFilename("conda_standalone"),
 		})
 
@@ -154,6 +155,10 @@ func extractTarFiles(tarReader *tar.Reader, fileNameMap map[string]string) (stri
 				if err2 != nil {
 					return "", err2
 				}
+				st, _ := os.Stat(targetFileName)
+				if err = os.Chmod(targetFileName, st.Mode()|syscall.S_IXUSR); err != nil {
+					return "", err
+				}
 				return targetFileName, nil
 			}
 		}
@@ -176,10 +181,10 @@ func extractTarFile(header *tar.Header, targetFileName string, tarReader *tar.Re
 		}
 
 		file, err := os.OpenFile(targetFileName, os.O_RDWR|os.O_CREATE|os.O_TRUNC, fileInfo.Mode().Perm())
-		n, cpErr := io.Copy(file, tarReader)
 		if err != nil {
 			return err
 		}
+		n, cpErr := io.Copy(file, tarReader)
 		if closeErr := file.Close(); closeErr != nil { // close file immediately
 			return closeErr
 		}

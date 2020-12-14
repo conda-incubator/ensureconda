@@ -60,6 +60,9 @@ var (
 	}
 )
 
+const DefaultMinMambaVersion = "0.7.3"
+const DefaultMinCondaVersion = "4.8.2"
+
 var TestSitePath string
 
 func sitePath() string {
@@ -72,8 +75,8 @@ func sitePath() string {
 func EnsureConda(mamba bool, micromamba bool, conda bool, condaExe bool, noInstall bool) (string, error) {
 	var executable string
 	dataDir := sitePath()
-	minMambaVersion, _ := version.NewVersion("0.7.3")
-	minCondaVersion, _ := version.NewVersion("4.8.2")
+	minMambaVersion, _ := version.NewVersion(DefaultMinMambaVersion)
+	minCondaVersion, _ := version.NewVersion(DefaultMinCondaVersion)
 
 	mambaVersionCheck := executableHasMinVersion(minMambaVersion, "mamba")
 	microMambaVersionCheck := executableHasMinVersion(minMambaVersion, "")
@@ -146,42 +149,6 @@ func PlatformSubdir() string {
 
 	return platformMap[ArchSpec{os_, arch}]
 }
-
-//func DownloadToFile(url string, dst string) error {
-//	resp, err := http.Get(url)
-//	if err != nil {
-//		panic(err)
-//	}
-//	defer resp.Body.Close()
-//
-//	retrier := retry.NewRetrier(10, 100*time.Millisecond, 5*time.Second)
-//	fileLock := flock.New(dst + ".lock")
-//	err = retrier.Run(func() error {
-//		locked, err := fileLock.TryLock()
-//		if err != nil {
-//			return err
-//		}
-//		if !locked {
-//			return errors.New("could not lock")
-//		}
-//
-//		out, err := os.Create(dst)
-//		defer out.Close()
-//
-//		_, err = io.Copy(out, resp.Body)
-//		return err
-//	})
-//	if err != nil {
-//		return err
-//	}
-//
-//	st, _ := os.Stat(dst)
-//	err = os.Chmod(dst, st.Mode()|syscall.S_IXUSR)
-//	if err != nil {
-//		return err
-//	}
-//	return nil
-//}
 
 // Execute executes the root command.
 func Execute() error {
