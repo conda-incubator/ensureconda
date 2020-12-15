@@ -2,6 +2,11 @@ name: publish-go
 
 on:
   release:
+    types:
+      - created
+  push:
+    branches:
+      - main
 
 jobs:
   publish-go-binaries:
@@ -33,6 +38,6 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           goos: ${{ matrix.goos }}
           goarch: ${{ matrix.goarch }}
-          project_path: "./go"
+          project_path: go
           build_flags: -v
           ldflags: -X "main.appVersion=${{ env.APP_VERSION }}" -X "main.buildTime=${{ env.BUILD_TIME }}" -X main.gitCommit=${{ github.sha }} -X main.gitRef=${{ github.ref }}
