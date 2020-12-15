@@ -43,14 +43,17 @@ var (
 			}
 
 			verbosity, err := cmd.Flags().GetInt("verbosity")
-			if verbosity >= 3 {
+			switch verbosity {
+			case 3:
 				log.SetLevel(log.TraceLevel)
-			} else if verbosity == 2 {
+			case 2:
 				log.SetLevel(log.DebugLevel)
-			} else if verbosity == 1 {
+			case 1:
 				log.SetLevel(log.InfoLevel)
-			} else if verbosity == 0 {
+			case 0:
 				log.SetLevel(log.WarnLevel)
+			default:
+				log.SetLevel(log.InfoLevel)
 			}
 
 			executable, err := EnsureConda(mamba, micromamba, conda, condaExe, true)
@@ -159,13 +162,14 @@ func PlatformSubdir() string {
 	os_ := runtime.GOOS
 	arch := runtime.GOARCH
 
-	platformMap := make(map[ArchSpec]string)
-	platformMap[ArchSpec{"darwin", "amd64"}] = "osx-64"
-	platformMap[ArchSpec{"darwin", "arm64"}] = "osx-arm64"
-	platformMap[ArchSpec{"linux", "amd64"}] = "linux-64"
-	platformMap[ArchSpec{"linux", "arm64"}] = "linux-aarch64"
-	platformMap[ArchSpec{"linux", "ppc64le"}] = "linux-ppc64le"
-	platformMap[ArchSpec{"windows", "amd64"}] = "win-64"
+	platformMap := map[ArchSpec]string{
+		{"darwin", "amd64"}:  "osx-64",
+		{"darwin", "arm64"}:  "osx-arm64",
+		{"linux", "amd64"}:   "linux-64",
+		{"linux", "arm64"}:   "linux-aarch64",
+		{"linux", "ppc64le"}: "linux-ppc64le",
+		{"windows", "amd64"}: "win-64",
+	}
 
 	return platformMap[ArchSpec{os_, arch}]
 }
@@ -213,4 +217,5 @@ func init() {
 
 	// TODO: implement logger + verbosity
 	rootCmd.PersistentFlags().IntP("verbosity", "v", 1, "verbosity level (0-3)")
+
 }
