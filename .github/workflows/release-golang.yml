@@ -3,7 +3,7 @@ name: publish-go
 on:
   release:
     types:
-      - created
+      - unpublished
       - published
 
 jobs:
@@ -39,8 +39,3 @@ jobs:
           project_path: "./go"
           build_flags: -v
           ldflags: -X "main.appVersion=${{ env.APP_VERSION }}" -X "main.buildTime=${{ env.BUILD_TIME }}" -X main.gitCommit=${{ github.sha }} -X main.gitRef=${{ github.ref }}
-
-
-
-
-
