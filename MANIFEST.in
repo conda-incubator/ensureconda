@@ -1,3 +1,8 @@
 include README.md
 include LICENSE-MIT
 include ensureconda/py.typed
+prune go
+prune .github
+prune test
+prune docs
+prune news
