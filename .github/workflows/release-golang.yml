@@ -2,13 +2,6 @@ name: publish-go
 
 on:
   release:
-    types:
-      - published
-      - unpublished
-      - created
-      - edited
-      - prereleased
-      - released
 
 jobs:
   publish-go-binaries:
@@ -26,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v2
         with:
-          fetch_depth: 0
+          fetch-depth: 0
 
       - name: Set APP_VERSION env
         run: echo APP_VERSION=$(echo ${GITHUB_REF} | rev | cut -d'/' -f 1 | rev ) >> ${GITHUB_ENV}
