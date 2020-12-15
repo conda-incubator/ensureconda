@@ -43,12 +43,14 @@ var (
 			}
 
 			verbosity, err := cmd.Flags().GetInt("verbosity")
-			if verbosity >= 2 {
+			if verbosity >= 3 {
 				log.SetLevel(log.TraceLevel)
-			} else if verbosity >= 1 {
+			} else if verbosity == 2 {
 				log.SetLevel(log.DebugLevel)
-			} else if verbosity == 0 {
+			} else if verbosity == 1 {
 				log.SetLevel(log.InfoLevel)
+			} else if verbosity == 0 {
+				log.SetLevel(log.WarnLevel)
 			}
 
 			executable, err := EnsureConda(mamba, micromamba, conda, condaExe, true)

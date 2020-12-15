@@ -4,10 +4,15 @@ import (
 	"fmt"
 	"github.com/hashicorp/go-version"
 	"io/ioutil"
-	"log"
 	"os"
 	"testing"
+
+	log "github.com/sirupsen/logrus"
 )
+
+func init() {
+	log.SetLevel(log.DebugLevel)
+}
 
 func TestInstallMicromamba(t *testing.T) {
 	dir, err := ioutil.TempDir(".", "")
