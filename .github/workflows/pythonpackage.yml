@@ -26,6 +26,7 @@ jobs:
       - name: Build executables
         run: |
           cd go
+          go test ./...
           python ./build.py
 
       - name: Setup test suite

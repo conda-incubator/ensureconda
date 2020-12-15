@@ -28,7 +28,7 @@ def golang_exe():
 def test_install(golang_exe, flags):
     if golang_exe is None:
         raise pytest.skip("environment variable not set")
-    args = [golang_exe]
+    args = [golang_exe, "--verbosity=3"]
     args.extend(flags)
     print(args)
     result = subprocess.check_output(args, encoding="utf8")
