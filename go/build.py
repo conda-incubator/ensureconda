@@ -1,6 +1,7 @@
 import os
 import subprocess
 
+
 build_arches = [
     ["linux", "amd64"],
     ["linux", "arm64"],

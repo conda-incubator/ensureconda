@@ -1,5 +1,6 @@
 import sys
 import time
+
 from distutils.version import LooseVersion
 from typing import Union
 

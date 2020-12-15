@@ -1,4 +1,5 @@
 import subprocess
+
 from distutils.version import LooseVersion
 from functools import partial
 from os import PathLike
