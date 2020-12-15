@@ -15,7 +15,7 @@ func executableHasMinVersion(minVersion *version.Version, prefix string) func(ex
 		stdout, err := exec.Command(executable, "--version").Output()
 		log.WithFields(log.Fields{
 			"executable":    executable,
-			"versionOutput": stdout,
+			"versionOutput": string(stdout),
 			"minVersion":    minVersion.String(),
 		}).Debug("Detecting executable version")
 		if err != nil {
