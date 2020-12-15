@@ -53,15 +53,18 @@ var (
 
 			executable, err := EnsureConda(mamba, micromamba, conda, condaExe, true)
 			if executable != "" {
+				log.Debugf("Found executable %s", executable)
 				fmt.Print(executable)
 				os.Exit(0)
 			}
 			if !noInstall {
+				log.Debugf("Attempting to install")
 				executable, err = EnsureConda(mamba, micromamba, conda, condaExe, noInstall)
 				if err != nil {
 					er(err)
 				}
 				if executable != "" {
+					log.Debugf("Found executable after installing %s", executable)
 					fmt.Print(executable)
 					os.Exit(0)
 				}
