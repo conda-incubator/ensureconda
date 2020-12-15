@@ -5,23 +5,29 @@ import (
 	"github.com/hashicorp/go-version"
 	"io/ioutil"
 	"os"
+	"runtime"
 	"testing"
 
 	log "github.com/sirupsen/logrus"
 )
 
-func init() {
-	log.SetLevel(log.DebugLevel)
-}
+var pathExt = ""
 
-func TestInstallMicromamba(t *testing.T) {
+func initTetEnv() {
+	log.SetLevel(log.DebugLevel)
+	if runtime.GOOS == "windows" {
+		pathExt = ".exe"
+	}
 	dir, err := ioutil.TempDir(".", "")
 	if err != nil {
 		log.Fatal(err)
 	}
 	TestSitePath = dir
+}
 
-	defer os.RemoveAll(dir)
+func TestInstallMicromamba(t *testing.T) {
+	initTetEnv()
+	defer os.RemoveAll(TestSitePath)
 	defer func() { TestSitePath = "" }()
 
 	tests := []struct {
@@ -30,7 +36,7 @@ func TestInstallMicromamba(t *testing.T) {
 		wantErr bool
 	}{
 		{"simple",
-			fmt.Sprintf("%s/micromamba", dir),
+			fmt.Sprintf("%s/micromamba%s", TestSitePath, pathExt),
 			false,
 		},
 		// TODO: Add test cases.
@@ -51,13 +57,8 @@ func TestInstallMicromamba(t *testing.T) {
 }
 
 func TestInstallCondaStandalone(t *testing.T) {
-	dir, err := ioutil.TempDir(".", "")
-	if err != nil {
-		log.Fatal(err)
-	}
-	TestSitePath = dir
-
-	defer os.RemoveAll(dir)
+	initTetEnv()
+	defer os.RemoveAll(TestSitePath)
 	defer func() { TestSitePath = "" }()
 
 	tests := []struct {
@@ -66,7 +67,7 @@ func TestInstallCondaStandalone(t *testing.T) {
 		wantErr bool
 	}{
 		{"simple",
-			fmt.Sprintf("%s/conda_standalone", dir),
+			fmt.Sprintf("%s/conda_standalone%s", TestSitePath, pathExt),
 			false,
 		},
 	}
