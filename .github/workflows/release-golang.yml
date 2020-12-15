@@ -3,11 +3,15 @@ name: publish-go
 on:
   release:
     types:
-      - unpublished
       - published
+      - unpublished
+      - created
+      - edited
+      - prereleased
+      - released
 
 jobs:
-  publish:
+  publish-go-binaries:
     runs-on: ubuntu-latest
     strategy:
       matrix:
