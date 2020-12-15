@@ -7,5 +7,6 @@ require (
 	github.com/flowchartsman/retry v0.0.0-20190826180120-7c62e13dbbeb
 	github.com/gofrs/flock v0.8.0
 	github.com/hashicorp/go-version v1.2.1
+	github.com/sirupsen/logrus v1.2.0
 	github.com/spf13/cobra v1.1.0
 )

@@ -36,18 +36,18 @@ func InstallMicromamba() (string, error) {
 }
 
 type AnacondaPkgAttr struct {
-	Subdir      string
-	Version     string
-	BuildNumber int32
-	Timestamp   uint64
-	SourceUrl   string
-	Md5         string
+	Subdir      string `json:"subdir"`
+	Version     string `json:"version"`
+	BuildNumber int32  `json:"build_number"`
+	Timestamp   uint64 `json:"timestamp"`
+	SourceUrl   string `json:"source_url"`
+	Md5         string `json:"md5"`
 }
 
 type AnacondaPkg struct {
-	Size  uint32
-	Attrs AnacondaPkgAttr
-	Type  string
+	Size  uint32          `json:"size"`
+	Attrs AnacondaPkgAttr `json:"attrs"`
+	Type  string          `json:"type"`
 }
 
 type AnacondaPkgAttrs []AnacondaPkgAttr
