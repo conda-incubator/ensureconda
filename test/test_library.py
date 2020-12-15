@@ -16,8 +16,6 @@ def in_github_actions():
 
 @pytest.fixture(scope="session")
 def platform():
-    import sys
-
     return sys.platform.lower()
 
 
