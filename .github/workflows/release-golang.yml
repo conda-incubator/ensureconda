@@ -42,4 +42,8 @@ jobs:
           build_flags: -v
           sha256sum: TRUE
           binary_name: ensureconda
-          ldflags: -X "main.appVersion=${{ env.APP_VERSION }}" -X "main.buildTime=${{ env.BUILD_TIME }}" -X main.gitCommit=${{ github.sha }} -X main.gitRef=${{ github.ref }}
+          ldflags: >-
+            -X "main.appVersion=${{ env.APP_VERSION }}"
+            -X "main.buildTime=${{ env.BUILD_TIME }}"
+            -X main.gitCommit=${{ github.sha }}
+            -X main.gitRef=${{ github.ref }}
