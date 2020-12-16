@@ -15,4 +15,4 @@ wheelhouse/
 pip-wheel-metadata/
 # Rever
 rever/
-go/ensureconda*
+golang/ensureconda*

@@ -1,4 +1,4 @@
-name: publish-go
+name: publish-golang
 
 on:
   release:
@@ -33,11 +33,11 @@ jobs:
       - name: Environment Printer
         uses: managedkaos/print-env@v1.0
 
-      - uses: wangyoucao577/go-release-action@master
+      - uses: wangyoucao577/golang-release-action@master
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           goos: ${{ matrix.goos }}
           goarch: ${{ matrix.goarch }}
-          project_path:  ${{ github.workspace }}/go
+          project_path: ./golang
           build_flags: -v
           ldflags: -X "main.appVersion=${{ env.APP_VERSION }}" -X "main.buildTime=${{ env.BUILD_TIME }}" -X main.gitCommit=${{ github.sha }} -X main.gitRef=${{ github.ref }}
