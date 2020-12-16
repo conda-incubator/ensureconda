@@ -15,4 +15,7 @@ wheelhouse/
 pip-wheel-metadata/
 # Rever
 rever/
-golang/ensureconda*
+src/golang/ensureconda*
+# binaries
+ensureconda
+ensureconda.exe

@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/conda-incubator/ensureconda/cmd"
+	"github.com/conda-incubator/ensureconda/src/golang/cmd"
 	log "github.com/sirupsen/logrus"
 	"os"
 )
