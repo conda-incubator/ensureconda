@@ -6,6 +6,7 @@ import (
 	"io/ioutil"
 	"os"
 	"path"
+	"path/filepath"
 	"runtime"
 	"testing"
 
@@ -37,7 +38,7 @@ func TestInstallMicromamba(t *testing.T) {
 		wantErr bool
 	}{
 		{"simple",
-			path.Join(TestSitePath, fmt.Sprintf("micromamba%s", pathExt)),
+			filepath.FromSlash(path.Join(TestSitePath, fmt.Sprintf("micromamba%s", pathExt))),
 			false,
 		},
 		// TODO: Add test cases.
@@ -68,7 +69,7 @@ func TestInstallCondaStandalone(t *testing.T) {
 		wantErr bool
 	}{
 		{"simple",
-			path.Join(TestSitePath, fmt.Sprintf("conda_standalone%s", pathExt)),
+			filepath.FromSlash(path.Join(TestSitePath, fmt.Sprintf("conda_standalone%s", pathExt))),
 			false,
 		},
 	}
@@ -83,8 +84,8 @@ func TestInstallCondaStandalone(t *testing.T) {
 				t.Errorf("InstallCondaStandalone() got = %v, want %v", got, tt.want)
 			}
 
-			version, _ := version.NewVersion("4.8.0")
-			hasVersion, err := executableHasMinVersion(version, "conda")(got)
+			exeVersion, _ := version.NewVersion("4.8.0")
+			hasVersion, err := executableHasMinVersion(exeVersion, "conda")(got)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("InstallCondaStandalone() error = %v", err)
 			}
