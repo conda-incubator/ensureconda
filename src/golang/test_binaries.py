@@ -12,17 +12,22 @@ def golang_exe():
     if exe is not None:
         if os.path.sep in exe:
             p = pathlib.Path(exe).resolve()
+            if p.exists():
+                return str(p)
         else:
             p = pathlib.Path(__file__).parent / exe
-        if p.exists():
-            return str(p)
+            if p.exists():
+                return str(p)
+            p = pathlib.Path(os.getcwd()) / exe
+            if p.exists():
+                return str(p)
 
 
 @pytest.mark.parametrize(
     "flags",
     [
-        [],
-        ["--no-micromamba"],
+        pytest.param([], id="default"),
+        pytest.param(["--no-micromamba"], id="no-micromamba"),
     ],
 )
 def test_install(golang_exe, flags):
