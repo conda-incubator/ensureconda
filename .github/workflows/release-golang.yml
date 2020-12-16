@@ -34,9 +34,12 @@ jobs:
         uses: managedkaos/print-env@v1.0
 
       - uses: wangyoucao577/go-release-action@master
+        continue-on-error: ${{ github.event_name == 'release' }}
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           goos: ${{ matrix.goos }}
           goarch: ${{ matrix.goarch }}
           build_flags: -v
+          sha256sum: TRUE
+          binary_name: ensureconda
           ldflags: -X "main.appVersion=${{ env.APP_VERSION }}" -X "main.buildTime=${{ env.BUILD_TIME }}" -X main.gitCommit=${{ github.sha }} -X main.gitRef=${{ github.ref }}
