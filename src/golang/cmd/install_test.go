@@ -5,6 +5,7 @@ import (
 	"github.com/hashicorp/go-version"
 	"io/ioutil"
 	"os"
+	"path"
 	"runtime"
 	"testing"
 
@@ -36,7 +37,7 @@ func TestInstallMicromamba(t *testing.T) {
 		wantErr bool
 	}{
 		{"simple",
-			fmt.Sprintf("%s/micromamba%s", TestSitePath, pathExt),
+			path.Join(TestSitePath, fmt.Sprintf("micromamba%s", pathExt)),
 			false,
 		},
 		// TODO: Add test cases.
@@ -67,7 +68,7 @@ func TestInstallCondaStandalone(t *testing.T) {
 		wantErr bool
 	}{
 		{"simple",
-			fmt.Sprintf("%s/conda_standalone%s", TestSitePath, pathExt),
+			path.Join(TestSitePath, fmt.Sprintf("conda_standalone%s", pathExt)),
 			false,
 		},
 	}
