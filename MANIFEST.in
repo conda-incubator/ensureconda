@@ -1,8 +1,11 @@
 include README.md
 include LICENSE-MIT
-include ensureconda/py.typed
-prune go
+include src/python/ensureconda/py.typed
+prune src/golang
 prune .github
 prune test
 prune docs
 prune news
+exclude go.mod
+exclude go.sum
+exclude main.go
