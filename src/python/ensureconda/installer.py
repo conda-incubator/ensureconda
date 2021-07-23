@@ -51,7 +51,7 @@ def extract_files_from_conda_package(
 
 
 def install_conda_exe() -> Optional[Path]:
-    url = "https://api.anaconda.org/package/anaconda/conda-standalone/files"
+    url = "https://api.anaconda.org/package/conda-forge/conda-standalone/files"
     resp = request_url_with_retry(url)
     subdir = platform_subdir()
 
