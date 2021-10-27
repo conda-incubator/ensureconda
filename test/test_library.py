@@ -2,12 +2,17 @@ import os
 import pathlib
 import subprocess
 import sys
+import typing
 
 from typing import List
 
 import docker
 import docker.models.containers
 import pytest
+
+
+if typing.TYPE_CHECKING:
+    from _pytest.monkeypatch import MonkeyPatch
 
 
 @pytest.fixture(scope="session")
@@ -140,7 +145,7 @@ def test_ensure_full(
     _run_container_test(args, docker_client, expected, ensureconda_container_full)
 
 
-def test_locally_install(tmp_path, monkeypatch):
+def test_locally_install(tmp_path, monkeypatch: "MonkeyPatch"):
     # The order of these tests matter
     import appdirs
 
@@ -148,6 +153,7 @@ def test_locally_install(tmp_path, monkeypatch):
         return str(tmp_path)
 
     monkeypatch.setattr(appdirs, "user_data_dir", user_data_dir)
+    monkeypatch.delenv("CONDA_EXE", raising=False)
 
     from ensureconda.api import ensureconda
     from ensureconda.resolve import is_windows
