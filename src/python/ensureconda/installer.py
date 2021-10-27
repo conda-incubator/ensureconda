@@ -51,14 +51,28 @@ def extract_files_from_conda_package(
 
 
 def install_conda_exe() -> Optional[Path]:
-    url = "https://api.anaconda.org/package/anaconda/conda-standalone/files"
+    channel = "conda-forge"
+
+    url = "https://api.anaconda.org/package/{}/conda-standalone/files".format(channel)
     resp = request_url_with_retry(url)
     subdir = platform_subdir()
 
     candidates = []
     for file_info in resp.json():
         if file_info["attrs"]["subdir"] == subdir:
-            candidates.append(file_info["attrs"])
+            attrs = file_info["attrs"]
+            # the api for CDN backed channels like conda-forge differ from the one for anaconda so we need to fabricate some values
+            if "version" not in attrs:
+                attrs["version"] = file_info["version"]
+            if "source_url" not in attrs:
+                attrs["source_url"] = file_info["download_url"]
+                if not (
+                    attrs["source_url"].startswith("https://")
+                    or attrs["source_url"].startswith("http://")
+                ):
+                    attrs["source_url"] = "https://" + attrs["source_url"].lstrip("/")
+
+            candidates.append(attrs)
 
     candidates.sort(
         key=lambda attrs: (

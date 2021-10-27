@@ -6,10 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/flowchartsman/retry"
-	"github.com/gofrs/flock"
-	"github.com/hashicorp/go-version"
-	log "github.com/sirupsen/logrus"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -17,8 +13,14 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"syscall"
 	"time"
+
+	"github.com/flowchartsman/retry"
+	"github.com/gofrs/flock"
+	"github.com/hashicorp/go-version"
+	log "github.com/sirupsen/logrus"
 )
 
 func targetExeFilename(exeName string) string {
@@ -45,9 +47,11 @@ type AnacondaPkgAttr struct {
 }
 
 type AnacondaPkg struct {
-	Size  uint32          `json:"size"`
-	Attrs AnacondaPkgAttr `json:"attrs"`
-	Type  string          `json:"type"`
+	Size        uint32          `json:"size"`
+	Attrs       AnacondaPkgAttr `json:"attrs"`
+	Type        string          `json:"type"`
+	Version     string          `json:"version"`
+	DownloadUrl string          `json:"download_url"`
 }
 
 type AnacondaPkgAttrs []AnacondaPkgAttr
@@ -75,7 +79,8 @@ func (a AnacondaPkgAttrs) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
 func InstallCondaStandalone() (string, error) {
 	// Get the most recent conda-standalone
 	subdir := PlatformSubdir()
-	const url = "https://api.anaconda.org/package/anaconda/conda-standalone/files"
+	channel := "conda-forge"
+	url := fmt.Sprintf("https://api.anaconda.org/package/%s/conda-standalone/files", channel)
 	resp, err := http.Get(url)
 	if err != nil {
 		panic(err)
@@ -97,7 +102,20 @@ func InstallCondaStandalone() (string, error) {
 	var candidates = make([]AnacondaPkgAttr, 0)
 	for _, datum := range data {
 		if datum.Attrs.Subdir == subdir {
-			candidates = append(candidates, datum.Attrs)
+			attrs := datum.Attrs
+			// CDN backed packages don't have all the same api fields
+			if attrs.Version == "" {
+				attrs.Version = datum.Version
+			}
+			if attrs.SourceUrl == "" {
+				if strings.HasPrefix(datum.DownloadUrl, "//") {
+					attrs.SourceUrl = "https:" + datum.DownloadUrl
+				} else {
+					attrs.SourceUrl = datum.DownloadUrl
+				}
+			}
+
+			candidates = append(candidates, attrs)
 		}
 	}
 	sort.Sort(AnacondaPkgAttrs(candidates))
@@ -138,7 +156,7 @@ func installMicromamba(url string) (string, error) {
 }
 
 func extractTarFiles(tarReader *tar.Reader, fileNameMap map[string]string) (string, error) {
-	for true {
+	for {
 		header, err := tarReader.Next()
 
 		if err == io.EOF {
