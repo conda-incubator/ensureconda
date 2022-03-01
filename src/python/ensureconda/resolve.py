@@ -4,9 +4,8 @@ import platform
 import shutil
 import sys
 
-from os import PathLike
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import TYPE_CHECKING, Iterator, Optional, TypeVar
 
 import appdirs
 
@@ -20,7 +19,7 @@ def ext_candidates(fpath: str) -> Iterator[str]:
         yield fpath + ext
 
 
-def is_exe(fpath: Optional[Path]):
+def is_exe(fpath: Optional[Path]) -> bool:
     if fpath is None:
         return False
     return os.path.exists(fpath) and os.access(fpath, os.X_OK) and os.path.isfile(fpath)
@@ -63,7 +62,7 @@ def resolve_executable(exe_name: str) -> Iterator[Path]:
                 yield exe_path
 
 
-def conda_executables() -> Iterator[PathLike]:
+def conda_executables() -> Iterator[Path]:
     conda_exe_from_env = os.environ.get("CONDA_EXE")
     if conda_exe_from_env:
         if is_exe(Path(conda_exe_from_env)):
@@ -71,26 +70,29 @@ def conda_executables() -> Iterator[PathLike]:
     yield from resolve_executable("conda")
 
 
-def conda_standalone_executables() -> Iterator[PathLike]:
+def conda_standalone_executables() -> Iterator[Path]:
     yield from resolve_executable("conda_standalone")
 
 
-def mamba_executables() -> Iterator[PathLike]:
+def mamba_executables() -> Iterator[Path]:
     yield from resolve_executable("mamba")
 
 
-def micromamba_executables() -> Iterator[PathLike]:
+def micromamba_executables() -> Iterator[Path]:
     yield from resolve_executable("micromamba")
 
 
-def safe_next(it):
+T = TypeVar("T")
+
+
+def safe_next(it: Iterator[T]) -> Optional[T]:
     try:
         return next(it)
     except StopIteration:
         return None
 
 
-def platform_subdir():
+def platform_subdir() -> str:
     # Adapted from conda.context
     _platform_map = {
         "linux2": "linux",
@@ -116,7 +118,7 @@ def platform_subdir():
     machine = platform.machine()
     if machine in non_x86_machines:
         return f"{plat}-{machine}"
-    elif platform == "zos":
+    elif sys.platform.lower() == "zos":
         return "zos-z"
     else:
         return f"{plat}-{bits}"

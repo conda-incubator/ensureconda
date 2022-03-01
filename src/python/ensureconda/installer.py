@@ -7,14 +7,17 @@ import tarfile
 import time
 
 from distutils.version import LooseVersion
-from os import PathLike
 from pathlib import Path
-from typing import IO, Iterator, Optional
+from typing import IO, TYPE_CHECKING, Iterator, Optional
 
 import filelock
 import requests
 
 from ensureconda.resolve import is_windows, platform_subdir, site_path
+
+
+if TYPE_CHECKING:
+    from _typeshed import AnyPath
 
 
 def request_url_with_retry(url: str) -> requests.Response:
@@ -37,7 +40,7 @@ def request_url_with_retry(url: str) -> requests.Response:
 
 def extract_files_from_conda_package(
     tarball: io.BytesIO, filename: str, dest_filename: str
-):
+) -> Path:
     tarball.seek(0)
     with tarfile.open(mode="r:bz2", fileobj=tarball) as tf:
         fo = tf.extractfile(filename)
@@ -97,12 +100,12 @@ def install_micromamba() -> Optional[Path]:
     )
 
 
-def exe_suffix():
+def exe_suffix() -> str:
     return ".exe" if is_windows else ""
 
 
 @contextlib.contextmanager
-def new_executable(target_filename: "PathLike") -> Iterator[IO[bytes]]:
+def new_executable(target_filename: "AnyPath") -> Iterator[IO[bytes]]:
     with filelock.FileLock(f"{str(target_filename)}.lock"):
         with open(target_filename, "wb") as fo:
             yield fo
