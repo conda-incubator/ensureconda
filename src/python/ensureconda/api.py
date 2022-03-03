@@ -2,8 +2,7 @@ import subprocess
 
 from distutils.version import LooseVersion
 from functools import partial
-from os import PathLike
-from typing import Callable, Optional
+from typing import TYPE_CHECKING, Callable, Optional
 
 from ensureconda.installer import install_conda_exe, install_micromamba
 from ensureconda.resolve import (
@@ -14,7 +13,11 @@ from ensureconda.resolve import (
 )
 
 
-def determine_mamba_version(exe: PathLike) -> LooseVersion:
+if TYPE_CHECKING:
+    from _typeshed import AnyPath
+
+
+def determine_mamba_version(exe: "AnyPath") -> LooseVersion:
     out = subprocess.check_output([exe, "--version"], encoding="utf-8").strip()
     for line in out.splitlines(keepends=False):
         if line.startswith("mamba"):
@@ -22,14 +25,14 @@ def determine_mamba_version(exe: PathLike) -> LooseVersion:
     return LooseVersion("0.0.0")
 
 
-def determine_micromamba_version(exe: PathLike) -> LooseVersion:
+def determine_micromamba_version(exe: "AnyPath") -> LooseVersion:
     out = subprocess.check_output([exe, "--version"], encoding="utf-8").strip()
     for line in out.splitlines(keepends=False):
         return LooseVersion(line.split()[-1])
     return LooseVersion("0.0.0")
 
 
-def determine_conda_version(exe: PathLike) -> LooseVersion:
+def determine_conda_version(exe: "AnyPath") -> LooseVersion:
     out = subprocess.check_output([exe, "--version"], encoding="utf-8").strip()
     for line in out.splitlines(keepends=False):
         if line.startswith("conda"):
@@ -46,7 +49,7 @@ def ensureconda(
     no_install: bool = False,
     min_conda_version: Optional[LooseVersion] = None,
     min_mamba_version: Optional[LooseVersion] = None,
-) -> Optional[PathLike]:
+) -> Optional["AnyPath"]:
     """Ensures that conda is installed
 
     Parameters
@@ -69,10 +72,10 @@ def ensureconda(
     """
 
     def version_constraint_met(
-        executable: PathLike,
+        executable: "AnyPath",
         min_version: Optional[LooseVersion],
-        version_fn: Callable[[PathLike], LooseVersion],
-    ):
+        version_fn: Callable[["AnyPath"], LooseVersion],
+    ) -> bool:
         return (min_version is None) or (version_fn(executable) >= min_version)
 
     conda_constraints_met = partial(

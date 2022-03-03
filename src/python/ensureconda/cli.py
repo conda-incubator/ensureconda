@@ -2,7 +2,7 @@ import sys
 import time
 
 from distutils.version import LooseVersion
-from typing import Union
+from typing import Any, Optional, Union
 
 import click
 
@@ -25,7 +25,9 @@ _DEFAULT_MIN_MAMBA = "0.7.3"
 class VersionNumber(click.ParamType):
     name = "VersionNumber"
 
-    def convert(self, value, param, ctx):
+    def convert(
+        self, value: Union[str, LooseVersion, None], param: Any, ctx: Any
+    ) -> LooseVersion:
         return _as_loose_version(value)
 
 
@@ -60,14 +62,14 @@ class VersionNumber(click.ParamType):
     help=f"minimum version of mamba/micromamba to accept (defaults to {_DEFAULT_MIN_MAMBA})",
 )
 def ensureconda_cli(
-    mamba,
-    micromamba,
-    conda,
-    conda_exe,
-    no_install,
-    min_conda_version,
-    min_mamba_version,
-):
+    mamba: bool,
+    micromamba: bool,
+    conda: bool,
+    conda_exe: bool,
+    no_install: bool,
+    min_conda_version: Optional[LooseVersion],
+    min_mamba_version: Optional[LooseVersion],
+) -> None:
     # We run the loop twice, once to find all the eligible condas without installation
     # and once if you haven't found anything after installation
     exe = ensureconda(
