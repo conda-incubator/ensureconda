@@ -152,13 +152,17 @@ func extractTarFiles(tarReader *tar.Reader, fileNameMap map[string]string) (stri
 		switch header.Typeflag {
 		case tar.TypeReg:
 			targetFileName := fileNameMap[header.Name]
+			tmpFileName := targetFileName + ".tmp"
 			if targetFileName != "" {
-				err2 := extractTarFile(header, targetFileName, tarReader)
+				err2 := extractTarFile(header, tmpFileName, tarReader)
 				if err2 != nil {
 					return "", err2
 				}
-				st, _ := os.Stat(targetFileName)
-				if err = os.Chmod(targetFileName, st.Mode()|syscall.S_IXUSR); err != nil {
+				st, _ := os.Stat(tmpFileName)
+				if err = os.Chmod(tmpFileName, st.Mode()|syscall.S_IXUSR); err != nil {
+					return "", err
+				}
+				if err = os.Rename(tmpFileName, targetFileName); err != nil {
 					return "", err
 				}
 				return targetFileName, nil
