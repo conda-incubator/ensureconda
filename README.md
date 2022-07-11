@@ -7,12 +7,28 @@
 
 ## Installation
 
+### Python-based
+
 ensureconda is distributed on [PyPI](https://pypi.org) as a universal
 wheel and is available on Linux, macOS and Windows and supports
 Python 3.6+ and PyPy.
 
 ```bash
 $ pip install ensureconda
+```
+
+### Go based
+
+Additionally ensureconda is also available as a statically linked fully stand-alone
+golang binary.  This is a full reimplementation with the same cli as the python version
+
+These can be downloaded from [releases](https://github.com/conda-incubator/ensureconda/releases/latest)
+
+Alternatively if you have go installed you can install from githubg using
+
+```shell
+$ go install github.com/conda-incubator/ensureconda@latest
+$ ensureconda --help
 ```
 
 ## Usage

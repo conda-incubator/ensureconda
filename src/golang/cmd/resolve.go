@@ -73,7 +73,7 @@ func FindExecutable(executableFileName string, searchPath string, predicate func
 		}
 		path := filepath.Join(dir, executableFileName)
 		if err := assertExecutable(path); err == nil {
-			if result, err := predicate(path); err == nil && result == true {
+			if result, err := predicate(path); err == nil && result {
 				return path, nil
 			}
 		}
