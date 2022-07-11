@@ -3,12 +3,13 @@ package cmd
 import (
 	"errors"
 	"fmt"
-	"github.com/Wessie/appdirs"
-	"github.com/hashicorp/go-version"
-	"github.com/spf13/cobra"
 	"os"
 	"runtime"
 	"strconv"
+
+	"github.com/Wessie/appdirs"
+	"github.com/hashicorp/go-version"
+	"github.com/spf13/cobra"
 
 	log "github.com/sirupsen/logrus"
 )
@@ -43,6 +44,9 @@ var (
 			}
 
 			verbosity, err := cmd.Flags().GetInt("verbosity")
+			if err != nil {
+				panic(err)
+			}
 			switch verbosity {
 			case 3:
 				log.SetLevel(log.TraceLevel)
@@ -57,6 +61,10 @@ var (
 			}
 
 			executable, err := EnsureConda(mamba, micromamba, conda, condaExe, true)
+			if err != nil {
+				panic(err)
+			}
+
 			if executable != "" {
 				log.Debugf("Found executable %s", executable)
 				fmt.Print(executable)

@@ -6,10 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/flowchartsman/retry"
-	"github.com/gofrs/flock"
-	"github.com/hashicorp/go-version"
-	log "github.com/sirupsen/logrus"
 	"io"
 	"io/ioutil"
 	"net/http"
@@ -19,6 +15,11 @@ import (
 	"sort"
 	"syscall"
 	"time"
+
+	"github.com/flowchartsman/retry"
+	"github.com/gofrs/flock"
+	"github.com/hashicorp/go-version"
+	log "github.com/sirupsen/logrus"
 )
 
 func targetExeFilename(exeName string) string {
@@ -138,10 +139,10 @@ func installMicromamba(url string) (string, error) {
 }
 
 func extractTarFiles(tarReader *tar.Reader, fileNameMap map[string]string) (string, error) {
-	for true {
+	for {
 		header, err := tarReader.Next()
 
-		if err == io.EOF {
+		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
