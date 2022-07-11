@@ -104,14 +104,14 @@ def exe_suffix() -> str:
 
 
 @contextlib.contextmanager
-def new_executable(target_filename: "StrPath") -> Iterator[IO[bytes]]:
+def new_executable(target_filename: "Path") -> Iterator[IO[bytes]]:
     """Create a new executabler that can be written to.
     
     Care is take to both prevent concurrent writes as well as guarding against
     early reads.
     """
     with filelock.FileLock(f"{str(target_filename)}.lock"):
-        temp_filename = target_filename.with_suffix(uuid.uuid4().hex)
+        temp_filename = target_filename.with_name(uuid.uuid4().hex)
         with open(temp_filename, "wb") as fo:
             yield fo
         st = os.stat(temp_filename)
