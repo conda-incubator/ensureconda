@@ -106,7 +106,7 @@ def exe_suffix() -> str:
 @contextlib.contextmanager
 def new_executable(target_filename: "Path") -> Iterator[IO[bytes]]:
     """Create a new executabler that can be written to.
-    
+
     Care is take to both prevent concurrent writes as well as guarding against
     early reads.
     """
