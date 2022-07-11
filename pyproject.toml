@@ -1,0 +1,68 @@
+[build-system]
+requires = ["hatchling>=0.21.1", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "ensureconda"
+description = "Lightweight bootstrapper for a conda executable"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.7"
+authors = [
+    { name = "Marius van Niekerk", email = "marius.v.niekerk@gmail.com" },
+]
+classifiers = [
+    "Development Status :: 5 - Production/Stable",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+]
+dependencies = [
+    "appdirs",
+    "click>=5.1",
+    "filelock",
+    "requests>=2",
+]
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/conda-incubator/ensureconda"
+
+[project.scripts]
+ensureconda = "ensureconda.cli:ensureconda_cli"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/python/ensureconda/_version.py"
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+  "/.github",
+  "/docs",
+  "/news",
+  "/src/golang",
+  "/test",
+  "/go.mod",
+  "/go.sum",
+  "/main.go",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/python/ensureconda"]
+
+[tool.pytest]
+flake8-max-line-length = 105
+flake8-ignore = ["docs/*", "ALL"]
+
+[tool.isort]
+not_skip = ["__init__.py"]
+profile = "black"
+known_first_party = ["ensureconda"]
