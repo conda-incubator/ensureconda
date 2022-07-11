@@ -5,7 +5,7 @@ import os
 import stat
 import tarfile
 import time
-
+import uuid
 from distutils.version import LooseVersion
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Iterator, Optional
@@ -15,9 +15,8 @@ import requests
 
 from ensureconda.resolve import is_windows, platform_subdir, site_path
 
-
 if TYPE_CHECKING:
-    from _typeshed import AnyPath
+    from _typeshed import StrPath
 
 
 def request_url_with_retry(url: str) -> requests.Response:
@@ -105,7 +104,7 @@ def exe_suffix() -> str:
 
 
 @contextlib.contextmanager
-def new_executable(target_filename: "AnyPath") -> Iterator[IO[bytes]]:
+def new_executable(target_filename: "StrPath") -> Iterator[IO[bytes]]:
     with filelock.FileLock(f"{str(target_filename)}.lock"):
         with open(target_filename, "wb") as fo:
             yield fo

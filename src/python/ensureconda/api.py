@@ -1,5 +1,4 @@
 import subprocess
-
 from distutils.version import LooseVersion
 from functools import partial
 from typing import TYPE_CHECKING, Callable, Optional
@@ -12,12 +11,11 @@ from ensureconda.resolve import (
     micromamba_executables,
 )
 
-
 if TYPE_CHECKING:
-    from _typeshed import AnyPath
+    from _typeshed import StrPath
 
 
-def determine_mamba_version(exe: "AnyPath") -> LooseVersion:
+def determine_mamba_version(exe: "StrPath") -> LooseVersion:
     out = subprocess.check_output([exe, "--version"], encoding="utf-8").strip()
     for line in out.splitlines(keepends=False):
         if line.startswith("mamba"):
@@ -25,14 +23,14 @@ def determine_mamba_version(exe: "AnyPath") -> LooseVersion:
     return LooseVersion("0.0.0")
 
 
-def determine_micromamba_version(exe: "AnyPath") -> LooseVersion:
+def determine_micromamba_version(exe: "StrPath") -> LooseVersion:
     out = subprocess.check_output([exe, "--version"], encoding="utf-8").strip()
     for line in out.splitlines(keepends=False):
         return LooseVersion(line.split()[-1])
     return LooseVersion("0.0.0")
 
 
-def determine_conda_version(exe: "AnyPath") -> LooseVersion:
+def determine_conda_version(exe: "StrPath") -> LooseVersion:
     out = subprocess.check_output([exe, "--version"], encoding="utf-8").strip()
     for line in out.splitlines(keepends=False):
         if line.startswith("conda"):
@@ -49,7 +47,7 @@ def ensureconda(
     no_install: bool = False,
     min_conda_version: Optional[LooseVersion] = None,
     min_mamba_version: Optional[LooseVersion] = None,
-) -> Optional["AnyPath"]:
+) -> "Optional[StrPath]":
     """Ensures that conda is installed
 
     Parameters
@@ -72,9 +70,9 @@ def ensureconda(
     """
 
     def version_constraint_met(
-        executable: "AnyPath",
+        executable: "StrPath",
         min_version: Optional[LooseVersion],
-        version_fn: Callable[["AnyPath"], LooseVersion],
+        version_fn: Callable[["StrPath"], LooseVersion],
     ) -> bool:
         return (min_version is None) or (version_fn(executable) >= min_version)
 
