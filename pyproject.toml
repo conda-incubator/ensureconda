@@ -63,6 +63,5 @@ flake8-max-line-length = 105
 flake8-ignore = ["docs/*", "ALL"]
 
 [tool.isort]
-not_skip = ["__init__.py"]
 profile = "black"
 known_first_party = ["ensureconda"]
