@@ -164,7 +164,7 @@ def stream_conda_executable(url: str) -> Path:
 
 
 def get_channel_name() -> str:
-    channel = os.environ.get("ENSURECONDA_CONDA_STANDALONE_CHANNEL", "anaconda")
+    channel = os.environ.get("ENSURECONDA_CONDA_STANDALONE_CHANNEL", "conda-forge")
     # Raise an error if the channel name contains any non-alphanumeric characters
     # besides - or _
     if not channel.replace("-", "").replace("_", "").isalnum():
