@@ -151,6 +151,7 @@ def test_locally_install(tmp_path, monkeypatch):
     from ensureconda.api import ensureconda
     from ensureconda.resolve import is_windows
 
+    monkeypatch.delenv("CONDA_EXE", raising=False)
     # remove all paths from $PATH until we don't have a conda executable
     conda_executable = ensureconda(no_install=True)
     while conda_executable is not None:
