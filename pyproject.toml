@@ -27,6 +27,7 @@ dependencies = [
     "appdirs",
     "click>=5.1",
     "filelock",
+    "packaging",
     "requests>=2",
 ]
 dynamic = ["version"]

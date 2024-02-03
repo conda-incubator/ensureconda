@@ -1,20 +1,20 @@
 import sys
 import time
-from distutils.version import LooseVersion
 from typing import Any, Optional, Union
 
 import click
+from packaging.version import Version
 
 from ensureconda.api import ensureconda
 
 
-def _as_loose_version(obj: Union[str, LooseVersion, None]) -> LooseVersion:
-    if isinstance(obj, LooseVersion):
+def _as_loose_version(obj: Union[str, Version, None]) -> Version:
+    if isinstance(obj, Version):
         return obj
     elif obj is None:
-        return LooseVersion("0.0.0")
+        return Version("0.0.0")
     else:
-        return LooseVersion(obj)
+        return Version(obj)
 
 
 _DEFAULT_MIN_CONDA = "4.8.2"
@@ -25,8 +25,8 @@ class VersionNumber(click.ParamType):
     name = "VersionNumber"
 
     def convert(
-        self, value: Union[str, LooseVersion, None], param: Any, ctx: Any
-    ) -> LooseVersion:
+        self, value: Union[str, Version, None], param: Any, ctx: Any
+    ) -> Version:
         return _as_loose_version(value)
 
 
@@ -50,13 +50,13 @@ class VersionNumber(click.ParamType):
 )
 @click.option(
     "--min-conda-version",
-    default=LooseVersion(_DEFAULT_MIN_CONDA),
+    default=Version(_DEFAULT_MIN_CONDA),
     type=VersionNumber(),
     help=f"minimum version of conda to accept (defaults to {_DEFAULT_MIN_CONDA})",
 )
 @click.option(
     "--min-mamba-version",
-    default=LooseVersion(_DEFAULT_MIN_MAMBA),
+    default=Version(_DEFAULT_MIN_MAMBA),
     type=VersionNumber(),
     help=f"minimum version of mamba/micromamba to accept (defaults to {_DEFAULT_MIN_MAMBA})",
 )
@@ -66,8 +66,8 @@ def ensureconda_cli(
     conda: bool,
     conda_exe: bool,
     no_install: bool,
-    min_conda_version: Optional[LooseVersion],
-    min_mamba_version: Optional[LooseVersion],
+    min_conda_version: Optional[Version],
+    min_mamba_version: Optional[Version],
 ) -> None:
     # We run the loop twice, once to find all the eligible condas without installation
     # and once if you haven't found anything after installation

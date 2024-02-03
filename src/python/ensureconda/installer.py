@@ -6,12 +6,12 @@ import stat
 import tarfile
 import time
 import uuid
-from distutils.version import LooseVersion
 from pathlib import Path
 from typing import IO, TYPE_CHECKING, Iterator, Optional
 
 import filelock
 import requests
+from packaging.version import Version
 
 from ensureconda.resolve import is_windows, platform_subdir, site_path
 
@@ -64,7 +64,7 @@ def install_conda_exe() -> Optional[Path]:
 
     candidates.sort(
         key=lambda attrs: (
-            LooseVersion(attrs["version"]),
+            Version(attrs["version"]),
             attrs["build_number"],
             attrs["timestamp"],
         )
