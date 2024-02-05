@@ -2,7 +2,7 @@ import os
 import pathlib
 import subprocess
 import sys
-from typing import List
+from typing import Dict, List, Optional
 
 import docker
 import docker.models.containers
@@ -29,13 +29,15 @@ def can_i_docker(in_github_actions, platform):
 
 
 @pytest.fixture(scope="session")
-def docker_client(can_i_docker):
+def docker_client(can_i_docker) -> docker.client.DockerClient:
     if can_i_docker:
         return docker.from_env()
 
 
 @pytest.fixture(scope="session")
-def ensureconda_container(can_i_docker, docker_client: docker.client.DockerClient):
+def ensureconda_python_container(
+    can_i_docker, docker_client: docker.client.DockerClient
+):
     if can_i_docker:
         test_root = pathlib.Path(__file__).parent
         root = test_root.parent
@@ -50,23 +52,33 @@ def ensureconda_container(can_i_docker, docker_client: docker.client.DockerClien
 
 
 @pytest.fixture(scope="session")
-def ensureconda_container_full(can_i_docker, docker_client: docker.client.DockerClient):
+def ensureconda_python_container_full(
+    can_i_docker, docker_client: docker.client.DockerClient
+):
     if can_i_docker:
         test_root = pathlib.Path(__file__).parent
-        root = test_root.parent
+        src_root = test_root.parent
         image, logs = docker_client.images.build(
             path=str(pathlib.Path(__file__).parent.parent),
             tag="ensureconda:test-full",
             dockerfile=str(
-                (test_root / "docker-full" / "Dockerfile").relative_to(root)
+                (test_root / "docker-full" / "Dockerfile").relative_to(src_root)
             ),
         )
         return image
 
 
-def _run_container_test(args, docker_client, expected, container):
+def _run_container_test(
+    args,
+    docker_client: docker.client.DockerClient,
+    expected,
+    container,
+    envvars: Optional[Dict[str, str]] = None,
+):
+    if envvars is None:
+        envvars = {}
     container_inst: docker.models.containers.Container = docker_client.containers.run(
-        container, detach=True, command=["ensureconda", *args]
+        container, detach=True, command=["ensureconda", *args], environment=envvars
     )
     try:
         res = container_inst.wait()
@@ -105,12 +117,12 @@ def test_ensure_simple(
     expected: str,
     can_i_docker,
     docker_client: docker.client.DockerClient,
-    ensureconda_container,
+    ensureconda_python_container,
 ):
     if not can_i_docker:
         raise pytest.skip("Docker not available")
 
-    _run_container_test(args, docker_client, expected, ensureconda_container)
+    _run_container_test(args, docker_client, expected, ensureconda_python_container)
 
 
 @pytest.mark.parametrize(
@@ -130,13 +142,15 @@ def test_ensure_full(
     args: List[str],
     expected: str,
     docker_client: docker.client.DockerClient,
-    ensureconda_container_full,
+    ensureconda_python_container_full,
     can_i_docker,
 ):
     if not can_i_docker:
         raise pytest.skip("Docker not available")
 
-    _run_container_test(args, docker_client, expected, ensureconda_container_full)
+    _run_container_test(
+        args, docker_client, expected, ensureconda_python_container_full
+    )
 
 
 def test_locally_install(tmp_path, monkeypatch):
@@ -178,3 +192,40 @@ def test_locally_install(tmp_path, monkeypatch):
     ext = ".exe" if is_windows else ""
     assert str(executable) == f"{str(tmp_path)}{os.path.sep}micromamba{ext}"
     subprocess.check_call([str(executable), "--help"])
+
+
+@pytest.mark.parametrize(
+    "environment, expected_status",
+    [
+        ({}, 0),
+        ({"ENSURECONDA_CONDA_STANDALONE_CHANNEL": "non-existent-channel"}, 1),
+        ({"ENSURECONDA_CONDA_STANDALONE_CHANNEL": "anaconda"}, 0),
+        ({"ENSURECONDA_CONDA_STANDALONE_CHANNEL": "conda-forge"}, 0),
+    ],
+    ids=["no-environment-var", "non-existent-channel", "anaconda", "conda-forge"],
+)
+def test_non_existent_channel(
+    can_i_docker,
+    docker_client: docker.client.DockerClient,
+    ensureconda_python_container,
+    environment,
+    expected_status,
+):
+    if not can_i_docker:
+        raise pytest.skip("Docker not available")
+
+    container_inst: docker.models.containers.Container = docker_client.containers.run(
+        ensureconda_python_container,
+        detach=True,
+        command=["ensureconda", "--conda-exe", "--no-micromamba"],
+        environment=environment,
+    )
+    try:
+        res = container_inst.wait()
+        stdout = container_inst.logs(stdout=True, stderr=False).decode().strip()
+        stderr = container_inst.logs(stdout=False, stderr=True).decode().strip()
+        print(f"container stdout:\n{stdout}", file=sys.stdout)
+        print(f"container stderr:\n{stderr}", file=sys.stderr)
+        assert res["StatusCode"] == expected_status
+    finally:
+        container_inst.remove()
