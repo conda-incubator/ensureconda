@@ -17,11 +17,25 @@ if TYPE_CHECKING:
 
 
 def determine_mamba_version(exe: "StrPath") -> Version:
+    """Determine the version of mamba on the given executable.
+
+    Typical output of `mamba --version` for v1 is:
+    ```
+    mamba 1.4.7
+    conda 23.5.0
+    ```
+
+    Typical output of `mamba --version` for v2 is identical to micromamba:
+    ```
+    2.0.8
+    ```
+    """
     out = subprocess.check_output([exe, "--version"], encoding="utf-8").strip()
     for line in out.splitlines(keepends=False):
         if line.startswith("mamba"):
             return Version(line.split()[-1])
-    return Version("0.0.0")
+    # Not v1 style output, so fall back to micromamba version detection
+    return determine_micromamba_version(exe)
 
 
 def determine_micromamba_version(exe: "StrPath") -> Version:
