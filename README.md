@@ -11,7 +11,7 @@
 
 ensureconda is distributed on [PyPI](https://pypi.org) as a universal
 wheel and is available on Linux, macOS and Windows and supports
-Python 3.6+ and PyPy.
+Python 3.8+ and PyPy.
 
 ```bash
 $ pip install ensureconda
