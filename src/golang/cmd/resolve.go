@@ -46,7 +46,7 @@ func ResolveExecutable(executableName string, dataDir string, versionPredicate f
 			filteredPaths = append(filteredPaths, dir)
 		}
 	}
-	newPathEnv := filepath.Join(filteredPaths...)
+	newPathEnv := strings.Join(filteredPaths, string(os.PathListSeparator))
 	return FindExecutable(executableName, newPathEnv, versionPredicate)
 }
 
