@@ -1,6 +1,6 @@
 FROM continuumio/miniconda3:latest
 
-RUN conda install -c conda-forge "mamba<2"
+RUN conda install -c conda-forge mamba
 
 WORKDIR /tmp
 ADD . /tmp
