@@ -121,7 +121,7 @@ def new_executable(target_filename: "Path") -> Iterator[IO[bytes]]:
         st = os.stat(temp_filename)
         os.chmod(temp_filename, st.st_mode | stat.S_IXUSR)
         # On Windows, we need to handle the case where the target file already exists
-        if target_filename.exists():
+        if sys.platform in ["win32", "cygwin", "msys"] and target_filename.exists():
             try:
                 target_filename.unlink()
             except (PermissionError, OSError) as e:
