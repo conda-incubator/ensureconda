@@ -2,6 +2,8 @@ package cmd
 
 import (
 	"archive/tar"
+	"archive/zip"
+	"bytes"
 	"compress/bzip2"
 	"encoding/json"
 	"errors"
@@ -11,14 +13,17 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/flowchartsman/retry"
 	"github.com/gofrs/flock"
 	"github.com/hashicorp/go-version"
+	"github.com/klauspost/compress/zstd"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -32,29 +37,36 @@ func targetExeFilename(exeName string) string {
 }
 
 func InstallMicromamba() (string, error) {
-	url := fmt.Sprintf("https://micromamba.snakepit.net/api/micromamba/%s/latest", PlatformSubdir())
+	url := fmt.Sprintf("https://micro.mamba.pm/api/micromamba/%s/latest", PlatformSubdir())
 	return installMicromamba(url)
 }
 
 type AnacondaPkgAttr struct {
 	Subdir      string `json:"subdir"`
-	Version     string `json:"version"`
 	BuildNumber int32  `json:"build_number"`
 	Timestamp   uint64 `json:"timestamp"`
-	SourceUrl   string `json:"source_url"`
-	Md5         string `json:"md5"`
 }
 
 type AnacondaPkg struct {
-	Size  uint32          `json:"size"`
-	Attrs AnacondaPkgAttr `json:"attrs"`
-	Type  string          `json:"type"`
+	Size        uint32          `json:"size"`
+	Attrs       AnacondaPkgAttr `json:"attrs"`
+	Type        string          `json:"type"`
+	Version     string          `json:"version"`
+	DownloadUrl string          `json:"download_url"`
 }
 
-type AnacondaPkgAttrs []AnacondaPkgAttr
+type AnacondaPkgs []AnacondaPkg
 
-func (a AnacondaPkgAttrs) Len() int { return len(a) }
-func (a AnacondaPkgAttrs) Less(i, j int) bool {
+type ArchiveType int
+
+const (
+	UnrecognizedArchive ArchiveType = iota
+	TarBz2Archive
+	CondaArchive
+)
+
+func (a AnacondaPkgs) Len() int { return len(a) }
+func (a AnacondaPkgs) Less(i, j int) bool {
 	versioni, _ := version.NewVersion(a[i].Version)
 	versionj, _ := version.NewVersion(a[j].Version)
 	if versioni.LessThan(versionj) {
@@ -62,21 +74,39 @@ func (a AnacondaPkgAttrs) Less(i, j int) bool {
 	} else if versionj.LessThan(versioni) {
 		return false
 	} else {
-		if a[i].BuildNumber < a[j].BuildNumber {
+		if a[i].Attrs.BuildNumber < a[j].Attrs.BuildNumber {
 			return true
-		} else if a[j].BuildNumber < a[i].BuildNumber {
+		} else if a[j].Attrs.BuildNumber < a[i].Attrs.BuildNumber {
 			return false
 		} else {
-			return a[i].Timestamp < a[j].Timestamp
+			return a[i].Attrs.Timestamp < a[j].Attrs.Timestamp
 		}
 	}
 }
-func (a AnacondaPkgAttrs) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
+func (a AnacondaPkgs) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
+
+func getChannelName() (string, error) {
+	channel := os.Getenv("ENSURECONDA_CONDA_STANDALONE_CHANNEL")
+	if channel == "" {
+		channel = "anaconda"
+	}
+	validChannelName := regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+	if !validChannelName.MatchString(channel) {
+		return "", fmt.Errorf("invalid channel name %s. Channel names must be alphanumeric and may contain hyphens and underscores", channel)
+	}
+
+	return channel, nil
+}
 
 func InstallCondaStandalone() (string, error) {
 	// Get the most recent conda-standalone
 	subdir := PlatformSubdir()
-	const url = "https://api.anaconda.org/package/anaconda/conda-standalone/files"
+	channel, err := getChannelName()
+	if err != nil {
+		return "", err
+	}
+	url := fmt.Sprintf("https://api.anaconda.org/package/%s/conda-standalone/files", channel)
+
 	resp, err := http.Get(url)
 	if err != nil {
 		panic(err)
@@ -95,30 +125,54 @@ func InstallCondaStandalone() (string, error) {
 		panic(err.Error())
 	}
 
-	var candidates = make([]AnacondaPkgAttr, 0)
+	var candidates = make([]AnacondaPkg, 0)
 	for _, datum := range data {
 		if datum.Attrs.Subdir == subdir {
-			candidates = append(candidates, datum.Attrs)
+			candidates = append(candidates, datum)
 		}
 	}
-	sort.Sort(AnacondaPkgAttrs(candidates))
+	sort.Sort(AnacondaPkgs(candidates))
 
+	if len(candidates) == 0 {
+		return "", errors.New("No conda-standalone found for " + subdir)
+	}
 	chosen := candidates[len(candidates)-1]
 
-	installedExe, err := downloadAndUnpackCondaTarBz2(
-		chosen.SourceUrl, map[string]string{
+	downloadUrl := "https:" + chosen.DownloadUrl
+	installedExe, err := downloadAndUnpackArchive(
+		downloadUrl, map[string]string{
 			"standalone_conda/conda.exe": targetExeFilename("conda_standalone"),
 		})
 
 	return installedExe, err
 }
 
-func downloadAndUnpackCondaTarBz2(
-	url string,
-	fileNameMap map[string]string) (string, error) {
+func inferArchiveTypeFromUrl(url string) ArchiveType {
+	if strings.HasSuffix(url, "/latest") || strings.HasSuffix(url, ".tar.bz2") {
+		return TarBz2Archive
+	} else if strings.HasSuffix(url, ".conda") {
+		return CondaArchive
+	}
+	return UnrecognizedArchive
+}
+
+func downloadAndUnpackArchive(url string, fileNameMap map[string]string) (string, error) {
+	archiveType := inferArchiveTypeFromUrl(url)
+
+	switch archiveType {
+	case TarBz2Archive:
+		return downloadAndUnpackTarBz2(url, fileNameMap)
+	case CondaArchive:
+		return downloadAndUnpackConda(url, fileNameMap)
+	default:
+		return "", errors.New("Unrecognized archive type " + url)
+	}
+}
+
+func downloadAndUnpackTarBz2(url string, fileNameMap map[string]string) (string, error) {
 	resp, err := http.Get(url)
 	if err != nil {
-		panic(err)
+		return "", err
 	}
 	defer resp.Body.Close()
 
@@ -128,8 +182,50 @@ func downloadAndUnpackCondaTarBz2(
 	return file, err
 }
 
+func downloadAndUnpackConda(url string, fileNameMap map[string]string) (string, error) {
+	resp, err := http.Get(url)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	// Read the response body into a byte slice
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return "", err
+	}
+
+	byteReader := bytes.NewReader(body)
+
+	zipReader, err := zip.NewReader(byteReader, int64(len(body)))
+	if err != nil {
+		return "", err
+	}
+
+	for _, f := range zipReader.File {
+		if strings.HasPrefix(f.Name, "pkg-conda-standalone") && strings.HasSuffix(f.Name, ".tar.zst") {
+			rc, err := f.Open()
+			if err != nil {
+				return "", err
+			}
+			defer rc.Close()
+
+			zstReader, err := zstd.NewReader(rc)
+			if err != nil {
+				return "", err
+			}
+			defer zstReader.Close()
+
+			tarReader := tar.NewReader(zstReader)
+			file, err := extractTarFiles(tarReader, fileNameMap)
+			return file, err
+		}
+	}
+	return "", errors.New("could not find pkg-conda-standalone*.tar.zst file in the .conda archive")
+}
+
 func installMicromamba(url string) (string, error) {
-	installedExe, err := downloadAndUnpackCondaTarBz2(
+	installedExe, err := downloadAndUnpackArchive(
 		url, map[string]string{
 			"Library/bin/micromamba.exe": targetExeFilename("micromamba"),
 			"bin/micromamba":             targetExeFilename("micromamba"),
