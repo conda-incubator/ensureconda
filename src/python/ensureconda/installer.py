@@ -28,7 +28,7 @@ def request_url_with_retry(url: str) -> requests.Response:
             resp.raise_for_status()
             return resp
         except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 500:
+            if e.response.status_code in [500, 503]:
                 timeout = max(math.e ** (i / 4), 15)
                 print(
                     f"Failed to retrieve, retrying in {timeout:.2f} seconds",
