@@ -23,15 +23,25 @@ if TYPE_CHECKING:
 def request_url_with_retry(url: str) -> requests.Response:
     n = 10
     for i in range(n):
-        resp = requests.get(url, allow_redirects=True)
+        try:
+            resp = requests.get(url, allow_redirects=True)
+        except requests.exceptions.RequestException as e:
+            timeout = max(math.e ** (i / 4), 15)
+            print(
+                f"Failed to retrieve due to {e!r}, retrying in {timeout:.2f} seconds",
+                file=sys.stderr,
+            )
+            time.sleep(timeout)
+            continue
         try:
             resp.raise_for_status()
             return resp
         except requests.exceptions.HTTPError as e:
-            if e.response.status_code == 500:
+            if e.response.status_code in [500, 503]:
                 timeout = max(math.e ** (i / 4), 15)
                 print(
-                    f"Failed to retrieve, retrying in {timeout:.2f} seconds",
+                    f"Failed to retrieve due to {e!r}, "
+                    f"retrying in {timeout:.2f} seconds",
                     file=sys.stderr,
                 )
                 time.sleep(timeout)
