@@ -3,6 +3,7 @@ import io
 import math
 import os
 import stat
+import sys
 import tarfile
 import time
 import uuid
@@ -29,7 +30,10 @@ def request_url_with_retry(url: str) -> requests.Response:
         except requests.exceptions.HTTPError as e:
             if e.response.status_code == 500:
                 timeout = max(math.e ** (i / 4), 15)
-                print(f"Failed to retrieve, retrying in {timeout:.2f} seconds")
+                print(
+                    f"Failed to retrieve, retrying in {timeout:.2f} seconds",
+                    file=sys.stderr,
+                )
                 time.sleep(timeout)
             else:
                 raise
@@ -105,7 +109,7 @@ def exe_suffix() -> str:
 
 @contextlib.contextmanager
 def new_executable(target_filename: "Path") -> Iterator[IO[bytes]]:
-    """Create a new executabler that can be written to.
+    """Create a new executable that can be written to.
 
     Care is take to both prevent concurrent writes as well as guarding against
     early reads.
@@ -116,4 +120,13 @@ def new_executable(target_filename: "Path") -> Iterator[IO[bytes]]:
             yield fo
         st = os.stat(temp_filename)
         os.chmod(temp_filename, st.st_mode | stat.S_IXUSR)
+        # On Windows, we need to handle the case where the target file already exists
+        if sys.platform in ["win32", "cygwin", "msys"] and target_filename.exists():
+            try:
+                target_filename.unlink()
+            except (PermissionError, OSError) as e:
+                raise RuntimeError(
+                    f"Could not remove existing executable {target_filename} "
+                    f"for replacement"
+                ) from e
         os.rename(temp_filename, target_filename)
