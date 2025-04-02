@@ -8,7 +8,7 @@ import tarfile
 import time
 import uuid
 from pathlib import Path
-from typing import IO, TYPE_CHECKING, Iterator, Optional
+from typing import IO, Iterator, Optional, Union
 
 import filelock
 import requests
@@ -16,8 +16,12 @@ from packaging.version import Version
 
 from ensureconda.resolve import is_windows, platform_subdir, site_path
 
-if TYPE_CHECKING:
-    from _typeshed import StrPath
+# If the conda or micromamba executable is older than this, it will be redownloaded
+REDOWNLOAD_WHEN_OLDER_THAN_SEC = 60 * 60 * 24  # 1 day
+# If the age is below this, then the age is considered invalid and the executable will be redownloaded
+NEGATIVE_AGE_TOLERANCE_SEC = -60
+# Interval to notify users about waiting for lock and timeout for lock acquisition
+LOCK_NOTIFICATION_INTERVAL_SEC = 5
 
 
 def request_url_with_retry(url: str) -> requests.Response:
@@ -66,51 +70,129 @@ def extract_files_from_conda_package(
         return target_path
 
 
+@contextlib.contextmanager
+def lock_with_feedback(lock_path: Union[str, Path], lock_name: str) -> Iterator[None]:
+    """Context manager to acquire a lock with user feedback when we need to wait.
+
+    Args:
+        lock_path: The path to the lock file
+        lock_name: A descriptive name for the lock to show in waiting messages
+    """
+    lock = filelock.FileLock(str(lock_path))
+    lock_start = time.time()
+
+    while True:
+        try:
+            # Try to acquire with timeout matching notification interval
+            lock.acquire(timeout=LOCK_NOTIFICATION_INTERVAL_SEC)
+            try:
+                # Success! Now report total wait time if we had to wait
+                total_wait_time = time.time() - lock_start
+                if total_wait_time > 0.1:
+                    print(
+                        f"Lock for {lock_name} acquired after waiting {total_wait_time:.1f} seconds",
+                        file=sys.stderr,
+                    )
+                # Yield control back to the caller
+                yield
+            finally:
+                # Always release the lock
+                lock.release()
+            # Exit the loop after successful execution
+            break
+        except filelock.Timeout:
+            total_wait_time = time.time() - lock_start
+            print(
+                f"Waiting for lock for {lock_name} to be released by another process... "
+                f"({total_wait_time:.1f}s)",
+                file=sys.stderr,
+            )
+
+
 def install_conda_exe() -> Optional[Path]:
-    url = "https://api.anaconda.org/package/anaconda/conda-standalone/files"
-    resp = request_url_with_retry(url)
-    subdir = platform_subdir()
+    # Create a lock file specific to conda_exe to prevent concurrent downloads
+    lock_path = site_path() / "conda_exe_install.lock"
+    dest_filename = f"conda_standalone{exe_suffix()}"
+    site_path().mkdir(parents=True, exist_ok=True)
 
-    candidates = []
-    for file_info in resp.json():
-        if file_info["attrs"]["subdir"] == subdir:
-            candidates.append(file_info["attrs"])
+    # Use the context manager for lock acquisition with feedback
+    with lock_with_feedback(lock_path, "downloading conda"):
+        # Check if the file already exists after acquiring the lock
+        target_path = site_path() / dest_filename
+        if target_path.exists():
+            # Check if the file is fresh
+            file_age = time.time() - target_path.stat().st_mtime
+            if (
+                file_age < REDOWNLOAD_WHEN_OLDER_THAN_SEC
+                and file_age > NEGATIVE_AGE_TOLERANCE_SEC
+            ):
+                return target_path
+            # File is too old or has a weird timestamp, continue to download a new version
 
-    candidates.sort(
-        key=lambda attrs: (
-            Version(attrs["version"]),
-            attrs["build_number"],
-            attrs["timestamp"],
+        url = "https://api.anaconda.org/package/anaconda/conda-standalone/files"
+        resp = request_url_with_retry(url)
+        subdir = platform_subdir()
+
+        candidates = []
+        for file_info in resp.json():
+            if file_info["attrs"]["subdir"] == subdir:
+                candidates.append(file_info["attrs"])
+
+        candidates.sort(
+            key=lambda attrs: (
+                Version(attrs["version"]),
+                attrs["build_number"],
+                attrs["timestamp"],
+            )
         )
-    )
 
-    chosen = candidates[-1]
-    resp = request_url_with_retry(chosen["source_url"])
+        chosen = candidates[-1]
+        resp = request_url_with_retry(chosen["source_url"])
 
-    tarball = io.BytesIO(resp.content)
+        tarball = io.BytesIO(resp.content)
 
-    return extract_files_from_conda_package(
-        tarball=tarball,
-        filename="standalone_conda/conda.exe",
-        dest_filename=f"conda_standalone{exe_suffix()}",
-    )
+        return extract_files_from_conda_package(
+            tarball=tarball,
+            filename="standalone_conda/conda.exe",
+            dest_filename=dest_filename,
+        )
 
 
 def install_micromamba() -> Optional[Path]:
     """Install micromamba into the installation"""
-    subdir = platform_subdir()
-    url = f"https://micromamba.snakepit.net/api/micromamba/{subdir}/latest"
-    resp = request_url_with_retry(url)
+    # Create a lock file specific to micromamba to prevent concurrent downloads
+    lock_path = site_path() / "micromamba_install.lock"
+    dest_filename = f"micromamba{exe_suffix()}"
+    site_path().mkdir(parents=True, exist_ok=True)
 
-    tarball = io.BytesIO(resp.content)
-    if is_windows:
-        filename = "Library/bin/micromamba.exe"
-    else:
-        filename = "bin/micromamba"
+    # Use the context manager for lock acquisition with feedback
+    with lock_with_feedback(lock_path, "downloading micromamba"):
+        # Check if the file already exists after acquiring the lock
+        target_path = site_path() / dest_filename
+        if target_path.exists():
+            # Check if the file is newer than 1 day
+            file_age = time.time() - target_path.stat().st_mtime
+            # Skip if file is not too old and not too far in the future
+            if (
+                file_age < REDOWNLOAD_WHEN_OLDER_THAN_SEC
+                and file_age > NEGATIVE_AGE_TOLERANCE_SEC
+            ):
+                return target_path
+            # File is too old or has a weird timestamp, continue to download a new version
 
-    return extract_files_from_conda_package(
-        tarball=tarball, filename=filename, dest_filename=f"micromamba{exe_suffix()}"
-    )
+        subdir = platform_subdir()
+        url = f"https://micromamba.snakepit.net/api/micromamba/{subdir}/latest"
+        resp = request_url_with_retry(url)
+
+        tarball = io.BytesIO(resp.content)
+        if is_windows:
+            filename = "Library/bin/micromamba.exe"
+        else:
+            filename = "bin/micromamba"
+
+        return extract_files_from_conda_package(
+            tarball=tarball, filename=filename, dest_filename=dest_filename
+        )
 
 
 def exe_suffix() -> str:
@@ -124,7 +206,8 @@ def new_executable(target_filename: "Path") -> Iterator[IO[bytes]]:
     Care is take to both prevent concurrent writes as well as guarding against
     early reads.
     """
-    with filelock.FileLock(f"{str(target_filename)}.lock"):
+    lock_path = f"{str(target_filename)}.lock"
+    with lock_with_feedback(lock_path, f"file write ({target_filename})"):
         temp_filename = target_filename.with_name(uuid.uuid4().hex)
         with open(temp_filename, "wb") as fo:
             yield fo
