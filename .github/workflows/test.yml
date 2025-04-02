@@ -67,6 +67,6 @@ jobs:
 
       - name: Run tests
         run: |
-          pixi run -e ${{ matrix.pixi-env }} coverage run --parallel-mode -m pytest
+          pixi run -e ${{ matrix.pixi-env }} coverage run --parallel-mode -m pytest -vv
           pixi run -e ${{ matrix.pixi-env }} coverage combine --append
           pixi run -e ${{ matrix.pixi-env }} coverage report -m
