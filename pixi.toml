@@ -33,6 +33,12 @@ types-click = "*"
 types-filelock = "*"
 types-requests = "*"
 
+[feature.py38.dependencies]
+python = "3.8.*"
+
+[feature.py313.dependencies]
+python = "3.13.*"
+
 [environments]
 # Redefine the default environment to include all categories.
 default = ["dev"]
@@ -40,3 +46,6 @@ default = ["dev"]
 minimal = []
 # Create an environment for each feature.
 dev = ["dev"]
+
+test-py38 = ["dev", "py38"]
+test-py313 = ["dev", "py313"]
