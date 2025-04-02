@@ -55,6 +55,7 @@ jobs:
           environments: ${{ matrix.pixi-env }}
 
       - name: Lint with flake8
+        shell: bash  # Necessary for using '\' as line continuation
         run: |
           # stop the build if there are Python syntax errors or undefined names
           pixi run -e ${{ matrix.pixi-env }} flake8 . --count --select=E9,F63,F7,F82 \
