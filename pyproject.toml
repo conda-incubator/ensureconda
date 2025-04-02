@@ -81,6 +81,7 @@ packages = ["src/python/ensureconda"]
 [tool.pytest]
 flake8-max-line-length = 105
 flake8-ignore = ["docs/*", "ALL"]
+addopts = "-vvv"
 
 [tool.isort]
 profile = "black"
