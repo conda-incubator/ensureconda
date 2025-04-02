@@ -1,7 +1,9 @@
+import concurrent.futures
 import os
 import pathlib
 import subprocess
 import sys
+import time
 from typing import List
 
 import docker
@@ -178,3 +180,96 @@ def test_locally_install(tmp_path, monkeypatch):
     ext = ".exe" if is_windows else ""
     assert str(executable) == f"{str(tmp_path)}{os.path.sep}micromamba{ext}"
     subprocess.check_call([str(executable), "--help"])
+
+
+def test_concurrent_access(tmp_path, monkeypatch):
+    """Test that multiple concurrent threads can safely call ensureconda and use the result.
+
+    View output with:
+
+    ```bash
+    pytest -s test/test_library.py::test_concurrent_access
+    ```
+    """
+    import appdirs
+
+    def user_data_dir(*args, **kwargs):
+        return str(tmp_path)
+
+    monkeypatch.setattr(appdirs, "user_data_dir", user_data_dir)
+
+    from ensureconda.api import ensureconda
+    from ensureconda.resolve import is_windows
+
+    # Clobber environment to ensure no conda executables are found
+    monkeypatch.delenv("CONDA_EXE", raising=False)
+    conda_executable = ensureconda(no_install=True)
+    remaining_attempts = 100
+    while conda_executable is not None and remaining_attempts >= 0:
+        remaining_attempts -= 1
+        paths = os.environ["PATH"].split(os.pathsep)
+        dirname = str(os.path.dirname(conda_executable))
+        print(f"Removing {dirname} from PATH")
+
+        # Need to handle the case where the directory might not be in PATH
+        if dirname in paths:
+            paths.remove(dirname)
+
+        monkeypatch.setenv("PATH", os.pathsep.join(paths))
+        conda_executable = ensureconda(no_install=True)
+    if remaining_attempts < 0:
+        raise RuntimeError("Failed to clear all conda executables from PATH")
+
+    print("Cleared all conda executables from PATH")
+
+    # Function to be executed by each thread
+    def worker(thread_num):
+        """Worker function that gets and uses a conda executable."""
+        print(f"Thread {thread_num}: Starting")
+
+        # Get the conda executable, only allowing conda_standalone (not mamba/micromamba)
+        executable = ensureconda(mamba=False, micromamba=False)
+        print(f"Thread {thread_num}: Got executable: {executable}")
+
+        # Use the executable to run a simple conda command
+        print(f"Thread {thread_num}: Running conda search command")
+        result = subprocess.run(
+            [
+                str(executable),
+                "search",
+                "--override-channels",
+                "--channel=maresb",
+                "mamba",
+                "--json",
+            ],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+
+        # Verify that the command executed successfully
+        assert result.returncode == 0
+        print(f"Thread {thread_num}: Successfully completed conda command")
+        return executable
+
+    # Use a thread pool to run 3 concurrent threads
+    start_time = time.time()
+    executables = []
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        # Start all threads with their thread numbers
+        futures = [executor.submit(worker, i) for i in range(3)]
+
+        # Wait for all to complete and collect results
+        for future in concurrent.futures.as_completed(futures):
+            executables.append(future.result())
+
+    end_time = time.time()
+
+    # All threads should have used the same executable
+    assert len(set(str(exe) for exe in executables)) == 1
+
+    # Verify we have the expected executable path
+    ext = ".exe" if is_windows else ""
+    assert str(executables[0]).endswith(f"conda_standalone{ext}")
+
+    print(f"Concurrent execution completed in {end_time - start_time:.2f} seconds")
