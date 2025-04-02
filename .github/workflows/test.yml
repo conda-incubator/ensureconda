@@ -44,6 +44,9 @@ jobs:
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         pixi-env: ["test-py38", "test-py313"]
+    defaults:
+      run:
+        shell: bash -eo pipefail -l {0}
 
     steps:
       - uses: actions/checkout@v4
@@ -53,20 +56,20 @@ jobs:
       - uses: prefix-dev/setup-pixi@v0.8.3
         with:
           environments: ${{ matrix.pixi-env }}
+          activate-environment: true
 
       - name: Lint with flake8
-        shell: bash  # Necessary for using '\' as line continuation
         run: |
           # stop the build if there are Python syntax errors or undefined names
-          pixi run -e ${{ matrix.pixi-env }} flake8 . --count --select=E9,F63,F7,F82 \
+          flake8 . --count --select=E9,F63,F7,F82 \
                           --show-source --statistics
 
           # exit-zero treats all errors as warnings. The GitHub editor is 127 chars wide
-          pixi run -e ${{ matrix.pixi-env }} flake8 . --count --exit-zero \
+          flake8 . --count --exit-zero \
                           --max-complexity=10 --max-line-length=127 --statistics
 
       - name: Run tests
         run: |
-          pixi run -e ${{ matrix.pixi-env }} coverage run --parallel-mode -m pytest -vv
-          pixi run -e ${{ matrix.pixi-env }} coverage combine --append
-          pixi run -e ${{ matrix.pixi-env }} coverage report -m
+          coverage run --parallel-mode -m pytest -vv
+          coverage combine --append
+          coverage report -m
