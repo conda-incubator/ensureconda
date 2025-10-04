@@ -1,6 +1,8 @@
 module github.com/conda-incubator/ensureconda
 
-go 1.18
+go 1.22.11
+
+toolchain go1.22.12
 
 require (
 	github.com/Wessie/appdirs v0.0.0-20141031215813-6573e894f8e2
