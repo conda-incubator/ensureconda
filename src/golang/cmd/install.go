@@ -52,6 +52,12 @@ type AnacondaPkg struct {
 
 type AnacondaPkgs []AnacondaPkg
 
+// If the conda executable is older than this, it will be redownloaded
+const redownloadWhenOlder = 24 * time.Hour
+
+// If the age is below this negative tolerance, consider timestamp invalid and redownload
+const negativeAgeTolerance = -60 * time.Second
+
 func (a AnacondaPkgs) Len() int { return len(a) }
 func (a AnacondaPkgs) Less(i, j int) bool {
 	// By this point, InstallCondaStandalone has filtered out unparseable versions.
@@ -106,6 +112,15 @@ func InstallCondaStandalone() (string, error) {
 	}
 	defer func() { _ = fileLock.Unlock() }()
 	log.WithFields(log.Fields{"lockPath": lockPath}).Info("acquired conda download lock")
+
+	// Check if already installed and fresh
+	target := targetExeFilename("conda_standalone")
+	if st, statErr := os.Stat(target); statErr == nil {
+		age := time.Since(st.ModTime())
+		if age < redownloadWhenOlder && age > negativeAgeTolerance {
+			return target, nil
+		}
+	}
 
 	// Download and install
 	candidates, err := computeCandidates(channel, subdir)
