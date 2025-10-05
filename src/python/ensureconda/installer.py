@@ -261,7 +261,7 @@ def install_micromamba() -> Optional[Path]:
             # File is too old or has a weird timestamp, continue to download a new version
 
         subdir = platform_subdir()
-        url = f"https://micromamba.snakepit.net/api/micromamba/{subdir}/latest"
+        url = f"https://micro.mamba.pm/api/micromamba/{subdir}/latest"
         resp = request_url_with_retry(url)
 
         tarball = io.BytesIO(resp.content)

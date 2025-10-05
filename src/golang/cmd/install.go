@@ -35,7 +35,7 @@ func targetExeFilename(exeName string) string {
 }
 
 func InstallMicromamba() (string, error) {
-	url := fmt.Sprintf("https://micromamba.snakepit.net/api/micromamba/%s/latest", PlatformSubdir())
+	url := fmt.Sprintf("https://micro.mamba.pm/api/micromamba/%s/latest", PlatformSubdir())
 	return installMicromamba(url)
 }
 
