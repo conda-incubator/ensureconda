@@ -82,10 +82,42 @@ func (a AnacondaPkgs) Less(i, j int) bool {
 }
 func (a AnacondaPkgs) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
 
+func getChannelName() (string, error) {
+	return "anaconda", nil
+}
+
 func InstallCondaStandalone() (string, error) {
 	// Get the most recent conda-standalone
 	subdir := PlatformSubdir()
-	const url = "https://api.anaconda.org/package/anaconda/conda-standalone/files"
+	channel, err := getChannelName()
+	if err != nil {
+		return "", err
+	}
+
+	// Download and install
+	candidates, err := computeCandidates(channel, subdir)
+	if err != nil {
+		return "", fmt.Errorf("listing conda-standalone candidates: %w", err)
+	}
+	chosen := candidates[len(candidates)-1]
+
+	downloadUrl := "https:" + chosen.DownloadUrl
+	log.WithFields(log.Fields{"url": downloadUrl}).Info("downloading conda-standalone")
+	installedExe, err := downloadAndUnpackCondaTarBz2(
+		downloadUrl, map[string]string{
+			"standalone_conda/conda.exe": targetExeFilename("conda_standalone"),
+		})
+
+	if err != nil {
+		return "", fmt.Errorf("downloading or unpacking conda-standalone: %w", err)
+	}
+	return installedExe, nil
+}
+
+// computeCandidates returns the sorted list of available conda-standalone
+// packages for the given channel and subdir (ascending by version/build/timestamp).
+func computeCandidates(channel string, subdir string) ([]AnacondaPkg, error) {
+	url := fmt.Sprintf("https://api.anaconda.org/package/%s/conda-standalone/files", channel)
 	resp, err := http.Get(url)
 	if err != nil {
 		panic(err)
@@ -127,21 +159,11 @@ func InstallCondaStandalone() (string, error) {
 		filtered = append(filtered, c)
 	}
 	if len(filtered) == 0 {
-		return "", fmt.Errorf("no parseable conda-standalone versions found for %s", subdir)
+		return nil, fmt.Errorf("no parseable conda-standalone versions found for %s", subdir)
 	}
 
 	sort.Sort(AnacondaPkgs(filtered))
-
-	chosen := filtered[len(filtered)-1]
-
-	downloadUrl := "https:" + chosen.DownloadUrl
-	log.WithFields(log.Fields{"url": downloadUrl}).Info("downloading conda-standalone")
-	installedExe, err := downloadAndUnpackCondaTarBz2(
-		downloadUrl, map[string]string{
-			"standalone_conda/conda.exe": targetExeFilename("conda_standalone"),
-		})
-
-	return installedExe, err
+	return filtered, nil
 }
 
 func downloadAndUnpackCondaTarBz2(
