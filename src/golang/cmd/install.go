@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 	"syscall"
 	"time"
 
@@ -105,7 +106,10 @@ func InstallCondaStandalone() (string, error) {
 
 	var candidates = make([]AnacondaPkgAttr, 0)
 	for _, datum := range data {
-		if datum.Attrs.Subdir == subdir {
+		if datum.Attrs.Subdir == subdir &&
+			// Ignore onedir packages as workaround for
+			// <https://github.com/conda/conda-standalone/issues/182>
+			!strings.Contains(datum.Attrs.SourceUrl, "_onedir_") {
 			candidates = append(candidates, datum.Attrs)
 		}
 	}
