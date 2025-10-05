@@ -8,7 +8,7 @@ import tarfile
 import time
 import uuid
 from pathlib import Path
-from typing import IO, Iterator, NamedTuple, Optional, Union
+from typing import IO, Any, Dict, Iterator, List, NamedTuple, Optional, Union
 
 import filelock
 import requests
@@ -132,6 +132,10 @@ def lock_with_feedback(lock_path: Union[str, Path], lock_name: str) -> Iterator[
             )
 
 
+def get_channel_name() -> str:
+    return "anaconda"
+
+
 def install_conda_exe() -> Optional[Path]:
     # Create a lock file specific to conda_exe to prevent concurrent downloads
     lock_path = site_path() / "conda_exe_install.lock"
@@ -152,42 +156,8 @@ def install_conda_exe() -> Optional[Path]:
                 return target_path
             # File is too old or has a weird timestamp, continue to download a new version
 
-        url = "https://api.anaconda.org/package/anaconda/conda-standalone/files"
-        resp = request_url_with_retry(url)
-        subdir = platform_subdir()
-
-        candidates: list[AnacondaPkg] = []
-        for file_info in resp.json():
-            info_attrs = AnacondaPkgAttr(
-                subdir=file_info["attrs"]["subdir"],
-                build=file_info["attrs"]["build"],
-                build_number=file_info["attrs"]["build_number"],
-                timestamp=file_info["attrs"]["timestamp"],
-            )
-            info = AnacondaPkg(
-                size=file_info["size"],
-                attrs=info_attrs,
-                type=file_info["type"],
-                version=file_info["version"],
-                download_url=file_info["download_url"],
-            )
-            if (
-                info_attrs.subdir == subdir
-                and
-                # Ignore onedir packages as workaround for
-                # <https://github.com/conda/conda-standalone/issues/182>
-                "_onedir_" not in info_attrs.build
-            ):
-                candidates.append(info)
-
-        candidates.sort(
-            key=lambda attrs: (
-                Version(attrs.version),
-                attrs.attrs.build_number,
-                attrs.attrs.timestamp,
-            )
-        )
-
+        channel = get_channel_name()
+        candidates = compute_candidates(channel, platform_subdir())
         chosen = candidates[-1]
         download_url = "https:" + chosen.download_url
         resp = request_url_with_retry(download_url)
@@ -199,6 +169,49 @@ def install_conda_exe() -> Optional[Path]:
             filename="standalone_conda/conda.exe",
             dest_filename=dest_filename,
         )
+
+
+def compute_candidates(channel: str, subdir: str) -> List[AnacondaPkg]:
+    """Compute the candidates for the conda-standalone package"""
+
+    url = f"https://api.anaconda.org/package/{channel}/conda-standalone/files"
+    resp = request_url_with_retry(url)
+    api_response_data: List[Dict[str, Any]] = resp.json()
+
+    candidates = []
+    for file_info in api_response_data:
+        info_attrs = AnacondaPkgAttr(
+            subdir=file_info["attrs"]["subdir"],
+            build=file_info["attrs"]["build"],
+            build_number=file_info["attrs"]["build_number"],
+            timestamp=file_info["attrs"]["timestamp"],
+        )
+        info = AnacondaPkg(
+            size=file_info["size"],
+            attrs=info_attrs,
+            type=file_info["type"],
+            version=file_info["version"],
+            download_url=file_info["download_url"],
+        )
+        if (
+            info.attrs.subdir == subdir
+            and
+            # Ignore onedir packages as workaround for
+            # <https://github.com/conda/conda-standalone/issues/182>
+            "_onedir_" not in info.attrs.build
+        ):
+            candidates.append(info)
+
+    candidates.sort(
+        key=lambda attrs: (
+            Version(attrs.version),
+            attrs.attrs.build_number,
+            attrs.attrs.timestamp,
+        )
+    )
+    if len(candidates) == 0:
+        raise RuntimeError(f"No conda-standalone package found for {subdir}")
+    return candidates
 
 
 def install_micromamba() -> Optional[Path]:
