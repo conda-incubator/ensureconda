@@ -135,7 +135,13 @@ def install_conda_exe() -> Optional[Path]:
 
         candidates = []
         for file_info in resp.json():
-            if file_info["attrs"]["subdir"] == subdir:
+            if (
+                file_info["attrs"]["subdir"] == subdir
+                and
+                # Ignore onedir packages as workaround for
+                # <https://github.com/conda/conda-standalone/issues/182>
+                "_onedir_" not in file_info["attrs"]["source_url"]
+            ):
                 candidates.append(file_info["attrs"])
 
         candidates.sort(
