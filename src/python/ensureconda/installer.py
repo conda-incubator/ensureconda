@@ -8,7 +8,7 @@ import tarfile
 import time
 import uuid
 from pathlib import Path
-from typing import IO, Iterator, Optional, Union
+from typing import IO, Iterator, NamedTuple, Optional, Union
 
 import filelock
 import requests
@@ -22,6 +22,29 @@ REDOWNLOAD_WHEN_OLDER_THAN_SEC = 60 * 60 * 24  # 1 day
 NEGATIVE_AGE_TOLERANCE_SEC = -60
 # Interval to notify users about waiting for lock and timeout for lock acquisition
 LOCK_NOTIFICATION_INTERVAL_SEC = 5
+
+
+class AnacondaPkgAttr(NamedTuple):
+    """Inner for data from Anaconda API
+
+    <https://api.anaconda.org/package/anaconda/conda-standalone/files>
+    <https://api.anaconda.org/package/conda-forge/conda-standalone/files>
+    """
+
+    subdir: str
+    build: str
+    build_number: int
+    timestamp: int
+
+
+class AnacondaPkg(NamedTuple):
+    """Outer model for data from Anaconda API"""
+
+    size: int
+    attrs: AnacondaPkgAttr
+    type: str
+    version: str
+    download_url: str
 
 
 def request_url_with_retry(url: str) -> requests.Response:
@@ -133,27 +156,41 @@ def install_conda_exe() -> Optional[Path]:
         resp = request_url_with_retry(url)
         subdir = platform_subdir()
 
-        candidates = []
+        candidates: list[AnacondaPkg] = []
         for file_info in resp.json():
+            info_attrs = AnacondaPkgAttr(
+                subdir=file_info["attrs"]["subdir"],
+                build=file_info["attrs"]["build"],
+                build_number=file_info["attrs"]["build_number"],
+                timestamp=file_info["attrs"]["timestamp"],
+            )
+            info = AnacondaPkg(
+                size=file_info["size"],
+                attrs=info_attrs,
+                type=file_info["type"],
+                version=file_info["version"],
+                download_url=file_info["download_url"],
+            )
             if (
-                file_info["attrs"]["subdir"] == subdir
+                info_attrs.subdir == subdir
                 and
                 # Ignore onedir packages as workaround for
                 # <https://github.com/conda/conda-standalone/issues/182>
-                "_onedir_" not in file_info["attrs"]["source_url"]
+                "_onedir_" not in info_attrs.build
             ):
-                candidates.append(file_info["attrs"])
+                candidates.append(info)
 
         candidates.sort(
             key=lambda attrs: (
-                Version(attrs["version"]),
-                attrs["build_number"],
-                attrs["timestamp"],
+                Version(attrs.version),
+                attrs.attrs.build_number,
+                attrs.attrs.timestamp,
             )
         )
 
         chosen = candidates[-1]
-        resp = request_url_with_retry(chosen["source_url"])
+        download_url = "https:" + chosen.download_url
+        resp = request_url_with_retry(download_url)
 
         tarball = io.BytesIO(resp.content)
 

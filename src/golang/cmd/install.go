@@ -39,23 +39,23 @@ func InstallMicromamba() (string, error) {
 
 type AnacondaPkgAttr struct {
 	Subdir      string `json:"subdir"`
-	Version     string `json:"version"`
+	Build       string `json:"build"`
 	BuildNumber int32  `json:"build_number"`
 	Timestamp   uint64 `json:"timestamp"`
-	SourceUrl   string `json:"source_url"`
-	Md5         string `json:"md5"`
 }
 
 type AnacondaPkg struct {
-	Size  uint32          `json:"size"`
-	Attrs AnacondaPkgAttr `json:"attrs"`
-	Type  string          `json:"type"`
+	Size        uint32          `json:"size"`
+	Attrs       AnacondaPkgAttr `json:"attrs"`
+	Type        string          `json:"type"`
+	Version     string          `json:"version"`
+	DownloadUrl string          `json:"download_url"`
 }
 
-type AnacondaPkgAttrs []AnacondaPkgAttr
+type AnacondaPkgs []AnacondaPkg
 
-func (a AnacondaPkgAttrs) Len() int { return len(a) }
-func (a AnacondaPkgAttrs) Less(i, j int) bool {
+func (a AnacondaPkgs) Len() int { return len(a) }
+func (a AnacondaPkgs) Less(i, j int) bool {
 	// By this point, InstallCondaStandalone has filtered out unparseable versions.
 	// If parsing fails here, treat it as a programmer error.
 	iVer, err := pep440.Parse(a[i].Version)
@@ -72,15 +72,15 @@ func (a AnacondaPkgAttrs) Less(i, j int) bool {
 	if jVer.LessThan(iVer) {
 		return false
 	}
-	if a[i].BuildNumber < a[j].BuildNumber {
+	if a[i].Attrs.BuildNumber < a[j].Attrs.BuildNumber {
 		return true
 	}
-	if a[j].BuildNumber < a[i].BuildNumber {
+	if a[j].Attrs.BuildNumber < a[i].Attrs.BuildNumber {
 		return false
 	}
-	return a[i].Timestamp < a[j].Timestamp
+	return a[i].Attrs.Timestamp < a[j].Attrs.Timestamp
 }
-func (a AnacondaPkgAttrs) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
+func (a AnacondaPkgs) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
 
 func InstallCondaStandalone() (string, error) {
 	// Get the most recent conda-standalone
@@ -104,23 +104,23 @@ func InstallCondaStandalone() (string, error) {
 		panic(err.Error())
 	}
 
-	var candidates = make([]AnacondaPkgAttr, 0)
+	var candidates = make([]AnacondaPkg, 0)
 	for _, datum := range data {
 		if datum.Attrs.Subdir == subdir &&
 			// Ignore onedir packages as workaround for
 			// <https://github.com/conda/conda-standalone/issues/182>
-			!strings.Contains(datum.Attrs.SourceUrl, "_onedir_") {
-			candidates = append(candidates, datum.Attrs)
+			!strings.Contains(datum.Attrs.Build, "_onedir_") {
+			candidates = append(candidates, datum)
 		}
 	}
 
 	// Filter out unparseable versions with a warning, to avoid crashes on new formats
-	filtered := make([]AnacondaPkgAttr, 0, len(candidates))
+	filtered := make([]AnacondaPkg, 0, len(candidates))
 	for _, c := range candidates {
 		if _, err := pep440.Parse(c.Version); err != nil {
 			log.WithFields(log.Fields{
 				"version": c.Version,
-				"subdir":  c.Subdir,
+				"subdir":  c.Attrs.Subdir,
 			}).Warn("skipping unparseable conda-standalone version")
 			continue
 		}
@@ -130,12 +130,14 @@ func InstallCondaStandalone() (string, error) {
 		return "", fmt.Errorf("no parseable conda-standalone versions found for %s", subdir)
 	}
 
-	sort.Sort(AnacondaPkgAttrs(filtered))
+	sort.Sort(AnacondaPkgs(filtered))
 
 	chosen := filtered[len(filtered)-1]
 
+	downloadUrl := "https:" + chosen.DownloadUrl
+	log.WithFields(log.Fields{"url": downloadUrl}).Info("downloading conda-standalone")
 	installedExe, err := downloadAndUnpackCondaTarBz2(
-		chosen.SourceUrl, map[string]string{
+		downloadUrl, map[string]string{
 			"standalone_conda/conda.exe": targetExeFilename("conda_standalone"),
 		})
 
