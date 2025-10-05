@@ -19,7 +19,7 @@ jobs:
           - os: windows-latest
             ENSURECONDA_EXE: ensureconda-windows-amd64.exe
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
@@ -49,7 +49,7 @@ jobs:
         shell: bash -eo pipefail -l {0}
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
