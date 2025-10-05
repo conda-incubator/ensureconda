@@ -3,12 +3,9 @@ package cmd
 import (
 	"archive/tar"
 	"compress/bzip2"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
-	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -19,6 +16,7 @@ import (
 
 	pep440 "github.com/aquasecurity/go-pep440-version"
 	"github.com/flowchartsman/retry"
+	"github.com/go-resty/resty/v2"
 	"github.com/gofrs/flock"
 	log "github.com/sirupsen/logrus"
 )
@@ -118,22 +116,13 @@ func InstallCondaStandalone() (string, error) {
 // packages for the given channel and subdir (ascending by version/build/timestamp).
 func computeCandidates(channel string, subdir string) ([]AnacondaPkg, error) {
 	url := fmt.Sprintf("https://api.anaconda.org/package/%s/conda-standalone/files", channel)
-	resp, err := http.Get(url)
-	if err != nil {
-		panic(err)
-	}
-	defer resp.Body.Close()
-
-	body, err := ioutil.ReadAll(resp.Body)
-
-	if err != nil {
-		panic(err.Error())
-	}
-
+	client := resty.New()
 	var data []AnacondaPkg
-	err = json.Unmarshal(body, &data)
+	_, err := client.R().
+		SetResult(&data).
+		Get(url)
 	if err != nil {
-		panic(err.Error())
+		return nil, fmt.Errorf("GET candidates: %w", err)
 	}
 
 	var candidates = make([]AnacondaPkg, 0)
@@ -169,13 +158,20 @@ func computeCandidates(channel string, subdir string) ([]AnacondaPkg, error) {
 func downloadAndUnpackCondaTarBz2(
 	url string,
 	fileNameMap map[string]string) (string, error) {
-	resp, err := http.Get(url)
-	if err != nil {
-		panic(err)
-	}
-	defer resp.Body.Close()
+	client := resty.New()
+	resp, err := client.R().
+		SetDoNotParseResponse(true).
+		Get(url)
 
-	bzf := bzip2.NewReader(resp.Body)
+	if err != nil {
+		return "", err
+	}
+	if resp.RawBody() == nil {
+		return "", fmt.Errorf("nil response body from %s", url)
+	}
+	defer resp.RawBody().Close()
+
+	bzf := bzip2.NewReader(resp.RawBody())
 	tarReader := tar.NewReader(bzf)
 	file, err := extractTarFiles(tarReader, fileNameMap)
 	return file, err
