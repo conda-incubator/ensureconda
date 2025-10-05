@@ -10,6 +10,7 @@ require (
 	github.com/flowchartsman/retry v1.2.0
 	github.com/go-resty/resty/v2 v2.16.5
 	github.com/gofrs/flock v0.8.1
+	github.com/klauspost/compress v1.17.5
 	github.com/sirupsen/logrus v1.8.1
 	github.com/spf13/cobra v1.5.0
 )
