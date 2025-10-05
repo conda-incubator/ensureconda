@@ -2,7 +2,7 @@ package cmd
 
 import (
 	"errors"
-	"github.com/hashicorp/go-version"
+	pep440 "github.com/aquasecurity/go-pep440-version"
 	log "github.com/sirupsen/logrus"
 	"os"
 	"os/exec"
@@ -10,7 +10,7 @@ import (
 	"strings"
 )
 
-func executableHasMinVersion(minVersion *version.Version, prefix string) func(executable string) (bool, error) {
+func executableHasMinVersion(minVersion pep440.Version, prefix string) func(executable string) (bool, error) {
 	return func(executable string) (bool, error) {
 		stdout, err := exec.Command(executable, "--version").Output()
 		log.WithFields(log.Fields{
@@ -25,7 +25,11 @@ func executableHasMinVersion(minVersion *version.Version, prefix string) func(ex
 		for _, line := range lines {
 			if strings.HasPrefix(line, prefix) {
 				parts := strings.Split(line, " ")
-				if exeVersion, err := version.NewVersion(parts[len(parts)-1]); err == nil && exeVersion.GreaterThanOrEqual(minVersion) {
+				v, err := pep440.Parse(parts[len(parts)-1])
+				if err != nil {
+					continue
+				}
+				if !v.LessThan(minVersion) {
 					return true, nil
 				}
 			}

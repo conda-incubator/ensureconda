@@ -8,7 +8,7 @@ import (
 	"strconv"
 
 	"github.com/Wessie/appdirs"
-	"github.com/hashicorp/go-version"
+	pep440 "github.com/aquasecurity/go-pep440-version"
 	"github.com/spf13/cobra"
 
 	log "github.com/sirupsen/logrus"
@@ -102,8 +102,8 @@ func sitePath() string {
 func EnsureConda(mamba bool, micromamba bool, conda bool, condaStandalone bool, noInstall bool) (string, error) {
 	var executable string
 	dataDir := sitePath()
-	minMambaVersion, _ := version.NewVersion(DefaultMinMambaVersion)
-	minCondaVersion, _ := version.NewVersion(DefaultMinCondaVersion)
+	minMambaVersion, _ := pep440.Parse(DefaultMinMambaVersion)
+	minCondaVersion, _ := pep440.Parse(DefaultMinCondaVersion)
 
 	microMambaVersionCheck := executableHasMinVersion(minMambaVersion, "")
 	condaVersionCheck := executableHasMinVersion(minCondaVersion, "conda")
