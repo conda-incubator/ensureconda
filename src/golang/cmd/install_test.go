@@ -2,7 +2,7 @@ package cmd
 
 import (
 	"fmt"
-	"github.com/hashicorp/go-version"
+	pep440 "github.com/aquasecurity/go-pep440-version"
 	"io/ioutil"
 	"os"
 	"path/filepath"
@@ -89,7 +89,7 @@ func TestInstallCondaStandalone(t *testing.T) {
 				t.Errorf("InstallCondaStandalone() got = %v, want %v", gotClean, wantClean)
 			}
 
-			exeVersion, _ := version.NewVersion("4.8.0")
+			exeVersion, _ := pep440.Parse("4.8.0")
 			hasVersion, err := executableHasMinVersion(exeVersion, "conda")(got)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("InstallCondaStandalone() error = %v", err)

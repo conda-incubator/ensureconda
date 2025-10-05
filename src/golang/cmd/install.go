@@ -16,9 +16,9 @@ import (
 	"syscall"
 	"time"
 
+	pep440 "github.com/aquasecurity/go-pep440-version"
 	"github.com/flowchartsman/retry"
 	"github.com/gofrs/flock"
-	"github.com/hashicorp/go-version"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -55,21 +55,29 @@ type AnacondaPkgAttrs []AnacondaPkgAttr
 
 func (a AnacondaPkgAttrs) Len() int { return len(a) }
 func (a AnacondaPkgAttrs) Less(i, j int) bool {
-	versioni, _ := version.NewVersion(a[i].Version)
-	versionj, _ := version.NewVersion(a[j].Version)
-	if versioni.LessThan(versionj) {
-		return true
-	} else if versionj.LessThan(versioni) {
-		return false
-	} else {
-		if a[i].BuildNumber < a[j].BuildNumber {
-			return true
-		} else if a[j].BuildNumber < a[i].BuildNumber {
-			return false
-		} else {
-			return a[i].Timestamp < a[j].Timestamp
-		}
+	// By this point, InstallCondaStandalone has filtered out unparseable versions.
+	// If parsing fails here, treat it as a programmer error.
+	iVer, err := pep440.Parse(a[i].Version)
+	if err != nil {
+		panic(err)
 	}
+	jVer, err := pep440.Parse(a[j].Version)
+	if err != nil {
+		panic(err)
+	}
+	if iVer.LessThan(jVer) {
+		return true
+	}
+	if jVer.LessThan(iVer) {
+		return false
+	}
+	if a[i].BuildNumber < a[j].BuildNumber {
+		return true
+	}
+	if a[j].BuildNumber < a[i].BuildNumber {
+		return false
+	}
+	return a[i].Timestamp < a[j].Timestamp
 }
 func (a AnacondaPkgAttrs) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
 
@@ -101,9 +109,26 @@ func InstallCondaStandalone() (string, error) {
 			candidates = append(candidates, datum.Attrs)
 		}
 	}
-	sort.Sort(AnacondaPkgAttrs(candidates))
 
-	chosen := candidates[len(candidates)-1]
+	// Filter out unparseable versions with a warning, to avoid crashes on new formats
+	filtered := make([]AnacondaPkgAttr, 0, len(candidates))
+	for _, c := range candidates {
+		if _, err := pep440.Parse(c.Version); err != nil {
+			log.WithFields(log.Fields{
+				"version": c.Version,
+				"subdir":  c.Subdir,
+			}).Warn("skipping unparseable conda-standalone version")
+			continue
+		}
+		filtered = append(filtered, c)
+	}
+	if len(filtered) == 0 {
+		return "", fmt.Errorf("no parseable conda-standalone versions found for %s", subdir)
+	}
+
+	sort.Sort(AnacondaPkgAttrs(filtered))
+
+	chosen := filtered[len(filtered)-1]
 
 	installedExe, err := downloadAndUnpackCondaTarBz2(
 		chosen.SourceUrl, map[string]string{
