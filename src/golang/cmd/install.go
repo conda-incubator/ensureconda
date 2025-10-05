@@ -222,7 +222,10 @@ func extractTarFiles(tarReader *tar.Reader, fileNameMap map[string]string) (stri
 				if err2 != nil {
 					return "", err2
 				}
-				st, _ := os.Stat(tmpFileName)
+				st, err := os.Stat(tmpFileName)
+				if err != nil {
+					return "", fmt.Errorf("stat temp file: %w", err)
+				}
 				if err = os.Chmod(tmpFileName, st.Mode()|syscall.S_IXUSR); err != nil {
 					return "", err
 				}
