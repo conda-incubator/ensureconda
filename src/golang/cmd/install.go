@@ -2,12 +2,15 @@ package cmd
 
 import (
 	"archive/tar"
+	"archive/zip"
+	"bytes"
 	"compress/bzip2"
 	"errors"
 	"fmt"
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"sort"
 	"strings"
@@ -18,6 +21,7 @@ import (
 	"github.com/flowchartsman/retry"
 	"github.com/go-resty/resty/v2"
 	"github.com/gofrs/flock"
+	"github.com/klauspost/compress/zstd"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -51,6 +55,14 @@ type AnacondaPkg struct {
 }
 
 type AnacondaPkgs []AnacondaPkg
+
+type ArchiveType int
+
+const (
+	UnrecognizedArchive ArchiveType = iota
+	TarBz2Archive
+	CondaArchive
+)
 
 // If the conda executable is older than this, it will be redownloaded
 const redownloadWhenOlder = 24 * time.Hour
@@ -131,9 +143,9 @@ func InstallCondaStandalone() (string, error) {
 
 	downloadUrl := "https:" + chosen.DownloadUrl
 	log.WithFields(log.Fields{"url": downloadUrl}).Info("downloading conda-standalone")
-	installedExe, err := downloadAndUnpackCondaTarBz2(
+	installedExe, err := downloadAndUnpackArchive(
 		downloadUrl, map[string]string{
-			"standalone_conda/conda.exe": targetExeFilename("conda_standalone"),
+			"standalone_conda/conda.exe": target,
 		})
 
 	if err != nil {
@@ -185,9 +197,29 @@ func computeCandidates(channel string, subdir string) ([]AnacondaPkg, error) {
 	return filtered, nil
 }
 
-func downloadAndUnpackCondaTarBz2(
-	url string,
-	fileNameMap map[string]string) (string, error) {
+func inferArchiveTypeFromUrl(url string) ArchiveType {
+	if strings.HasSuffix(url, "/latest") || strings.HasSuffix(url, ".tar.bz2") {
+		return TarBz2Archive
+	} else if strings.HasSuffix(url, ".conda") {
+		return CondaArchive
+	}
+	return UnrecognizedArchive
+}
+
+func downloadAndUnpackArchive(url string, fileNameMap map[string]string) (string, error) {
+	archiveType := inferArchiveTypeFromUrl(url)
+
+	switch archiveType {
+	case TarBz2Archive:
+		return downloadAndUnpackTarBz2(url, fileNameMap)
+	case CondaArchive:
+		return downloadAndUnpackConda(url, fileNameMap)
+	default:
+		return "", fmt.Errorf("unrecognized archive type for URL: %s", url)
+	}
+}
+
+func downloadAndUnpackTarBz2(url string, fileNameMap map[string]string) (string, error) {
 	client := resty.New()
 	resp, err := client.R().
 		SetDoNotParseResponse(true).
@@ -207,8 +239,48 @@ func downloadAndUnpackCondaTarBz2(
 	return file, err
 }
 
+func downloadAndUnpackConda(url string, fileNameMap map[string]string) (string, error) {
+	client := resty.New()
+	resp, err := client.R().Get(url)
+
+	if err != nil {
+		return "", err
+	}
+
+	// Read the response body into a byte slice
+	body := resp.Body()
+
+	byteReader := bytes.NewReader(body)
+
+	zipReader, err := zip.NewReader(byteReader, int64(len(body)))
+	if err != nil {
+		return "", err
+	}
+
+	for _, f := range zipReader.File {
+		if strings.HasPrefix(f.Name, "pkg-conda-standalone") && strings.HasSuffix(f.Name, ".tar.zst") {
+			rc, err := f.Open()
+			if err != nil {
+				return "", err
+			}
+			defer rc.Close()
+
+			zstReader, err := zstd.NewReader(rc)
+			if err != nil {
+				return "", err
+			}
+			defer zstReader.Close()
+
+			tarReader := tar.NewReader(zstReader)
+			file, err := extractTarFiles(tarReader, fileNameMap)
+			return file, err
+		}
+	}
+	return "", errors.New("could not find pkg-conda-standalone*.tar.zst file in the .conda archive")
+}
+
 func installMicromamba(url string) (string, error) {
-	installedExe, err := downloadAndUnpackCondaTarBz2(
+	installedExe, err := downloadAndUnpackArchive(
 		url, map[string]string{
 			"Library/bin/micromamba.exe": targetExeFilename("micromamba"),
 			"bin/micromamba":             targetExeFilename("micromamba"),
