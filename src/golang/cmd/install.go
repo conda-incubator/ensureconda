@@ -92,6 +92,21 @@ func InstallCondaStandalone() (string, error) {
 		return "", err
 	}
 
+	// Ensure site path exists before locking
+	_ = os.MkdirAll(sitePath(), 0700)
+
+	// Lock the install to prevent concurrent downloads, similar to Python implementation
+	lockPath := filepath.Join(sitePath(), "conda_exe_install.lock")
+	fileLock := flock.New(lockPath)
+
+	// Block until we acquire the lock (mimics Python's lock_with_feedback behavior)
+	log.WithFields(log.Fields{"lockPath": lockPath}).Info("acquiring conda download lock")
+	if err := fileLock.Lock(); err != nil {
+		return "", fmt.Errorf("acquiring conda download lock: %w", err)
+	}
+	defer func() { _ = fileLock.Unlock() }()
+	log.WithFields(log.Fields{"lockPath": lockPath}).Info("acquired conda download lock")
+
 	// Download and install
 	candidates, err := computeCandidates(channel, subdir)
 	if err != nil {
