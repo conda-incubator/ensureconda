@@ -33,7 +33,7 @@ jobs:
 
       - run: go test ./...
       - run: python src/golang/build.py
-      - run: python -m pip install pytest
+      - run: python -m pip install pytest docker
       - run: python -m pytest src/golang/test_binaries.py
 
   python:
@@ -70,6 +70,6 @@ jobs:
 
       - name: Run tests
         run: |
-          coverage run --parallel-mode -m pytest -vv
+          coverage run --parallel-mode -m pytest -vv test/
           coverage combine --append
           coverage report -m

@@ -1,9 +1,11 @@
 import os
 import pathlib
-import shutil
 import subprocess
-from typing import List, Optional
+from test.helpers import run_container_test
+from typing import Dict, List, Optional
 
+import docker.client
+import docker.models.images
 import pytest
 
 
@@ -44,3 +46,51 @@ def test_install(golang_exe: Optional[str], flags: List[str]) -> None:
 
 def test_find() -> None:
     pass
+
+
+@pytest.fixture(scope="session")
+def ensureconda_go_container(
+    can_i_docker: bool, docker_client: Optional[docker.client.DockerClient]
+) -> Optional[docker.models.images.Image]:
+    if can_i_docker and docker_client is not None:
+        test_root = pathlib.Path(__file__).parent
+        src_root = test_root.parent
+        proj_root = src_root.parent
+        image, logs = docker_client.images.build(
+            path=str(proj_root),
+            tag="ensureconda:test-go",
+            dockerfile=str(
+                (proj_root / "test" / "docker-go" / "Dockerfile").relative_to(proj_root)
+            ),
+        )
+        return image
+    return None
+
+
+@pytest.mark.parametrize(
+    "environment, expected_status",
+    [
+        ({}, 0),
+        ({"ENSURECONDA_CONDA_STANDALONE_CHANNEL": "non-existent-channel"}, 1),
+        ({"ENSURECONDA_CONDA_STANDALONE_CHANNEL": "anaconda"}, 0),
+        ({"ENSURECONDA_CONDA_STANDALONE_CHANNEL": "conda-forge"}, 0),
+    ],
+    ids=["no-environment-var", "non-existent-channel", "anaconda", "conda-forge"],
+)
+def test_non_existent_channel(
+    can_i_docker: bool,
+    docker_client: docker.client.DockerClient,
+    ensureconda_go_container: docker.models.images.Image,
+    environment: Dict[str, str],
+    expected_status: int,
+) -> None:
+    if not can_i_docker or docker_client is None:
+        raise pytest.skip("Docker not available")
+
+    run_container_test(
+        docker_client=docker_client,
+        container=ensureconda_go_container,
+        args=["--conda-exe", "--no-micromamba"],
+        envvars=environment,
+        expected_status=expected_status,
+    )
