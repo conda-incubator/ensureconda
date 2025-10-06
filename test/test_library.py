@@ -79,28 +79,28 @@ def _run_container_test(
 
 
 @pytest.mark.parametrize(
-    "args, expected_stdout",
+    "args, expected_stdout, expected_status",
     [
-        ([], "/root/.local/share/ensure-conda/micromamba"),
-        (["--no-micromamba"], "/root/.local/share/ensure-conda/conda_standalone"),
-        (["--no-conda-exe"], "/root/.local/share/ensure-conda/micromamba"),
-        pytest.param(
-            ["--no-micromamba", "--no-conda-exe"], "", marks=[pytest.mark.xfail]
-        ),
-        pytest.param(
+        ([], "/root/.local/share/ensure-conda/micromamba", 0),
+        (["--no-micromamba"], "/root/.local/share/ensure-conda/conda_standalone", 0),
+        (["--no-conda-exe"], "/root/.local/share/ensure-conda/micromamba", 0),
+        (["--no-micromamba", "--no-conda-exe"], "", 1),
+        (
             ["--min-mamba-version", "100.0.0"],
             "/root/.local/share/ensure-conda/conda_standalone",
+            0,
         ),
-        pytest.param(
+        (
             ["--min-conda-version", "100.0.0", "--min-mamba-version", "100.0.0"],
             "",
-            marks=[pytest.mark.xfail],
+            1,
         ),
     ],
 )
 def test_ensure_simple(
     args: List[str],
     expected_stdout: str,
+    expected_status: int,
     can_i_docker: bool,
     docker_client: docker.client.DockerClient,
     ensureconda_python_container: docker.models.images.Image,
@@ -113,6 +113,7 @@ def test_ensure_simple(
         docker_client=docker_client,
         container=ensureconda_python_container,
         expected_stdout=expected_stdout,
+        expected_status=expected_status,
     )
 
 
