@@ -2,12 +2,13 @@ import os
 import pathlib
 import shutil
 import subprocess
+from typing import List, Optional
 
 import pytest
 
 
 @pytest.fixture()
-def golang_exe():
+def golang_exe() -> Optional[str]:
     exe = os.environ.get("ENSURECONDA_EXE")
     if exe is not None:
         if os.path.sep in exe:
@@ -21,6 +22,7 @@ def golang_exe():
             p = pathlib.Path(os.getcwd()) / exe
             if p.exists():
                 return str(p)
+    return None
 
 
 @pytest.mark.parametrize(
@@ -30,7 +32,7 @@ def golang_exe():
         pytest.param(["--no-micromamba"], id="no-micromamba"),
     ],
 )
-def test_install(golang_exe, flags):
+def test_install(golang_exe: Optional[str], flags: List[str]) -> None:
     if golang_exe is None:
         raise pytest.skip("environment variable not set")
     args = [golang_exe, "--verbosity=3"]
@@ -40,5 +42,5 @@ def test_install(golang_exe, flags):
     subprocess.check_call([result, "--help"])
 
 
-def test_find():
+def test_find() -> None:
     pass

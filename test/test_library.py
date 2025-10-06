@@ -4,41 +4,22 @@ import pathlib
 import subprocess
 import sys
 import time
-from typing import List
+from typing import TYPE_CHECKING, Any, Dict, List, Optional
 
 import docker
 import docker.models.containers
+import docker.models.images
 import pytest
 
-
-@pytest.fixture(scope="session")
-def in_github_actions():
-    return os.environ.get("GITHUB_WORKFLOW") is not None
+if TYPE_CHECKING:
+    from _typeshed import StrPath
 
 
 @pytest.fixture(scope="session")
-def platform():
-    return sys.platform.lower()
-
-
-@pytest.fixture(scope="session")
-def can_i_docker(in_github_actions, platform):
-    """Some platforms can't docker under certain conditions"""
-    if in_github_actions and platform in {"win32", "darwin"}:
-        return False
-    else:
-        return True
-
-
-@pytest.fixture(scope="session")
-def docker_client(can_i_docker):
-    if can_i_docker:
-        return docker.from_env()
-
-
-@pytest.fixture(scope="session")
-def ensureconda_container(can_i_docker, docker_client: docker.client.DockerClient):
-    if can_i_docker:
+def ensureconda_python_container(
+    can_i_docker: bool, docker_client: Optional[docker.client.DockerClient]
+) -> Optional[docker.models.images.Image]:
+    if can_i_docker and docker_client is not None:
         test_root = pathlib.Path(__file__).parent
         root = test_root.parent
         image, logs = docker_client.images.build(
@@ -49,26 +30,39 @@ def ensureconda_container(can_i_docker, docker_client: docker.client.DockerClien
             ),
         )
         return image
+    return None
 
 
 @pytest.fixture(scope="session")
-def ensureconda_container_full(can_i_docker, docker_client: docker.client.DockerClient):
-    if can_i_docker:
+def ensureconda_python_container_full(
+    can_i_docker: bool, docker_client: Optional[docker.client.DockerClient]
+) -> Optional[docker.models.images.Image]:
+    if can_i_docker and docker_client is not None:
         test_root = pathlib.Path(__file__).parent
-        root = test_root.parent
+        src_root = test_root.parent
         image, logs = docker_client.images.build(
             path=str(pathlib.Path(__file__).parent.parent),
             tag="ensureconda:test-full",
             dockerfile=str(
-                (test_root / "docker-full" / "Dockerfile").relative_to(root)
+                (test_root / "docker-full" / "Dockerfile").relative_to(src_root)
             ),
         )
         return image
+    return None
 
 
-def _run_container_test(args, docker_client, expected, container):
+def _run_container_test(
+    args: List[str],
+    docker_client: docker.client.DockerClient,
+    container: docker.models.images.Image,
+    expected_stdout: Optional[str] = None,
+    expected_status: Optional[int] = 0,
+    envvars: Optional[Dict[str, str]] = None,
+) -> None:
+    if envvars is None:
+        envvars = {}
     container_inst: docker.models.containers.Container = docker_client.containers.run(
-        container, detach=True, command=["ensureconda", *args]
+        container, detach=True, command=["ensureconda", *args], environment=envvars
     )
     try:
         res = container_inst.wait()
@@ -76,47 +70,55 @@ def _run_container_test(args, docker_client, expected, container):
         stderr = container_inst.logs(stdout=False, stderr=True).decode().strip()
         print(f"container stdout:\n{stdout}", file=sys.stdout)
         print(f"container stderr:\n{stderr}", file=sys.stderr)
-        assert res["StatusCode"] == 0
-        assert stdout == expected
+        if expected_status is not None:
+            assert res["StatusCode"] == expected_status
+        if expected_stdout is not None:
+            assert stdout == expected_stdout
     finally:
         container_inst.remove()
 
 
 @pytest.mark.parametrize(
-    "args, expected",
+    "args, expected_stdout, expected_status",
     [
-        ([], "/root/.local/share/ensure-conda/micromamba"),
-        (["--no-micromamba"], "/root/.local/share/ensure-conda/conda_standalone"),
-        (["--no-conda-exe"], "/root/.local/share/ensure-conda/micromamba"),
-        pytest.param(
-            ["--no-micromamba", "--no-conda-exe"], "", marks=[pytest.mark.xfail]
-        ),
-        pytest.param(
+        ([], "/root/.local/share/ensure-conda/micromamba", 0),
+        (["--no-micromamba"], "/root/.local/share/ensure-conda/conda_standalone", 0),
+        (["--no-conda-exe"], "/root/.local/share/ensure-conda/micromamba", 0),
+        (["--no-micromamba", "--no-conda-exe"], "", 1),
+        (
             ["--min-mamba-version", "100.0.0"],
             "/root/.local/share/ensure-conda/conda_standalone",
+            0,
         ),
-        pytest.param(
+        (
             ["--min-conda-version", "100.0.0", "--min-mamba-version", "100.0.0"],
             "",
-            marks=[pytest.mark.xfail],
+            1,
         ),
     ],
 )
 def test_ensure_simple(
     args: List[str],
-    expected: str,
-    can_i_docker,
+    expected_stdout: str,
+    expected_status: int,
+    can_i_docker: bool,
     docker_client: docker.client.DockerClient,
-    ensureconda_container,
-):
+    ensureconda_python_container: docker.models.images.Image,
+) -> None:
     if not can_i_docker:
         raise pytest.skip("Docker not available")
 
-    _run_container_test(args, docker_client, expected, ensureconda_container)
+    _run_container_test(
+        args=args,
+        docker_client=docker_client,
+        container=ensureconda_python_container,
+        expected_stdout=expected_stdout,
+        expected_status=expected_status,
+    )
 
 
 @pytest.mark.parametrize(
-    "args, expected",
+    "args, expected_stdout",
     [
         ([], "/opt/conda/bin/mamba"),
         (["--no-mamba", "--no-install"], "/opt/conda/bin/conda"),
@@ -130,22 +132,29 @@ def test_ensure_simple(
 )
 def test_ensure_full(
     args: List[str],
-    expected: str,
+    expected_stdout: str,
     docker_client: docker.client.DockerClient,
-    ensureconda_container_full,
-    can_i_docker,
-):
+    ensureconda_python_container_full: docker.models.images.Image,
+    can_i_docker: bool,
+) -> None:
     if not can_i_docker:
         raise pytest.skip("Docker not available")
 
-    _run_container_test(args, docker_client, expected, ensureconda_container_full)
+    _run_container_test(
+        args=args,
+        docker_client=docker_client,
+        container=ensureconda_python_container_full,
+        expected_stdout=expected_stdout,
+    )
 
 
-def test_locally_install(tmp_path, monkeypatch):
+def test_locally_install(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # The order of these tests matter
     import appdirs
 
-    def user_data_dir(*args, **kwargs):
+    def user_data_dir(*args: Any, **kwargs: Any) -> str:
         return str(tmp_path)
 
     monkeypatch.setattr(appdirs, "user_data_dir", user_data_dir)
@@ -182,7 +191,38 @@ def test_locally_install(tmp_path, monkeypatch):
     subprocess.check_call([str(executable), "--help"])
 
 
-def test_concurrent_access(tmp_path, monkeypatch):
+@pytest.mark.parametrize(
+    "envvars, expected_status",
+    [
+        ({}, 0),
+        ({"ENSURECONDA_CONDA_STANDALONE_CHANNEL": "non-existent-channel"}, 1),
+        ({"ENSURECONDA_CONDA_STANDALONE_CHANNEL": "anaconda"}, 0),
+        ({"ENSURECONDA_CONDA_STANDALONE_CHANNEL": "conda-forge"}, 0),
+    ],
+    ids=["no-environment-var", "non-existent-channel", "anaconda", "conda-forge"],
+)
+def test_non_existent_channel(
+    can_i_docker: bool,
+    docker_client: docker.client.DockerClient,
+    ensureconda_python_container: docker.models.images.Image,
+    envvars: Dict[str, str],
+    expected_status: int,
+) -> None:
+    if not can_i_docker:
+        raise pytest.skip("Docker not available")
+
+    _run_container_test(
+        docker_client=docker_client,
+        container=ensureconda_python_container,
+        args=["--conda-exe", "--no-micromamba"],
+        envvars=envvars,
+        expected_status=expected_status,
+    )
+
+
+def test_concurrent_access(
+    tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     """Test that multiple concurrent threads can safely call ensureconda and use the result.
 
     View output with:
@@ -193,7 +233,7 @@ def test_concurrent_access(tmp_path, monkeypatch):
     """
     import appdirs
 
-    def user_data_dir(*args, **kwargs):
+    def user_data_dir(*args: Any, **kwargs: Any) -> str:
         return str(tmp_path)
 
     monkeypatch.setattr(appdirs, "user_data_dir", user_data_dir)
@@ -223,12 +263,13 @@ def test_concurrent_access(tmp_path, monkeypatch):
     print("Cleared all conda executables from PATH")
 
     # Function to be executed by each thread
-    def worker(thread_num):
+    def worker(thread_num: int) -> "StrPath":
         """Worker function that gets and uses a conda executable."""
         print(f"Thread {thread_num}: Starting")
 
         # Get the conda executable, only allowing conda_standalone (not mamba/micromamba)
-        executable = ensureconda(mamba=False, micromamba=False)
+        executable: Optional["StrPath"] = ensureconda(mamba=False, micromamba=False)
+        assert executable is not None
         print(f"Thread {thread_num}: Got executable: {executable}")
 
         # Use the executable to run a simple conda command
