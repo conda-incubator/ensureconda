@@ -1,8 +1,6 @@
 module github.com/conda-incubator/ensureconda
 
-go 1.22.11
-
-toolchain go1.22.12
+go 1.23.0
 
 require (
 	github.com/Wessie/appdirs v0.0.0-20141031215813-6573e894f8e2
@@ -19,7 +17,7 @@ require (
 	github.com/aquasecurity/go-version v0.0.1 // indirect
 	github.com/inconshreveable/mousetrap v1.0.0 // indirect
 	github.com/spf13/pflag v1.0.5 // indirect
-	golang.org/x/net v0.33.0 // indirect
-	golang.org/x/sys v0.28.0 // indirect
+	golang.org/x/net v0.38.0 // indirect
+	golang.org/x/sys v0.31.0 // indirect
 	golang.org/x/xerrors v0.0.0-20231012003039-104605ab7028 // indirect
 )

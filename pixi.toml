@@ -33,7 +33,7 @@ python-build = "*"
 types-click = "*"
 types-filelock = "*"
 types-requests = "*"
-go = "1.22.*"
+go = "*"
 
 [feature.py38.dependencies]
 python = "3.8.*"
