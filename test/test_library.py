@@ -56,6 +56,7 @@ def _run_container_test(
     docker_client: docker.client.DockerClient,
     container: docker.models.images.Image,
     expected_stdout: Optional[str] = None,
+    expected_status: Optional[int] = 0,
     envvars: Optional[Dict[str, str]] = None,
 ) -> None:
     if envvars is None:
@@ -69,7 +70,8 @@ def _run_container_test(
         stderr = container_inst.logs(stdout=False, stderr=True).decode().strip()
         print(f"container stdout:\n{stdout}", file=sys.stdout)
         print(f"container stderr:\n{stderr}", file=sys.stderr)
-        assert res["StatusCode"] == 0
+        if expected_status is not None:
+            assert res["StatusCode"] == expected_status
         if expected_stdout is not None:
             assert stdout == expected_stdout
     finally:
