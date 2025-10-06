@@ -4,7 +4,7 @@ import pathlib
 import subprocess
 import sys
 import time
-from typing import TYPE_CHECKING, Any, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 import docker
 import docker.models.containers
@@ -79,21 +79,28 @@ def _run_container_test(
 
 
 @pytest.mark.parametrize(
-    "args, expected_stdout, expected_status",
+    "args, expected_stdout, expected_status, python_image_name",
     [
-        ([], "/root/.local/share/ensure-conda/micromamba", 0),
-        (["--no-micromamba"], "/root/.local/share/ensure-conda/conda_standalone", 0),
-        (["--no-conda-exe"], "/root/.local/share/ensure-conda/micromamba", 0),
-        (["--no-micromamba", "--no-conda-exe"], "", 1),
+        ([], "/root/.local/share/ensure-conda/micromamba", 0, "simple"),
+        (
+            ["--no-micromamba"],
+            "/root/.local/share/ensure-conda/conda_standalone",
+            0,
+            "simple",
+        ),
+        (["--no-conda-exe"], "/root/.local/share/ensure-conda/micromamba", 0, "simple"),
+        (["--no-micromamba", "--no-conda-exe"], "", 1, "simple"),
         (
             ["--min-mamba-version", "100.0.0"],
             "/root/.local/share/ensure-conda/conda_standalone",
             0,
+            "simple",
         ),
         (
             ["--min-conda-version", "100.0.0", "--min-mamba-version", "100.0.0"],
             "",
             1,
+            "simple",
         ),
     ],
 )
@@ -103,31 +110,44 @@ def test_ensure_simple(
     expected_status: int,
     can_i_docker: bool,
     docker_client: docker.client.DockerClient,
-    ensureconda_python_container: docker.models.images.Image,
+    python_image_name: Literal["full", "simple"],
+    request: pytest.FixtureRequest,
 ) -> None:
     if not can_i_docker:
         raise pytest.skip("Docker not available")
 
+    python_image: docker.models.images.Image
+    if python_image_name == "full":
+        python_image = request.getfixturevalue("ensureconda_python_container_full")
+    elif python_image_name == "simple":
+        python_image = request.getfixturevalue("ensureconda_python_container")
+
     _run_container_test(
         args=args,
         docker_client=docker_client,
-        container=ensureconda_python_container,
+        container=python_image,
         expected_stdout=expected_stdout,
         expected_status=expected_status,
     )
 
 
 @pytest.mark.parametrize(
-    "args, expected_stdout, expected_status",
+    "args, expected_stdout, expected_status, python_image_name",
     [
-        ([], "/opt/conda/bin/mamba", 0),
-        (["--no-mamba", "--no-install"], "/opt/conda/bin/conda", 0),
-        (["--no-mamba"], "/opt/conda/bin/conda", 0),
-        (["--no-mamba", "--no-conda"], "/root/.local/share/ensure-conda/micromamba", 0),
+        ([], "/opt/conda/bin/mamba", 0, "full"),
+        (["--no-mamba", "--no-install"], "/opt/conda/bin/conda", 0, "full"),
+        (["--no-mamba"], "/opt/conda/bin/conda", 0, "full"),
+        (
+            ["--no-mamba", "--no-conda"],
+            "/root/.local/share/ensure-conda/micromamba",
+            0,
+            "full",
+        ),
         (
             ["--no-mamba", "--no-micromamba", "--no-conda"],
             "/root/.local/share/ensure-conda/conda_standalone",
             0,
+            "full",
         ),
     ],
 )
@@ -136,16 +156,23 @@ def test_ensure_full(
     expected_stdout: str,
     expected_status: int,
     docker_client: docker.client.DockerClient,
-    ensureconda_python_container_full: docker.models.images.Image,
+    python_image_name: Literal["full", "simple"],
     can_i_docker: bool,
+    request: pytest.FixtureRequest,
 ) -> None:
     if not can_i_docker:
         raise pytest.skip("Docker not available")
 
+    python_image: docker.models.images.Image
+    if python_image_name == "full":
+        python_image = request.getfixturevalue("ensureconda_python_container_full")
+    elif python_image_name == "simple":
+        python_image = request.getfixturevalue("ensureconda_python_container")
+
     _run_container_test(
         args=args,
         docker_client=docker_client,
-        container=ensureconda_python_container_full,
+        container=python_image,
         expected_stdout=expected_stdout,
         expected_status=expected_status,
     )
