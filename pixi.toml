@@ -14,6 +14,7 @@ click = ">=5.1"
 filelock = "*"
 packaging = "*"
 requests = ">=2"
+conda-package-streaming = ">=0.11.0,<0.13"
 
 [pypi-dependencies]
 ensureconda = {path = ".", editable = true}
