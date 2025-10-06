@@ -190,6 +190,35 @@ def test_locally_install(
     subprocess.check_call([str(executable), "--help"])
 
 
+@pytest.mark.parametrize(
+    "envvars, expected_status",
+    [
+        ({}, 0),
+        ({"ENSURECONDA_CONDA_STANDALONE_CHANNEL": "non-existent-channel"}, 1),
+        ({"ENSURECONDA_CONDA_STANDALONE_CHANNEL": "anaconda"}, 0),
+        ({"ENSURECONDA_CONDA_STANDALONE_CHANNEL": "conda-forge"}, 0),
+    ],
+    ids=["no-environment-var", "non-existent-channel", "anaconda", "conda-forge"],
+)
+def test_non_existent_channel(
+    can_i_docker: bool,
+    docker_client: docker.client.DockerClient,
+    ensureconda_python_container: docker.models.images.Image,
+    envvars: Dict[str, str],
+    expected_status: int,
+) -> None:
+    if not can_i_docker:
+        raise pytest.skip("Docker not available")
+
+    _run_container_test(
+        docker_client=docker_client,
+        container=ensureconda_python_container,
+        args=["--conda-exe", "--no-micromamba"],
+        envvars=envvars,
+        expected_status=expected_status,
+    )
+
+
 def test_concurrent_access(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
