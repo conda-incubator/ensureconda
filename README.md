@@ -72,10 +72,10 @@ Options:
 
 When ensureconda downloads the conda-standalone executable, you can select the
 channel via the environment variable `ENSURECONDA_CONDA_STANDALONE_CHANNEL`.
-It defaults to `anaconda`, and you can set it to `conda-forge` if you prefer:
+It defaults to `conda-forge`, and you can set it to `anaconda` if you prefer:
 
 ```bash
-export ENSURECONDA_CONDA_STANDALONE_CHANNEL=conda-forge
+export ENSURECONDA_CONDA_STANDALONE_CHANNEL=anaconda
 ensureconda --conda-exe
 ```
 

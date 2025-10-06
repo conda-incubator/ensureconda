@@ -101,7 +101,7 @@ func (a AnacondaPkgs) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
 func getChannelName() (string, error) {
 	channel := os.Getenv("ENSURECONDA_CONDA_STANDALONE_CHANNEL")
 	if channel == "" {
-		channel = "anaconda"
+		channel = "conda-forge"
 	}
 	validChannelName := regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 	if !validChannelName.MatchString(channel) {
