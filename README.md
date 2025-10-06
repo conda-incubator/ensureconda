@@ -68,6 +68,22 @@ Options:
   --help                          Show this message and exit.
 ```
 
+### Configuring conda-standalone channel
+
+When ensureconda downloads the conda-standalone executable, you can select the
+channel via the environment variable `ENSURECONDA_CONDA_STANDALONE_CHANNEL`.
+It defaults to `anaconda`, and you can set it to `conda-forge` if you prefer:
+
+```bash
+export ENSURECONDA_CONDA_STANDALONE_CHANNEL=conda-forge
+ensureconda --conda-exe
+```
+
+The corresponding package page used is:
+
+```text
+https://anaconda.org/$ENSURECONDA_CONDA_STANDALONE_CHANNEL/conda-standalone
+```
 
 ## License
 
