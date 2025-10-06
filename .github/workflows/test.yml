@@ -34,7 +34,7 @@ jobs:
       - run: go test ./...
       - run: python src/golang/build.py
       - run: python -m pip install pytest docker
-      - run: python -m pytest src/golang/test_binaries.py
+      - run: python -m pytest test/test_go_binaries.py
 
   python:
     name: ${{ matrix.pixi-env }}-${{ matrix.os }}
@@ -70,6 +70,6 @@ jobs:
 
       - name: Run tests
         run: |
-          coverage run --parallel-mode -m pytest -vv test/
+          coverage run --parallel-mode -m pytest -vv test/test_python_library.py
           coverage combine --append
           coverage report -m

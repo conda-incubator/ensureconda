@@ -54,8 +54,7 @@ def ensureconda_go_container(
 ) -> Optional[docker.models.images.Image]:
     if can_i_docker and docker_client is not None:
         test_root = pathlib.Path(__file__).parent
-        src_root = test_root.parent
-        proj_root = src_root.parent
+        proj_root = test_root.parent
         image, logs = docker_client.images.build(
             path=str(proj_root),
             tag="ensureconda:test-go",
