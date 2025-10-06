@@ -104,7 +104,10 @@ def test_ensure_simple(
         raise pytest.skip("Docker not available")
 
     _run_container_test(
-        args, docker_client, ensureconda_python_container, expected_stdout
+        args=args,
+        docker_client=docker_client,
+        container=ensureconda_python_container,
+        expected_stdout=expected_stdout,
     )
 
 
@@ -132,7 +135,10 @@ def test_ensure_full(
         raise pytest.skip("Docker not available")
 
     _run_container_test(
-        args, docker_client, ensureconda_python_container_full, expected_stdout
+        args=args,
+        docker_client=docker_client,
+        container=ensureconda_python_container_full,
+        expected_stdout=expected_stdout,
     )
 
 
