@@ -1,6 +1,7 @@
 import sys
 from typing import Dict, List, Optional
 
+import docker.client
 import docker.models.containers
 import docker.models.images
 

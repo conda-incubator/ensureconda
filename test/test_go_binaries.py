@@ -78,7 +78,7 @@ def ensureconda_go_container(
 )
 def test_non_existent_channel(
     can_i_docker: bool,
-    docker_client: docker.client.DockerClient,
+    docker_client: Optional[docker.client.DockerClient],
     ensureconda_go_container: docker.models.images.Image,
     environment: Dict[str, str],
     expected_status: int,
