@@ -118,21 +118,23 @@ def test_ensure_simple(
 
 
 @pytest.mark.parametrize(
-    "args, expected_stdout",
+    "args, expected_stdout, expected_status",
     [
-        ([], "/opt/conda/bin/mamba"),
-        (["--no-mamba", "--no-install"], "/opt/conda/bin/conda"),
-        (["--no-mamba"], "/opt/conda/bin/conda"),
-        (["--no-mamba", "--no-conda"], "/root/.local/share/ensure-conda/micromamba"),
+        ([], "/opt/conda/bin/mamba", 0),
+        (["--no-mamba", "--no-install"], "/opt/conda/bin/conda", 0),
+        (["--no-mamba"], "/opt/conda/bin/conda", 0),
+        (["--no-mamba", "--no-conda"], "/root/.local/share/ensure-conda/micromamba", 0),
         (
             ["--no-mamba", "--no-micromamba", "--no-conda"],
             "/root/.local/share/ensure-conda/conda_standalone",
+            0,
         ),
     ],
 )
 def test_ensure_full(
     args: List[str],
     expected_stdout: str,
+    expected_status: int,
     docker_client: docker.client.DockerClient,
     ensureconda_python_container_full: docker.models.images.Image,
     can_i_docker: bool,
@@ -145,6 +147,7 @@ def test_ensure_full(
         docker_client=docker_client,
         container=ensureconda_python_container_full,
         expected_stdout=expected_stdout,
+        expected_status=expected_status,
     )
 
 
