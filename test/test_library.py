@@ -2,12 +2,11 @@ import concurrent.futures
 import os
 import pathlib
 import subprocess
-import sys
 import time
+from test.helpers import run_container_test
 from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional
 
 import docker
-import docker.models.containers
 import docker.models.images
 import pytest
 
@@ -49,33 +48,6 @@ def ensureconda_python_container_full(
         )
         return image
     return None
-
-
-def _run_container_test(
-    args: List[str],
-    docker_client: docker.client.DockerClient,
-    container: docker.models.images.Image,
-    expected_stdout: Optional[str] = None,
-    expected_status: Optional[int] = 0,
-    envvars: Optional[Dict[str, str]] = None,
-) -> None:
-    if envvars is None:
-        envvars = {}
-    container_inst: docker.models.containers.Container = docker_client.containers.run(
-        container, detach=True, command=["ensureconda", *args], environment=envvars
-    )
-    try:
-        res = container_inst.wait()
-        stdout = container_inst.logs(stdout=True, stderr=False).decode().strip()
-        stderr = container_inst.logs(stdout=False, stderr=True).decode().strip()
-        print(f"container stdout:\n{stdout}", file=sys.stdout)
-        print(f"container stderr:\n{stderr}", file=sys.stderr)
-        if expected_status is not None:
-            assert res["StatusCode"] == expected_status
-        if expected_stdout is not None:
-            assert stdout == expected_stdout
-    finally:
-        container_inst.remove()
 
 
 @pytest.mark.parametrize(
@@ -137,7 +109,7 @@ def test_ensure_in_python_image(
     elif python_image_name == "simple":
         python_image = request.getfixturevalue("ensureconda_python_container")
 
-    _run_container_test(
+    run_container_test(
         args=args,
         docker_client=docker_client,
         container=python_image,
@@ -209,7 +181,7 @@ def test_non_existent_channel(
     if not can_i_docker:
         raise pytest.skip("Docker not available")
 
-    _run_container_test(
+    run_container_test(
         docker_client=docker_client,
         container=ensureconda_python_container,
         args=["--conda-exe", "--no-micromamba"],
