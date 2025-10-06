@@ -164,7 +164,15 @@ def stream_conda_executable(url: str) -> Path:
 
 
 def get_channel_name() -> str:
-    return "anaconda"
+    channel = os.environ.get("ENSURECONDA_CONDA_STANDALONE_CHANNEL", "anaconda")
+    # Raise an error if the channel name contains any non-alphanumeric characters
+    # besides - or _
+    if not channel.replace("-", "").replace("_", "").isalnum():
+        raise ValueError(
+            f"Invalid channel name {channel}. Channel names must be alphanumeric"
+            " and may contain hyphens and underscores."
+        )
+    return channel
 
 
 def install_conda_exe() -> Optional[Path]:

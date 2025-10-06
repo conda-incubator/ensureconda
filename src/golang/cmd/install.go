@@ -99,7 +99,16 @@ func (a AnacondaPkgs) Less(i, j int) bool {
 func (a AnacondaPkgs) Swap(i, j int) { a[i], a[j] = a[j], a[i] }
 
 func getChannelName() (string, error) {
-	return "anaconda", nil
+	channel := os.Getenv("ENSURECONDA_CONDA_STANDALONE_CHANNEL")
+	if channel == "" {
+		channel = "anaconda"
+	}
+	validChannelName := regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
+	if !validChannelName.MatchString(channel) {
+		return "", fmt.Errorf("invalid channel name %s. Channel names must be alphanumeric and may contain hyphens and underscores", channel)
+	}
+
+	return channel, nil
 }
 
 func InstallCondaStandalone() (string, error) {
