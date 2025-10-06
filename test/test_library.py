@@ -56,9 +56,12 @@ def _run_container_test(
     docker_client: docker.client.DockerClient,
     container: docker.models.images.Image,
     expected_stdout: Optional[str] = None,
+    envvars: Optional[Dict[str, str]] = None,
 ) -> None:
+    if envvars is None:
+        envvars = {}
     container_inst: docker.models.containers.Container = docker_client.containers.run(
-        container, detach=True, command=["ensureconda", *args]
+        container, detach=True, command=["ensureconda", *args], environment=envvars
     )
     try:
         res = container_inst.wait()
