@@ -9,12 +9,13 @@ import time
 import uuid
 from contextlib import closing
 from pathlib import Path
+from tempfile import TemporaryFile
 from typing import IO, Any, Dict, Iterator, List, NamedTuple, Optional, Union
+from urllib.parse import urlparse
 
 import filelock
 import requests
 from conda_package_streaming.package_streaming import stream_conda_component
-from conda_package_streaming.url import conda_reader_for_url
 from packaging.version import Version
 
 from ensureconda.resolve import is_windows, platform_subdir, site_path
@@ -176,21 +177,26 @@ def stream_conda_executable(url: str) -> Path:
     This is roughly a more modern version of `extract_files_from_tar_bz2`
     that also works with `.conda` archives.
 
-    The code roughly follows the README from conda-package-streaming.
+    Download the archive before extracting it to avoid an HTTP range request
+    for every small read made by the decompressor.
     """
     dest_filename = f"conda_standalone{exe_suffix()}"
 
-    filename, conda = conda_reader_for_url(url)
-    with closing(conda):
-        for tar, member in stream_conda_component(filename, conda, component="pkg"):
-            if member.name == "standalone_conda/conda.exe":
-                fo = tar.extractfile(member)
-                if fo is None:
-                    raise RuntimeError(
-                        f"Could not extract executable {member.name} from {url}!"
-                    )
-                conda_exe = write_executable_from_file_object(fo, dest_filename)
-                return conda_exe
+    filename = urlparse(url).path.rsplit("/", 1)[-1]
+    with TemporaryFile() as conda:
+        request_url_with_retry(url, destination=conda)
+        with closing(
+            stream_conda_component(filename, conda, component="pkg")
+        ) as stream:
+            for tar, member in stream:
+                if member.name == "standalone_conda/conda.exe":
+                    fo = tar.extractfile(member)
+                    if fo is None:
+                        raise RuntimeError(
+                            f"Could not extract executable {member.name} from {url}!"
+                        )
+                    conda_exe = write_executable_from_file_object(fo, dest_filename)
+                    return conda_exe
         raise RuntimeError("Could not find conda.exe in the conda-standalone package")
 
 
