@@ -2,6 +2,7 @@ import contextlib
 import io
 import math
 import os
+import shutil
 import stat
 import sys
 import tarfile
@@ -96,7 +97,7 @@ def write_executable_from_file_object(fo: IO[bytes], dest_filename: str) -> Path
     site_path().mkdir(parents=True, exist_ok=True)
     target_path = site_path() / dest_filename
     with new_executable(target_path) as exe_fo:
-        exe_fo.write(fo.read())
+        shutil.copyfileobj(fo, exe_fo, length=1024 * 1024)
     return target_path
 
 
