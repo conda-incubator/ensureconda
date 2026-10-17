@@ -72,6 +72,6 @@ jobs:
 
       - name: Run tests
         run: |
-          coverage run --parallel-mode -m pytest -vv test/test_python_library.py
+          coverage run --parallel-mode -m pytest -vv test/test_python_library.py test/test_installer.py
           coverage combine --append
           coverage report -m
