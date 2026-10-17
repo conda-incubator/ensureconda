@@ -1,6 +1,5 @@
 import contextlib
 import io
-import math
 import os
 import shutil
 import stat
@@ -20,12 +19,23 @@ from packaging.version import Version
 
 from ensureconda.resolve import is_windows, platform_subdir, site_path
 
-# If the conda or micromamba executable is older than this, it will be redownloaded
-REDOWNLOAD_WHEN_OLDER_THAN_SEC = 60 * 60 * 24  # 1 day
-# If the age is below this, then the age is considered invalid and the executable will be redownloaded
+REDOWNLOAD_WHEN_OLDER_THAN_SEC = 60 * 60 * 24
+"""Maximum executable age in seconds (one day) before redownloading."""
+
 NEGATIVE_AGE_TOLERANCE_SEC = -60
-# Interval to notify users about waiting for lock and timeout for lock acquisition
+"""Minimum valid executable age in seconds, allowing for clock skew."""
+
 LOCK_NOTIFICATION_INTERVAL_SEC = 5
+"""Seconds between lock acquisition attempts and waiting notifications."""
+
+CONNECT_TIMEOUT = 10
+"""Connection establishment timeout in seconds."""
+
+READ_TIMEOUT = 60
+"""Socket inactivity timeout in seconds; does not limit total download time."""
+
+MAX_RETRIES = 6
+"""Number of retries after the initial download attempt."""
 
 
 class AnacondaPkgAttr(NamedTuple):
@@ -51,35 +61,67 @@ class AnacondaPkg(NamedTuple):
     download_url: str
 
 
-def request_url_with_retry(url: str) -> requests.Response:
-    n = 10
-    for i in range(n):
+def request_url_with_retry(
+    url: str, *, destination: Optional[IO[bytes]] = None
+) -> requests.Response:
+    """Retrieve a URL, retrying transient failures during the entire download.
+
+    By default, return a response with its body in memory. If destination is
+    provided, stream the body there instead, replacing its contents on each
+    attempt and rewinding it on success. The caller owns the destination;
+    the returned response's body has already been consumed in this mode.
+    """
+    attempt = 0
+    while True:
+        attempt += 1
+        if destination is not None:
+            destination.seek(0)
+            destination.truncate()
         try:
-            resp = requests.get(url, allow_redirects=True)
-        except requests.exceptions.RequestException as e:
-            timeout = max(math.e ** (i / 4), 15)
+            with requests.get(
+                url, stream=True, timeout=(CONNECT_TIMEOUT, READ_TIMEOUT)
+            ) as response:
+                response.raise_for_status()
+                # urllib3 1.x otherwise accepts bodies shorter than Content-Length.
+                response.raw.enforce_content_length = True
+                if destination is None:
+                    # Cache the body before returning, inside the retry loop.
+                    _ = response.content
+                else:
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):
+                        destination.write(chunk)
+                    destination.seek(0)
+                return response
+        except requests.exceptions.RequestException as error:
+            retryable = isinstance(
+                error,
+                (
+                    requests.exceptions.ConnectionError,
+                    requests.exceptions.Timeout,
+                    requests.exceptions.ChunkedEncodingError,
+                ),
+            )
+            if isinstance(error, requests.exceptions.HTTPError):
+                retryable = (
+                    error.response is not None
+                    and error.response.status_code in (500, 502, 503, 504)
+                )
+
+            delay = 2 ** (attempt - 1)
+            retry = retryable and attempt <= MAX_RETRIES
+            action = (
+                f"retrying in {delay}s"
+                if retry
+                else ("retries exhausted" if retryable else "not retrying")
+            )
             print(
-                f"Failed to retrieve due to {e!r}, retrying in {timeout:.2f} seconds",
+                f"Request to {url} failed ({type(error).__name__}: {error}); "
+                f"attempt {attempt}/{MAX_RETRIES + 1}; {action}",
                 file=sys.stderr,
             )
-            time.sleep(timeout)
-            continue
-        try:
-            resp.raise_for_status()
-            return resp
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code in [500, 503]:
-                timeout = max(math.e ** (i / 4), 15)
-                print(
-                    f"Failed to retrieve due to {e!r}, "
-                    f"retrying in {timeout:.2f} seconds",
-                    file=sys.stderr,
-                )
-                time.sleep(timeout)
-            else:
+            if not retry:
                 raise
-
-    raise TimeoutError(f"Could not retrieve {url} in {n} tries")
+            time.sleep(delay)
 
 
 def extract_files_from_tar_bz2(

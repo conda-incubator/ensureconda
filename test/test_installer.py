@@ -1,9 +1,14 @@
+import gzip
+import http.client
 import io
 import os
+import time
 from pathlib import Path
-from typing import Optional
+from typing import Any, Iterator, List, Optional, Union
 
 import pytest
+import requests
+from urllib3.response import HTTPResponse
 
 from ensureconda import installer
 
@@ -23,3 +28,229 @@ def test_copy_executable_with_bounded_reads(
 
     assert executable.read_bytes() == payload
     assert os.access(executable, os.X_OK)
+
+
+@pytest.mark.parametrize(
+    "failure", [500, 502, 503, 504, "connect", "read-timeout", "interrupted"]
+)
+@pytest.mark.parametrize("to_file", [False, True], ids=["memory", "file"])
+def test_download_retries_transient_failures(
+    failure: Union[int, str], to_file: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    body = b'{"download": "complete"}'
+    attempts = 0
+    responses: List[requests.Response] = []
+    delays: List[float] = []
+
+    def interrupted(chunk_size: int) -> Iterator[bytes]:
+        # Longer than the successful response, so seeking alone cannot discard it.
+        yield b"partial contents from an unsuccessful download" * 10
+        if failure == "read-timeout":
+            raise requests.ReadTimeout("Read timed out")
+        raise requests.exceptions.ChunkedEncodingError("Truncated response")
+
+    def get(
+        session: requests.Session, method: str, url: str, **kwargs: Any
+    ) -> requests.Response:
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1 and failure == "connect":
+            raise requests.ConnectionError("Connection failed")
+        response = requests.Response()
+        response.status_code = (
+            failure if attempts == 1 and isinstance(failure, int) else 200
+        )
+        response.raw = io.BytesIO(body)
+        responses.append(response)
+        if attempts == 1 and failure in ("read-timeout", "interrupted"):
+            monkeypatch.setattr(response, "iter_content", interrupted)
+        return response
+
+    monkeypatch.setattr(requests.Session, "request", get)
+    monkeypatch.setattr(time, "sleep", delays.append)
+    with io.BytesIO() as archive:
+        response = installer.request_url_with_retry(
+            "https://example.invalid/package.conda",
+            destination=archive if to_file else None,
+        )
+        if to_file:
+            assert not archive.closed
+            assert archive.tell() == 0
+            assert archive.read() == body
+        else:
+            assert response.content == body
+            assert response.json() == {"download": "complete"}
+    assert attempts == 2
+    assert delays == [1]
+    if failure != "connect":
+        assert responses[0].raw.closed
+
+
+@pytest.mark.parametrize("to_file", [False, True], ids=["memory", "file"])
+@pytest.mark.parametrize("compressed", [False, True], ids=["plain", "gzip"])
+@pytest.mark.parametrize("recover", [False, True], ids=["exhausted", "recovered"])
+def test_download_retries_truncated_http_body(
+    to_file: bool, compressed: bool, recover: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = b'{"download": "complete"}'
+    body = gzip.compress(payload) if compressed else payload
+    attempts = 0
+    delays: List[float] = []
+
+    class Socket:
+        def __init__(self, wire: bytes) -> None:
+            self.wire = wire
+
+        def makefile(self, *args: Any, **kwargs: Any) -> io.BytesIO:
+            return io.BytesIO(self.wire)
+
+    def get(
+        session: requests.Session, method: str, url: str, **kwargs: Any
+    ) -> requests.Response:
+        nonlocal attempts
+        attempts += 1
+        headers = f"HTTP/1.1 200 OK\r\nContent-Length: {len(body)}\r\n"
+        if compressed:
+            headers += "Content-Encoding: gzip\r\n"
+        received = body if recover and attempts > 1 else body[:-5]
+        # Parse a real HTTP response and exercise urllib3's body reader. Start
+        # with the permissive urllib3 1.x default, even when testing on 2.x.
+        http_response = http.client.HTTPResponse(
+            Socket(headers.encode() + b"\r\n" + received)  # type: ignore[arg-type]
+        )
+        http_response.begin()
+        response = requests.Response()
+        response.status_code = 200
+        response.raw = HTTPResponse(
+            body=http_response,
+            headers=dict(http_response.getheaders()),
+            status=200,
+            original_response=http_response,
+            preload_content=False,
+            enforce_content_length=False,
+        )
+        return response
+
+    monkeypatch.setattr(requests.Session, "request", get)
+    monkeypatch.setattr(time, "sleep", delays.append)
+    with io.BytesIO() as archive:
+        if recover:
+            response = installer.request_url_with_retry(
+                "https://example.invalid/package.conda",
+                destination=archive if to_file else None,
+            )
+            assert (archive.read() if to_file else response.content) == payload
+            assert attempts == 2
+            assert delays == [1]
+        else:
+            with pytest.raises(requests.exceptions.ChunkedEncodingError):
+                installer.request_url_with_retry(
+                    "https://example.invalid/package.conda",
+                    destination=archive if to_file else None,
+                )
+            assert attempts == installer.MAX_RETRIES + 1
+            assert len(delays) == installer.MAX_RETRIES
+
+
+@pytest.mark.parametrize("status", [401, 403, 404])
+@pytest.mark.parametrize("to_file", [False, True], ids=["memory", "file"])
+def test_download_does_not_retry_permanent_http_errors(
+    status: int, to_file: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    attempts = 0
+    delays: List[float] = []
+
+    def get(
+        session: requests.Session, method: str, url: str, **kwargs: Any
+    ) -> requests.Response:
+        nonlocal attempts
+        attempts += 1
+        response = requests.Response()
+        response.status_code = status
+        response.raw = io.BytesIO()
+        return response
+
+    monkeypatch.setattr(requests.Session, "request", get)
+    monkeypatch.setattr(time, "sleep", delays.append)
+    with io.BytesIO() as archive, pytest.raises(requests.HTTPError) as error:
+        installer.request_url_with_retry(
+            "https://example.invalid/package.conda",
+            destination=archive if to_file else None,
+        )
+    assert error.value.response.status_code == status
+    assert attempts == 1
+    assert not delays
+
+
+@pytest.mark.parametrize("failure", ["stall", 503, 404])
+def test_download_logs_each_failure_with_details(
+    failure: Union[str, int],
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    url = "https://example.invalid/package.conda"
+    attempts = 0
+    delays: List[float] = []
+
+    def get(
+        session: requests.Session, method: str, url: str, **kwargs: Any
+    ) -> requests.Response:
+        nonlocal attempts
+        attempts += 1
+        if isinstance(failure, int):
+            response = requests.Response()
+            response.status_code = failure
+            response.reason = "Service Unavailable" if failure == 503 else "Not Found"
+            response.url = url
+            response.raise_for_status()
+        # Requests wraps a timeout during body reads in ConnectionError.
+        raise requests.ConnectionError("Read timed out.")
+
+    monkeypatch.setattr(requests.Session, "request", get)
+    monkeypatch.setattr(installer, "MAX_RETRIES", 1)
+    monkeypatch.setattr(time, "sleep", delays.append)
+    with pytest.raises(requests.RequestException) as error:
+        installer.request_url_with_retry(url)
+
+    lines = capsys.readouterr().err.splitlines()
+    retryable = failure != 404
+    assert attempts == len(lines) == (2 if retryable else 1)
+    assert delays == ([1] if retryable else [])
+    for attempt, line in enumerate(lines, start=1):
+        assert f"attempt {attempt}/2" in line
+        assert url in line
+        assert type(error.value).__name__ in line
+        assert str(error.value) in line
+    if retryable:
+        assert "retrying in 1s" in lines[0]
+        assert "retries exhausted" in lines[-1]
+    else:
+        assert "not retrying" in lines[-1]
+
+
+def test_download_does_not_retry_disk_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    class UnwritableArchive(io.BytesIO):
+        def write(self, data: Any) -> int:
+            raise OSError("Disk full")
+
+    attempts = 0
+    delays: List[float] = []
+
+    def get(
+        session: requests.Session, method: str, url: str, **kwargs: Any
+    ) -> requests.Response:
+        nonlocal attempts
+        attempts += 1
+        response = requests.Response()
+        response.status_code = 200
+        response.raw = io.BytesIO(b"archive contents")
+        return response
+
+    monkeypatch.setattr(requests.Session, "request", get)
+    monkeypatch.setattr(time, "sleep", delays.append)
+    with UnwritableArchive() as archive, pytest.raises(OSError, match="Disk full"):
+        installer.request_url_with_retry(
+            "https://example.invalid/package.conda", destination=archive
+        )
+    assert attempts == 1
+    assert not delays
