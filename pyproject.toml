@@ -79,9 +79,7 @@ exclude = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/python/ensureconda"]
 
-[tool.pytest]
-flake8-max-line-length = 105
-flake8-ignore = ["docs/*", "ALL"]
+[tool.pytest.ini_options]
 addopts = "-vvv"
 
 [tool.isort]
