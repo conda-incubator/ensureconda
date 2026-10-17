@@ -1,7 +1,7 @@
 import contextlib
 import io
-import math
 import os
+import shutil
 import stat
 import sys
 import tarfile
@@ -9,22 +9,34 @@ import time
 import uuid
 from contextlib import closing
 from pathlib import Path
+from tempfile import TemporaryFile
 from typing import IO, Any, Dict, Iterator, List, NamedTuple, Optional, Union
+from urllib.parse import urlparse
 
 import filelock
 import requests
 from conda_package_streaming.package_streaming import stream_conda_component
-from conda_package_streaming.url import conda_reader_for_url
 from packaging.version import Version
 
 from ensureconda.resolve import is_windows, platform_subdir, site_path
 
-# If the conda or micromamba executable is older than this, it will be redownloaded
-REDOWNLOAD_WHEN_OLDER_THAN_SEC = 60 * 60 * 24  # 1 day
-# If the age is below this, then the age is considered invalid and the executable will be redownloaded
+REDOWNLOAD_WHEN_OLDER_THAN_SEC = 60 * 60 * 24
+"""Maximum executable age in seconds (one day) before redownloading."""
+
 NEGATIVE_AGE_TOLERANCE_SEC = -60
-# Interval to notify users about waiting for lock and timeout for lock acquisition
+"""Minimum valid executable age in seconds, allowing for clock skew."""
+
 LOCK_NOTIFICATION_INTERVAL_SEC = 5
+"""Seconds between lock acquisition attempts and waiting notifications."""
+
+CONNECT_TIMEOUT = 10
+"""Connection establishment timeout in seconds."""
+
+READ_TIMEOUT = 60
+"""Socket inactivity timeout in seconds; does not limit total download time."""
+
+MAX_RETRIES = 6
+"""Number of retries after the initial download attempt."""
 
 
 class AnacondaPkgAttr(NamedTuple):
@@ -50,35 +62,67 @@ class AnacondaPkg(NamedTuple):
     download_url: str
 
 
-def request_url_with_retry(url: str) -> requests.Response:
-    n = 10
-    for i in range(n):
+def request_url_with_retry(
+    url: str, *, destination: Optional[IO[bytes]] = None
+) -> requests.Response:
+    """Retrieve a URL, retrying transient failures during the entire download.
+
+    By default, return a response with its body in memory. If destination is
+    provided, stream the body there instead, replacing its contents on each
+    attempt and rewinding it on success. The caller owns the destination;
+    the returned response's body has already been consumed in this mode.
+    """
+    attempt = 0
+    while True:
+        attempt += 1
+        if destination is not None:
+            destination.seek(0)
+            destination.truncate()
         try:
-            resp = requests.get(url, allow_redirects=True)
-        except requests.exceptions.RequestException as e:
-            timeout = max(math.e ** (i / 4), 15)
+            with requests.get(
+                url, stream=True, timeout=(CONNECT_TIMEOUT, READ_TIMEOUT)
+            ) as response:
+                response.raise_for_status()
+                # urllib3 1.x otherwise accepts bodies shorter than Content-Length.
+                response.raw.enforce_content_length = True
+                if destination is None:
+                    # Cache the body before returning, inside the retry loop.
+                    _ = response.content
+                else:
+                    for chunk in response.iter_content(chunk_size=1024 * 1024):
+                        destination.write(chunk)
+                    destination.seek(0)
+                return response
+        except requests.exceptions.RequestException as error:
+            retryable = isinstance(
+                error,
+                (
+                    requests.exceptions.ConnectionError,
+                    requests.exceptions.Timeout,
+                    requests.exceptions.ChunkedEncodingError,
+                ),
+            )
+            if isinstance(error, requests.exceptions.HTTPError):
+                retryable = (
+                    error.response is not None
+                    and error.response.status_code in (500, 502, 503, 504)
+                )
+
+            delay = 2 ** (attempt - 1)
+            retry = retryable and attempt <= MAX_RETRIES
+            action = (
+                f"retrying in {delay}s"
+                if retry
+                else ("retries exhausted" if retryable else "not retrying")
+            )
             print(
-                f"Failed to retrieve due to {e!r}, retrying in {timeout:.2f} seconds",
+                f"Request to {url} failed ({type(error).__name__}: {error}); "
+                f"attempt {attempt}/{MAX_RETRIES + 1}; {action}",
                 file=sys.stderr,
             )
-            time.sleep(timeout)
-            continue
-        try:
-            resp.raise_for_status()
-            return resp
-        except requests.exceptions.HTTPError as e:
-            if e.response.status_code in [500, 503]:
-                timeout = max(math.e ** (i / 4), 15)
-                print(
-                    f"Failed to retrieve due to {e!r}, "
-                    f"retrying in {timeout:.2f} seconds",
-                    file=sys.stderr,
-                )
-                time.sleep(timeout)
-            else:
+            if not retry:
                 raise
-
-    raise TimeoutError(f"Could not retrieve {url} in {n} tries")
+            time.sleep(delay)
 
 
 def extract_files_from_tar_bz2(
@@ -96,7 +140,7 @@ def write_executable_from_file_object(fo: IO[bytes], dest_filename: str) -> Path
     site_path().mkdir(parents=True, exist_ok=True)
     target_path = site_path() / dest_filename
     with new_executable(target_path) as exe_fo:
-        exe_fo.write(fo.read())
+        shutil.copyfileobj(fo, exe_fo, length=1024 * 1024)
     return target_path
 
 
@@ -145,21 +189,26 @@ def stream_conda_executable(url: str) -> Path:
     This is roughly a more modern version of `extract_files_from_tar_bz2`
     that also works with `.conda` archives.
 
-    The code roughly follows the README from conda-package-streaming.
+    Download the archive before extracting it to avoid an HTTP range request
+    for every small read made by the decompressor.
     """
     dest_filename = f"conda_standalone{exe_suffix()}"
 
-    filename, conda = conda_reader_for_url(url)
-    with closing(conda):
-        for tar, member in stream_conda_component(filename, conda, component="pkg"):
-            if member.name == "standalone_conda/conda.exe":
-                fo = tar.extractfile(member)
-                if fo is None:
-                    raise RuntimeError(
-                        f"Could not extract executable {member.name} from {url}!"
-                    )
-                conda_exe = write_executable_from_file_object(fo, dest_filename)
-                return conda_exe
+    filename = urlparse(url).path.rsplit("/", 1)[-1]
+    with TemporaryFile() as conda:
+        request_url_with_retry(url, destination=conda)
+        with closing(
+            stream_conda_component(filename, conda, component="pkg")
+        ) as stream:
+            for tar, member in stream:
+                if member.name == "standalone_conda/conda.exe":
+                    fo = tar.extractfile(member)
+                    if fo is None:
+                        raise RuntimeError(
+                            f"Could not extract executable {member.name} from {url}!"
+                        )
+                    conda_exe = write_executable_from_file_object(fo, dest_filename)
+                    return conda_exe
         raise RuntimeError("Could not find conda.exe in the conda-standalone package")
 
 
