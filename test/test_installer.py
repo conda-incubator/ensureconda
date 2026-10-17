@@ -125,7 +125,7 @@ def test_download_failure_preserves_existing_executable(
 
 
 @pytest.mark.parametrize(
-    "failure", [500, 502, 503, 504, "connect", "read-timeout", "interrupted"]
+    "failure", [429, 500, 502, 503, 504, "connect", "read-timeout", "interrupted"]
 )
 @pytest.mark.parametrize("to_file", [False, True], ids=["memory", "file"])
 def test_download_retries_transient_failures(

@@ -105,7 +105,7 @@ def request_url_with_retry(
             if isinstance(error, requests.exceptions.HTTPError):
                 retryable = (
                     error.response is not None
-                    and error.response.status_code in (500, 502, 503, 504)
+                    and error.response.status_code in (429, 500, 502, 503, 504)
                 )
 
             delay = 2 ** (attempt - 1)
