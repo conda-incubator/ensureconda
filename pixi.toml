@@ -14,7 +14,7 @@ click = ">=5.1"
 filelock = "*"
 packaging = "*"
 requests = ">=2"
-conda-package-streaming = ">=0.11.0,<0.13"
+conda-package-streaming = ">=0.11.0"
 
 [pypi-dependencies]
 ensureconda = {path = ".", editable = true}
@@ -37,9 +37,12 @@ go = "*"
 
 [feature.py38.dependencies]
 python = "3.8.*"
+# Version 0.12 and newer require Python >=3.9.
+conda-package-streaming = "0.11.*"
 
 [feature.py313.dependencies]
 python = "3.13.*"
+conda-package-streaming = "0.13.*"
 
 [environments]
 # Redefine the default environment to include all categories.
