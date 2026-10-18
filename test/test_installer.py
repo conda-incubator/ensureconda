@@ -202,6 +202,70 @@ def test_download_retries_transient_failures(
         assert responses[0].raw.closed
 
 
+@pytest.mark.parametrize("status", [429, 503])
+@pytest.mark.parametrize("to_file", [False, True], ids=["memory", "file"])
+@pytest.mark.parametrize(
+    "header, expected_delays_sec, expected_sources",
+    [
+        (None, [1, 2], [False, False]),
+        ("2", [2, 2], [True, False]),
+        ("10", [10, 10], [True, True]),
+        ("Wed, 21 Oct 2015 07:28:00 GMT", [30, 2], [True, False]),
+        ("Wed Oct 21 07:28:00 2015", [30, 2], [True, False]),
+        ("Wed, 21 Oct 2015 07:27:00 GMT", [1, 2], [False, False]),
+        ("0", [1, 2], [False, False]),
+        ("-1", [1, 2], [False, False]),
+        ("1.5", [1, 2], [False, False]),
+        ("invalid", [1, 2], [False, False]),
+    ],
+)
+def test_download_respects_retry_after(
+    status: int,
+    to_file: bool,
+    header: Optional[str],
+    expected_delays_sec: List[float],
+    expected_sources: List[bool],
+    retry_clock: FakeClock,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    attempts = 0
+    delays_sec = retry_clock.delays_sec
+    payload = b"complete response"
+
+    def get(
+        session: requests.Session, method: str, url: str, **kwargs: Any
+    ) -> requests.Response:
+        nonlocal attempts
+        attempts += 1
+        response = requests.Response()
+        response.status_code = status if attempts <= 2 else 200
+        response.raw = io.BytesIO(payload)
+        if header is not None:
+            response.headers["Retry-After"] = header
+        return response
+
+    monkeypatch.setattr(requests.Session, "request", get)
+    monkeypatch.setattr(
+        time, "time", lambda: 1445412450.0 + retry_clock.now_sec
+    )  # 2015-10-21 07:27:30 UTC
+    with io.BytesIO() as archive:
+        response = installer.request_url_with_retry(
+            "https://example.invalid/package.conda",
+            destination=archive if to_file else None,
+        )
+        assert (archive.read() if to_file else response.content) == payload
+    assert attempts == 3
+    assert delays_sec == expected_delays_sec
+    lines = capsys.readouterr().err.splitlines()
+    assert len(lines) == 2
+    for line, delay_sec, from_header in zip(
+        lines, expected_delays_sec, expected_sources
+    ):
+        suffix = f" (Retry-After from HTTP {status})" if from_header else ""
+        assert line.endswith(f"retrying in {delay_sec:g}s{suffix}")
+
+
 def test_exponential_backoff_fits_retry_time_budget(
     retry_clock: FakeClock,
     monkeypatch: pytest.MonkeyPatch,
@@ -216,6 +280,7 @@ def test_exponential_backoff_fits_retry_time_budget(
         attempts += 1
         response = requests.Response()
         response.status_code = 429
+        response.headers["Retry-After"] = "1"
         response.raw = io.BytesIO()
         return response
 
@@ -227,6 +292,100 @@ def test_exponential_backoff_fits_retry_time_budget(
     assert delays_sec == [1, 2, 4, 8, 16, 32]
     assert sum(delays_sec) == 63
     assert sum(delays_sec) <= installer.RETRY_TIME_BUDGET_SEC < sum(delays_sec) + 64
+
+
+@pytest.mark.parametrize("status", [429, 503])
+@pytest.mark.parametrize("to_file", [False, True], ids=["memory", "file"])
+@pytest.mark.parametrize(
+    "headers, expected_delays_sec, recover, expected_stop",
+    [
+        (
+            ["86400"],
+            [],
+            False,
+            "70.0s remaining, 86400s required) (Retry-After from HTTP {status})",
+        ),
+        (
+            ["Wed, 21 Oct 2015 08:27:30 GMT"],
+            [],
+            False,
+            "70.0s remaining, 3600s required) (Retry-After from HTTP {status})",
+        ),
+        (
+            [None, "70"],
+            [1],
+            False,
+            "69.0s remaining, 70s required) (Retry-After from HTTP {status})",
+        ),
+        (["69", "2"], [69], False, "1.0s remaining, 2s required)"),
+        (["33", "34"], [33, 34], False, "3.0s remaining, 4s required)"),
+        (["70"], [70], False, "0.0s remaining, 2s required)"),
+        (["70"], [70], True, None),
+        (["30", "40"], [30, 40], True, None),
+    ],
+)
+def test_download_bounds_scheduled_retry_time(
+    status: int,
+    to_file: bool,
+    headers: List[Optional[str]],
+    expected_delays_sec: List[float],
+    recover: bool,
+    expected_stop: Optional[str],
+    retry_clock: FakeClock,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    attempts = 0
+    delays_sec = retry_clock.delays_sec
+    responses: List[requests.Response] = []
+    payload = b"complete response"
+
+    def get(
+        session: requests.Session, method: str, url: str, **kwargs: Any
+    ) -> requests.Response:
+        nonlocal attempts
+        attempts += 1
+        response = requests.Response()
+        response.status_code = 200 if recover and attempts > len(headers) else status
+        response.raw = io.BytesIO(payload)
+        header = headers[attempts - 1] if attempts <= len(headers) else None
+        if header is not None:
+            response.headers["Retry-After"] = header
+        responses.append(response)
+        return response
+
+    monkeypatch.setattr(requests.Session, "request", get)
+    monkeypatch.setattr(
+        time, "time", lambda: 1445412450.0 + retry_clock.now_sec
+    )  # 2015-10-21 07:27:30 UTC
+    with io.BytesIO() as archive:
+        if recover:
+            response = installer.request_url_with_retry(
+                "https://example.invalid/package.conda",
+                destination=archive if to_file else None,
+            )
+            assert (archive.read() if to_file else response.content) == payload
+        else:
+            with pytest.raises(requests.HTTPError) as error:
+                installer.request_url_with_retry(
+                    "https://example.invalid/package.conda",
+                    destination=archive if to_file else None,
+                )
+            assert error.value.response is responses[-1]
+
+    assert attempts == len(expected_delays_sec) + 1
+    assert delays_sec == expected_delays_sec
+    assert retry_clock.now_sec <= installer.RETRY_TIME_BUDGET_SEC
+    assert all(
+        response.raw.closed for response in responses if response.status_code != 200
+    )
+    lines = capsys.readouterr().err.splitlines()
+    if not recover:
+        assert expected_stop is not None
+        expected_stop = expected_stop.format(status=status)
+        assert lines[-1].endswith(
+            f"retrying again would exceed the remaining time budget ({expected_stop}"
+        )
 
 
 @pytest.mark.parametrize(
@@ -395,6 +554,7 @@ def test_download_does_not_retry_permanent_http_errors(
         attempts += 1
         response = requests.Response()
         response.status_code = status
+        response.headers["Retry-After"] = "120"
         response.raw = io.BytesIO()
         return response
 
