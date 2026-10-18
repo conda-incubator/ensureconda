@@ -25,6 +25,8 @@ jobs:
             ENSURECONDA_EXE: ensureconda-linux-amd64
           - os: macos-latest
             ENSURECONDA_EXE: ensureconda-darwin-amd64
+          - os: macos-latest
+            ENSURECONDA_EXE: ensureconda-darwin-arm64
           - os: windows-latest
             ENSURECONDA_EXE: ensureconda-windows-amd64.exe
     steps:
