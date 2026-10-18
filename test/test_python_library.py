@@ -165,7 +165,7 @@ def test_locally_install(
     found_micromamba = ensureconda(
         mamba=False, micromamba=True, conda=False, conda_exe=False, no_install=True
     )
-    assert os.path.normcase(str(found_micromamba)) == os.path.normcase(executable)
+    assert os.path.normcase(str(found_micromamba)) == os.path.normcase(str(executable))
     found_conda_exe = ensureconda(
         mamba=False, micromamba=False, conda=False, conda_exe=True, no_install=True
     )
