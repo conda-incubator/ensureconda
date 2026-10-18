@@ -22,7 +22,7 @@ jobs:
           - os: windows-latest
             ENSURECONDA_EXE: ensureconda-windows-amd64.exe
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -55,12 +55,12 @@ jobs:
         shell: bash -eo pipefail -l {0}
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
 
-      - uses: prefix-dev/setup-pixi@v0.9.1
+      - uses: prefix-dev/setup-pixi@v0.11.2
         with:
           environments: ${{ matrix.pixi-env }}
           activate-environment: true
