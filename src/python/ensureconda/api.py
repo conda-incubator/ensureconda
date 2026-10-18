@@ -3,6 +3,7 @@ import sys
 from functools import partial
 from typing import TYPE_CHECKING, Callable, Optional
 
+import requests
 from packaging.version import InvalidVersion, Version
 
 from ensureconda.installer import install_conda_exe, install_micromamba
@@ -132,7 +133,22 @@ def ensureconda(
             if exe and micromamba_constraints_met(exe):
                 return exe
         if not no_install:
-            maybe_exe = install_micromamba()
+            try:
+                maybe_exe = install_micromamba()
+            except requests.HTTPError as error:
+                # micromamba isn't published for every platform that has a
+                # conda-standalone build, for example linux-s390x.
+                not_published = (
+                    error.response is not None and error.response.status_code == 404
+                )
+                if not (not_published and conda_exe):
+                    raise
+                print(
+                    f"micromamba is not available for this platform ({error}); "
+                    "trying conda-standalone instead",
+                    file=sys.stderr,
+                )
+                maybe_exe = None
             if maybe_exe is not None and micromamba_constraints_met(maybe_exe):
                 return maybe_exe
     if conda:
