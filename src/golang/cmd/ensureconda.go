@@ -212,7 +212,9 @@ func PlatformSubdir() string {
 }
 
 // Execute executes the root command.
-func Execute() error {
+func Execute(version string) error {
+	// Cobra adds --version; -v already belongs to --verbosity.
+	rootCmd.Version = version
 	return rootCmd.Execute()
 }
 
