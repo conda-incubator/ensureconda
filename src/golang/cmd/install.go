@@ -5,6 +5,8 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/bzip2"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -52,6 +54,8 @@ type AnacondaPkg struct {
 	Type        string          `json:"type"`
 	Version     string          `json:"version"`
 	DownloadUrl string          `json:"download_url"`
+	// Sha256 is empty for older conda-forge files, which lack a digest.
+	Sha256 string `json:"sha256"`
 }
 
 type AnacondaPkgs []AnacondaPkg
@@ -153,7 +157,7 @@ func InstallCondaStandalone() (string, error) {
 	downloadUrl := "https:" + chosen.DownloadUrl
 	log.WithFields(log.Fields{"url": downloadUrl}).Info("downloading conda-standalone")
 	installedExe, err := downloadAndUnpackArchive(
-		downloadUrl, map[string]string{
+		downloadUrl, chosen.Sha256, map[string]string{
 			"standalone_conda/conda.exe": target,
 		})
 
@@ -215,20 +219,32 @@ func inferArchiveTypeFromUrl(url string) ArchiveType {
 	return UnrecognizedArchive
 }
 
-func downloadAndUnpackArchive(url string, fileNameMap map[string]string) (string, error) {
+// downloadAndUnpackArchive extracts the files in fileNameMap from the archive
+// at url. If expectedSha256 is not empty, the whole archive is verified
+// against it before anything is extracted.
+func downloadAndUnpackArchive(url string, expectedSha256 string, fileNameMap map[string]string) (string, error) {
 	archiveType := inferArchiveTypeFromUrl(url)
 
 	switch archiveType {
 	case TarBz2Archive:
-		return downloadAndUnpackTarBz2(url, fileNameMap)
+		return downloadAndUnpackTarBz2(url, expectedSha256, fileNameMap)
 	case CondaArchive:
-		return downloadAndUnpackConda(url, fileNameMap)
+		return downloadAndUnpackConda(url, expectedSha256, fileNameMap)
 	default:
 		return "", fmt.Errorf("unrecognized archive type for URL: %s", url)
 	}
 }
 
-func downloadAndUnpackTarBz2(url string, fileNameMap map[string]string) (string, error) {
+// verifySha256 returns an error unless data has the expected hex digest.
+func verifySha256(data []byte, expected string) error {
+	sum := sha256.Sum256(data)
+	if actual := hex.EncodeToString(sum[:]); !strings.EqualFold(actual, expected) {
+		return fmt.Errorf("SHA-256 mismatch: expected %s, got %s", expected, actual)
+	}
+	return nil
+}
+
+func downloadAndUnpackTarBz2(url string, expectedSha256 string, fileNameMap map[string]string) (string, error) {
 	client := resty.New()
 	resp, err := client.R().
 		SetDoNotParseResponse(true).
@@ -242,13 +258,26 @@ func downloadAndUnpackTarBz2(url string, fileNameMap map[string]string) (string,
 	}
 	defer resp.RawBody().Close()
 
-	bzf := bzip2.NewReader(resp.RawBody())
+	var archive io.Reader = resp.RawBody()
+	if expectedSha256 != "" {
+		// Buffer the archive so that it can be verified before extraction.
+		data, err := io.ReadAll(resp.RawBody())
+		if err != nil {
+			return "", err
+		}
+		if err := verifySha256(data, expectedSha256); err != nil {
+			return "", fmt.Errorf("%s (HTTP %s): %w", url, resp.Status(), err)
+		}
+		archive = bytes.NewReader(data)
+	}
+
+	bzf := bzip2.NewReader(archive)
 	tarReader := tar.NewReader(bzf)
 	file, err := extractTarFiles(tarReader, fileNameMap)
 	return file, err
 }
 
-func downloadAndUnpackConda(url string, fileNameMap map[string]string) (string, error) {
+func downloadAndUnpackConda(url string, expectedSha256 string, fileNameMap map[string]string) (string, error) {
 	client := resty.New()
 	resp, err := client.R().Get(url)
 
@@ -258,6 +287,11 @@ func downloadAndUnpackConda(url string, fileNameMap map[string]string) (string, 
 
 	// Read the response body into a byte slice
 	body := resp.Body()
+	if expectedSha256 != "" {
+		if err := verifySha256(body, expectedSha256); err != nil {
+			return "", fmt.Errorf("%s (HTTP %s): %w", url, resp.Status(), err)
+		}
+	}
 
 	byteReader := bytes.NewReader(body)
 
@@ -289,8 +323,9 @@ func downloadAndUnpackConda(url string, fileNameMap map[string]string) (string, 
 }
 
 func installMicromamba(url string) (string, error) {
+	// micro.mamba.pm publishes no digest to verify against.
 	installedExe, err := downloadAndUnpackArchive(
-		url, map[string]string{
+		url, "", map[string]string{
 			"Library/bin/micromamba.exe": targetExeFilename("micromamba"),
 			"bin/micromamba":             targetExeFilename("micromamba"),
 		})
