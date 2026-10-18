@@ -8,6 +8,12 @@ on:
 permissions:
   contents: read
 
+# Cancel superseded runs on pull requests. Other runs get a group per commit,
+# so pushes to main never cancel or wait for each other.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
 jobs:
   golang:
     runs-on: ${{ matrix.os }}
