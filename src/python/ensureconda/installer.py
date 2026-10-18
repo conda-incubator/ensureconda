@@ -8,6 +8,8 @@ import tarfile
 import time
 import uuid
 from contextlib import closing
+from datetime import timezone
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from tempfile import TemporaryFile
 from typing import IO, Any, Dict, Iterator, List, NamedTuple, Optional, Union
@@ -29,14 +31,14 @@ NEGATIVE_AGE_TOLERANCE_SEC = -60
 LOCK_NOTIFICATION_INTERVAL_SEC = 5
 """Seconds between lock acquisition attempts and waiting notifications."""
 
-CONNECT_TIMEOUT = 10
+CONNECT_TIMEOUT_SEC = 10
 """Connection establishment timeout in seconds."""
 
-READ_TIMEOUT = 60
+READ_TIMEOUT_SEC = 60
 """Socket inactivity timeout in seconds; does not limit total download time."""
 
-MAX_RETRIES = 6
-"""Number of retries after the initial download attempt."""
+RETRY_TIME_BUDGET_SEC = 70
+"""Elapsed seconds allowed for scheduling retries; active downloads may finish."""
 
 
 class AnacondaPkgAttr(NamedTuple):
@@ -62,6 +64,19 @@ class AnacondaPkg(NamedTuple):
     download_url: str
 
 
+def _retry_after_delay(value: str) -> Optional[float]:
+    """Parse Retry-After seconds or an HTTP date; ignore malformed values."""
+    try:
+        if value.strip().isdigit():
+            return float(int(value))
+        retry_at = parsedate_to_datetime(value)
+        if retry_at.tzinfo is None:
+            retry_at = retry_at.replace(tzinfo=timezone.utc)
+        return max(0.0, retry_at.timestamp() - time.time())
+    except (ValueError, TypeError, OverflowError):
+        return None
+
+
 def request_url_with_retry(
     url: str, *, destination: Optional[IO[bytes]] = None
 ) -> requests.Response:
@@ -71,7 +86,15 @@ def request_url_with_retry(
     provided, stream the body there instead, replacing its contents on each
     attempt and rewinding it on success. The caller owns the destination;
     the returned response's body has already been consumed in this mode.
+
+    Retry-After on retryable HTTP responses can extend an individual wait.
+    Schedule retries only within RETRY_TIME_BUDGET_SEC seconds of the initial
+    attempt, including time spent in failed requests. A successful download
+    may finish after this deadline. A failed download is retried only if its
+    next scheduled attempt fits within the deadline.
     """
+    deadline_sec = time.monotonic() + RETRY_TIME_BUDGET_SEC
+    backoff_sec = 1.0
     attempt = 0
     while True:
         attempt += 1
@@ -80,7 +103,7 @@ def request_url_with_retry(
             destination.truncate()
         try:
             with requests.get(
-                url, stream=True, timeout=(CONNECT_TIMEOUT, READ_TIMEOUT)
+                url, stream=True, timeout=(CONNECT_TIMEOUT_SEC, READ_TIMEOUT_SEC)
             ) as response:
                 response.raise_for_status()
                 # urllib3 1.x otherwise accepts bodies shorter than Content-Length.
@@ -105,24 +128,43 @@ def request_url_with_retry(
             if isinstance(error, requests.exceptions.HTTPError):
                 retryable = (
                     error.response is not None
-                    and error.response.status_code in (500, 502, 503, 504)
+                    and error.response.status_code in (429, 500, 502, 503, 504)
                 )
 
-            delay = 2 ** (attempt - 1)
-            retry = retryable and attempt <= MAX_RETRIES
-            action = (
-                f"retrying in {delay}s"
-                if retry
-                else ("retries exhausted" if retryable else "not retrying")
-            )
-            print(
+            failure = (
                 f"Request to {url} failed ({type(error).__name__}: {error}); "
-                f"attempt {attempt}/{MAX_RETRIES + 1}; {action}",
+                f"attempt {attempt}"
+            )
+            if not retryable:
+                print(f"{failure}; not retrying", file=sys.stderr)
+                raise
+
+            delay_sec = backoff_sec
+            delay_source = ""
+            if error.response is not None:
+                retry_after_sec = _retry_after_delay(
+                    error.response.headers.get("Retry-After", "")
+                )
+                if retry_after_sec is not None and retry_after_sec > delay_sec:
+                    delay_sec = retry_after_sec
+                    delay_source = (
+                        f" (Retry-After from HTTP {error.response.status_code})"
+                    )
+            remaining_sec = max(0.0, deadline_sec - time.monotonic())
+            if delay_sec > remaining_sec:
+                print(
+                    f"{failure}; retrying again would exceed the remaining time budget "
+                    f"({remaining_sec:.1f}s remaining, {delay_sec:g}s required){delay_source}",
+                    file=sys.stderr,
+                )
+                raise
+
+            print(
+                f"{failure}; retrying in {delay_sec:g}s{delay_source}",
                 file=sys.stderr,
             )
-            if not retry:
-                raise
-            time.sleep(delay)
+            time.sleep(delay_sec)
+            backoff_sec *= 2
 
 
 def extract_files_from_tar_bz2(
