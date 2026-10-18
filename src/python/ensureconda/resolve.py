@@ -92,35 +92,54 @@ def safe_next(it: Iterator[T]) -> Optional[T]:
 
 
 def platform_subdir() -> str:
-    # Adapted from conda.context
-    _platform_map = {
+    import struct
+
+    return subdir_for(sys.platform, platform.machine(), 8 * struct.calcsize("P"))
+
+
+def subdir_for(sys_platform: str, machine: str, bits: int) -> str:
+    """Map a platform to its conda subdir, following conda.base.context."""
+    platform_map = {
         "linux2": "linux",
         "linux": "linux",
         "darwin": "osx",
         "win32": "win",
+        "zos": "zos",
     }
     non_x86_machines = {
-        "aarch64",  # for linux
-        "arm64",  # for osx
+        "armv6l",
+        "armv7l",
+        "aarch64",
+        "arm64",
         "ppc64",
         "ppc64le",
+        "riscv64",
+        "s390x",
     }
-    _arch_names = {
-        32: "x86",
-        64: "x86_64",
-    }
+    # Machine names for x86, whose subdir depends on the pointer size instead.
+    x86_machines = {"x86_64", "amd64", "i386", "i486", "i586", "i686", "x86"}
 
-    import struct
+    def unsupported() -> RuntimeError:
+        return RuntimeError(
+            f"Unsupported platform {sys_platform!r} ({machine}): "
+            "no conda subdir is known for it"
+        )
 
-    bits = 8 * struct.calcsize("P")
-    plat = _platform_map[sys.platform]
-    machine = platform.machine()
+    plat = platform_map.get(sys_platform)
+    if plat is None:
+        raise unsupported()
+    if plat == "win":
+        # Unlike conda, keep using x86 builds on Windows on ARM, where they run
+        # under emulation: conda-forge publishes no win-arm64 conda-standalone.
+        return f"win-{bits}"
+    machine = machine.lower()
     if machine in non_x86_machines:
         return f"{plat}-{machine}"
-    elif sys.platform.lower() == "zos":
+    if plat == "zos":
         return "zos-z"
-    else:
+    if machine in x86_machines:
         return f"{plat}-{bits}"
+    raise unsupported()
 
 
 is_windows = platform.system() == "Windows"
