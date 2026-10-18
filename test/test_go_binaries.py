@@ -44,8 +44,18 @@ def test_install(golang_exe: Optional[str], flags: List[str]) -> None:
     subprocess.check_call([result, "--help"])
 
 
-def test_find() -> None:
-    pass
+def test_find_installed_micromamba(golang_exe: Optional[str]) -> None:
+    """A second run must find the micromamba installed by the first one."""
+    if golang_exe is None:
+        raise pytest.skip("environment variable not set")
+    flags = ["--no-mamba", "--no-conda", "--no-conda-exe"]
+    # Hide PATH so that both runs must use ensureconda's data directory.
+    env = {**os.environ, "PATH": ""}
+    installed = subprocess.check_output([golang_exe, *flags], encoding="utf8", env=env)
+    found = subprocess.check_output(
+        [golang_exe, "--no-install", *flags], encoding="utf8", env=env
+    )
+    assert found == installed
 
 
 @pytest.fixture(scope="session")
