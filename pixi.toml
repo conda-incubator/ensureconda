@@ -44,6 +44,9 @@ conda-package-streaming = "0.11.*"
 python = "3.13.*"
 conda-package-streaming = "0.13.*"
 
+[feature.py314.dependencies]
+python = "3.14.*"
+
 [environments]
 # Redefine the default environment to include all categories.
 default = ["dev"]
@@ -54,3 +57,4 @@ dev = ["dev"]
 
 test-py38 = ["dev", "py38"]
 test-py313 = ["dev", "py313"]
+test-py314 = ["dev", "py314"]
