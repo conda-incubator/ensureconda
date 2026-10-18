@@ -20,7 +20,6 @@ import (
 	"time"
 
 	pep440 "github.com/aquasecurity/go-pep440-version"
-	"github.com/flowchartsman/retry"
 	"github.com/go-resty/resty/v2"
 	"github.com/gofrs/flock"
 	"github.com/klauspost/compress/zstd"
@@ -346,21 +345,8 @@ func extractTarFiles(tarReader *tar.Reader, fileNameMap map[string]string) (stri
 
 		switch header.Typeflag {
 		case tar.TypeReg:
-			targetFileName := fileNameMap[header.Name]
-			tmpFileName := targetFileName + ".tmp"
-			if targetFileName != "" {
-				err2 := extractTarFile(header, tmpFileName, tarReader)
-				if err2 != nil {
-					return "", err2
-				}
-				st, err := os.Stat(tmpFileName)
-				if err != nil {
-					return "", fmt.Errorf("stat temp file: %w", err)
-				}
-				if err = os.Chmod(tmpFileName, st.Mode()|syscall.S_IXUSR); err != nil {
-					return "", err
-				}
-				if err = os.Rename(tmpFileName, targetFileName); err != nil {
+			if targetFileName := fileNameMap[header.Name]; targetFileName != "" {
+				if err := extractTarFile(header, targetFileName, tarReader); err != nil {
 					return "", err
 				}
 				return targetFileName, nil
@@ -370,41 +356,43 @@ func extractTarFiles(tarReader *tar.Reader, fileNameMap map[string]string) (stri
 	return "", errors.New("could not find file in the tarball")
 }
 
+// extractTarFile writes the current entry of tarReader to targetFileName as an
+// executable. It writes to a temporary file and renames it into place while
+// holding a lock on the target, the same lock the Python implementation uses,
+// so that concurrent writers don't interfere.
 func extractTarFile(header *tar.Header, targetFileName string, tarReader *tar.Reader) error {
 	log.WithFields(log.Fields{
 		"srcPath": header.Name,
 		"dstPath": targetFileName,
 	}).Debug("extracting from tarball")
 
-	fileInfo := header.FileInfo()
-	r := retry.NewRetrier(10, 100*time.Millisecond, 5*time.Second)
 	fileLock := flock.New(targetFileName + ".lock")
+	if err := fileLock.Lock(); err != nil {
+		return fmt.Errorf("locking %s: %w", targetFileName, err)
+	}
+	defer func() { _ = fileLock.Unlock() }()
 
-	err := r.Run(func() error {
-		locked, err := fileLock.TryLock()
-		if err != nil {
-			return err
-		}
-		if !locked {
-			return errors.New("could not lock")
-		}
-
-		file, err := os.OpenFile(targetFileName, os.O_RDWR|os.O_CREATE|os.O_TRUNC, fileInfo.Mode().Perm())
-		if err != nil {
-			return err
-		}
-		n, cpErr := io.Copy(file, tarReader)
-		if closeErr := file.Close(); closeErr != nil { // close file immediately
-			return closeErr
-		}
-		if cpErr != nil {
-			return cpErr
-		}
-		if n != fileInfo.Size() {
-			return fmt.Errorf("unexpected bytes written: wrote %d, want %d", n, fileInfo.Size())
-		}
+	tmpFileName := targetFileName + ".tmp"
+	file, err := os.OpenFile(tmpFileName, os.O_RDWR|os.O_CREATE|os.O_TRUNC, header.FileInfo().Mode().Perm())
+	if err != nil {
 		return err
-	})
-
-	return err
+	}
+	n, err := io.Copy(file, tarReader)
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if n != header.Size {
+		return fmt.Errorf("unexpected bytes written: wrote %d, want %d", n, header.Size)
+	}
+	st, err := os.Stat(tmpFileName)
+	if err != nil {
+		return fmt.Errorf("stat temp file: %w", err)
+	}
+	if err := os.Chmod(tmpFileName, st.Mode()|syscall.S_IXUSR); err != nil {
+		return err
+	}
+	return os.Rename(tmpFileName, targetFileName)
 }
