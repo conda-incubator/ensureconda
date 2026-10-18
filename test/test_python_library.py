@@ -160,6 +160,19 @@ def test_locally_install(
     assert str(executable) == f"{str(tmp_path)}{os.path.sep}micromamba{ext}"
     subprocess.check_call([str(executable), "--help"])
 
+    # Ensure that a later run finds the installed executables. On Windows the
+    # resolver spells the extension as in PATHEXT (".EXE"), so ignore case.
+    found_micromamba = ensureconda(
+        mamba=False, micromamba=True, conda=False, conda_exe=False, no_install=True
+    )
+    assert os.path.normcase(str(found_micromamba)) == os.path.normcase(str(executable))
+    found_conda_exe = ensureconda(
+        mamba=False, micromamba=False, conda=False, conda_exe=True, no_install=True
+    )
+    assert os.path.normcase(str(found_conda_exe)) == os.path.normcase(
+        tmp_path / f"conda_standalone{ext}"
+    )
+
 
 @pytest.mark.parametrize(
     "envvars, expected_status",
