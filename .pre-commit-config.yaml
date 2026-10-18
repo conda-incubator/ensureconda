@@ -22,6 +22,7 @@ repos:
     hooks:
       - id: mypy
         additional_dependencies:
+          - packaging
           - types-filelock
           - types-requests
           - types-click
