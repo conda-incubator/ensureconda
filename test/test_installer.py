@@ -133,35 +133,63 @@ def test_download_verifies_sha256(
         assert not cache.exists()
 
 
+def file_info(version: str, **fields: Any) -> Dict[str, Any]:
+    """Return an entry like those in the Anaconda API's file listing."""
+    info: Dict[str, Any] = {
+        "size": 1,
+        "type": "conda",
+        "version": version,
+        "download_url": f"//example.invalid/conda-standalone-{version}.conda",
+        "attrs": {
+            "subdir": "linux-64",
+            "build": "h0_0",
+            "build_number": 0,
+            "timestamp": 0,
+        },
+    }
+    info.update(fields)
+    return info
+
+
+def serve_file_listing(
+    monkeypatch: pytest.MonkeyPatch, files: List[Dict[str, Any]]
+) -> None:
+    response = requests.Response()
+    response._content = json.dumps(files).encode()
+    monkeypatch.setattr(installer, "request_url_with_retry", lambda url: response)
+
+
 def test_compute_candidates_reads_optional_sha256(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def file_info(version: str, sha256: Optional[str] = None) -> Dict[str, Any]:
-        info: Dict[str, Any] = {
-            "size": 1,
-            "type": "conda",
-            "version": version,
-            "download_url": f"//example.invalid/conda-standalone-{version}.conda",
-            "attrs": {
-                "subdir": "linux-64",
-                "build": "h0_0",
-                "build_number": 0,
-                "timestamp": 0,
-            },
-        }
-        if sha256 is not None:
-            info["sha256"] = sha256
-        return info
-
-    response = requests.Response()
-    response._content = json.dumps(
-        [file_info("1.0"), file_info("2.0", "ab" * 32)]
-    ).encode()
-    monkeypatch.setattr(installer, "request_url_with_retry", lambda url: response)
+    serve_file_listing(
+        monkeypatch, [file_info("1.0"), file_info("2.0", sha256="ab" * 32)]
+    )
 
     candidates = installer.compute_candidates("conda-forge", "linux-64")
 
     assert [candidate.sha256 for candidate in candidates] == [None, "ab" * 32]
+
+
+def test_compute_candidates_skips_broken_and_invalid_versions(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    serve_file_listing(
+        monkeypatch,
+        [
+            file_info("1.0", labels=["main"]),
+            # conda-forge moves builds it marks as broken to the "broken" label.
+            file_info("3.0", labels=["broken"]),
+            file_info("not a version", labels=["main"]),
+            # Entries without labels are kept.
+            file_info("2.0"),
+        ],
+    )
+
+    candidates = installer.compute_candidates("conda-forge", "linux-64")
+
+    assert [candidate.version for candidate in candidates] == ["1.0", "2.0"]
+    assert "Skipping conda-standalone not a version" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("failure", ["http", "interrupted", "timeout"])
