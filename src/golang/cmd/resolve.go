@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -54,12 +55,40 @@ func ResolveExecutable(executableName string, dataDir string, versionPredicate f
 	return FindExecutable(executableName, newPathEnv, versionPredicate)
 }
 
+// defaultPathExt is used on Windows when PATHEXT is unset.
+const defaultPathExt = ".COM;.EXE;.BAT;.CMD"
+
+// executableCandidates returns the file names that may hold the executable at
+// path. Windows identifies executables by extension, so try each extension
+// from PATHEXT in order, as cmd.exe does.
+func executableCandidates(path string, goos string, pathExt string) []string {
+	if goos != "windows" {
+		return []string{path}
+	}
+	if pathExt == "" {
+		pathExt = defaultPathExt
+	}
+	var candidates []string
+	for _, ext := range strings.Split(pathExt, ";") {
+		if ext != "" {
+			candidates = append(candidates, path+ext)
+		}
+	}
+	return candidates
+}
+
 func assertExecutable(file string) error {
 	d, err := os.Stat(file)
 	if err != nil {
 		return err
 	}
-	if m := d.Mode(); !m.IsDir() && m&0111 != 0 {
+	m := d.Mode()
+	if m.IsDir() {
+		return os.ErrPermission
+	}
+	// Windows has no executable permission bits; Go reports regular files
+	// there as 0666 or 0444, so the extension decides instead.
+	if runtime.GOOS == "windows" || m&0111 != 0 {
 		return nil
 	}
 	return os.ErrPermission
@@ -76,9 +105,11 @@ func FindExecutable(executableFileName string, searchPath string, predicate func
 			dir = "."
 		}
 		path := filepath.Join(dir, executableFileName)
-		if err := assertExecutable(path); err == nil {
-			if result, err := predicate(path); err == nil && result {
-				return path, nil
+		for _, candidate := range executableCandidates(path, runtime.GOOS, os.Getenv("PATHEXT")) {
+			if err := assertExecutable(candidate); err == nil {
+				if result, err := predicate(candidate); err == nil && result {
+					return candidate, nil
+				}
 			}
 		}
 	}
