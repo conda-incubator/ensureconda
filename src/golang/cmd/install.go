@@ -21,7 +21,6 @@ import (
 
 	pep440 "github.com/aquasecurity/go-pep440-version"
 	"github.com/flowchartsman/retry"
-	"github.com/go-resty/resty/v2"
 	"github.com/gofrs/flock"
 	"github.com/klauspost/compress/zstd"
 	log "github.com/sirupsen/logrus"
@@ -170,8 +169,8 @@ func InstallCondaStandalone() (string, error) {
 // computeCandidates returns the sorted list of available conda-standalone
 // packages for the given channel and subdir (ascending by version/build/timestamp).
 func computeCandidates(channel string, subdir string) ([]AnacondaPkg, error) {
-	url := fmt.Sprintf("https://api.anaconda.org/package/%s/conda-standalone/files", channel)
-	client := resty.New()
+	url := fmt.Sprintf("%s/package/%s/conda-standalone/files", anacondaAPIBaseURL, channel)
+	client := newHTTPClient()
 	var data []AnacondaPkg
 	_, err := client.R().
 		SetResult(&data).
@@ -245,7 +244,7 @@ func verifySha256(data []byte, expected string) error {
 }
 
 func downloadAndUnpackTarBz2(url string, expectedSha256 string, fileNameMap map[string]string) (string, error) {
-	client := resty.New()
+	client := newHTTPClient()
 	resp, err := client.R().
 		SetDoNotParseResponse(true).
 		Get(url)
@@ -278,7 +277,7 @@ func downloadAndUnpackTarBz2(url string, expectedSha256 string, fileNameMap map[
 }
 
 func downloadAndUnpackConda(url string, expectedSha256 string, fileNameMap map[string]string) (string, error) {
-	client := resty.New()
+	client := newHTTPClient()
 	resp, err := client.R().Get(url)
 
 	if err != nil {
