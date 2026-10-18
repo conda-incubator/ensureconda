@@ -30,3 +30,11 @@ def test_subdir_for(sys_platform: str, machine: str, bits: int, expected: str) -
 def test_subdir_for_unsupported_platform(sys_platform: str) -> None:
     with pytest.raises(RuntimeError, match=f"Unsupported platform '{sys_platform}'"):
         subdir_for(sys_platform, "x86_64", 64)
+
+
+@pytest.mark.parametrize("machine", ["mips64", "loongarch64", "sparc64"])
+def test_subdir_for_unsupported_machine(machine: str) -> None:
+    with pytest.raises(
+        RuntimeError, match=f"Unsupported platform 'linux' \\({machine}\\)"
+    ):
+        subdir_for("linux", machine, 64)

@@ -116,12 +116,18 @@ def subdir_for(sys_platform: str, machine: str, bits: int) -> str:
         "riscv64",
         "s390x",
     }
-    plat = platform_map.get(sys_platform)
-    if plat is None:
-        raise RuntimeError(
+    # Machine names for x86, whose subdir depends on the pointer size instead.
+    x86_machines = {"x86_64", "amd64", "i386", "i486", "i586", "i686", "x86"}
+
+    def unsupported() -> RuntimeError:
+        return RuntimeError(
             f"Unsupported platform {sys_platform!r} ({machine}): "
             "no conda subdir is known for it"
         )
+
+    plat = platform_map.get(sys_platform)
+    if plat is None:
+        raise unsupported()
     if plat == "win":
         # Unlike conda, keep using x86 builds on Windows on ARM, where they run
         # under emulation: conda-forge publishes no win-arm64 conda-standalone.
@@ -131,7 +137,9 @@ def subdir_for(sys_platform: str, machine: str, bits: int) -> str:
         return f"{plat}-{machine}"
     if plat == "zos":
         return "zos-z"
-    return f"{plat}-{bits}"
+    if machine in x86_machines:
+        return f"{plat}-{bits}"
+    raise unsupported()
 
 
 is_windows = platform.system() == "Windows"
