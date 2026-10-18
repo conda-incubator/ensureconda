@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 import filelock
 import requests
 from conda_package_streaming.package_streaming import stream_conda_component
-from packaging.version import Version
+from packaging.version import InvalidVersion, Version
 
 from ensureconda.resolve import is_windows, platform_subdir, site_path
 
@@ -336,14 +336,25 @@ def compute_candidates(channel: str, subdir: str) -> List[AnacondaPkg]:
             # Older conda-forge files lack a SHA-256 digest.
             sha256=file_info.get("sha256"),
         )
-        if (
+        if not (
             info.attrs.subdir == subdir
-            and
             # Ignore onedir packages as workaround for
             # <https://github.com/conda/conda-standalone/issues/182>
-            "_onedir_" not in info.attrs.build
+            and "_onedir_" not in info.attrs.build
+            # Builds marked as broken lose the "main" label.
+            and "main" in file_info.get("labels", ["main"])
         ):
-            candidates.append(info)
+            continue
+        try:
+            Version(info.version)
+        except InvalidVersion:
+            print(
+                f"Skipping conda-standalone {info.version} for {subdir}: "
+                "not a valid version",
+                file=sys.stderr,
+            )
+            continue
+        candidates.append(info)
 
     candidates.sort(
         key=lambda attrs: (
@@ -353,7 +364,9 @@ def compute_candidates(channel: str, subdir: str) -> List[AnacondaPkg]:
         )
     )
     if len(candidates) == 0:
-        raise RuntimeError(f"No conda-standalone package found for {subdir}")
+        raise RuntimeError(
+            f"No conda-standalone package found for {subdir} in channel {channel}"
+        )
     return candidates
 
 

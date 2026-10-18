@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"syscall"
@@ -56,6 +57,8 @@ type AnacondaPkg struct {
 	DownloadUrl string          `json:"download_url"`
 	// Sha256 is empty for older conda-forge files, which lack a digest.
 	Sha256 string `json:"sha256"`
+	// Labels is nil when the listing omits them.
+	Labels []string `json:"labels"`
 }
 
 type AnacondaPkgs []AnacondaPkg
@@ -180,34 +183,37 @@ func computeCandidates(channel string, subdir string) ([]AnacondaPkg, error) {
 		return nil, fmt.Errorf("GET candidates: %w", err)
 	}
 
-	var candidates = make([]AnacondaPkg, 0)
+	candidates := selectCandidates(data, subdir)
+	if len(candidates) == 0 {
+		return nil, fmt.Errorf("no conda-standalone package found for %s in channel %s", subdir, channel)
+	}
+	sort.Sort(AnacondaPkgs(candidates))
+	return candidates, nil
+}
+
+// selectCandidates returns the packages in data that are suitable for subdir.
+func selectCandidates(data []AnacondaPkg, subdir string) []AnacondaPkg {
+	candidates := make([]AnacondaPkg, 0)
 	for _, datum := range data {
-		if datum.Attrs.Subdir == subdir &&
+		if datum.Attrs.Subdir != subdir ||
 			// Ignore onedir packages as workaround for
 			// <https://github.com/conda/conda-standalone/issues/182>
-			!strings.Contains(datum.Attrs.Build, "_onedir_") {
-			candidates = append(candidates, datum)
+			strings.Contains(datum.Attrs.Build, "_onedir_") ||
+			// Builds marked as broken lose the "main" label.
+			(datum.Labels != nil && !slices.Contains(datum.Labels, "main")) {
+			continue
 		}
-	}
-
-	// Filter out unparseable versions with a warning, to avoid crashes on new formats
-	filtered := make([]AnacondaPkg, 0, len(candidates))
-	for _, c := range candidates {
-		if _, err := pep440.Parse(c.Version); err != nil {
+		// Skip unparseable versions with a warning, to avoid crashes on new formats
+		if _, err := pep440.Parse(datum.Version); err != nil {
 			log.WithFields(log.Fields{
-				"version": c.Version,
-				"subdir":  c.Attrs.Subdir,
+				"version": datum.Version,
+				"subdir":  datum.Attrs.Subdir,
 			}).Warn("skipping unparseable conda-standalone version")
 			continue
 		}
-		filtered = append(filtered, c)
+		candidates = append(candidates, datum)
 	}
-	if len(filtered) == 0 {
-		return nil, fmt.Errorf("no parseable conda-standalone versions found for %s", subdir)
-	}
-
-	sort.Sort(AnacondaPkgs(filtered))
-	return filtered, nil
+	return candidates
 }
 
 func inferArchiveTypeFromUrl(url string) ArchiveType {
