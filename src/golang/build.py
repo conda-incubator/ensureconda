@@ -15,6 +15,8 @@ for goos, goarch in build_arches:
     env = dict(os.environ)
     env["GOOS"] = goos
     env["GOARCH"] = goarch
+    # Build static binaries that don't need a C compiler or a particular libc.
+    env["CGO_ENABLED"] = "0"
     ext = ".exe" if goos == "windows" else ""
 
     print(f"Building {goos}-{goarch}")

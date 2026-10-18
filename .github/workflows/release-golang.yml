@@ -41,6 +41,9 @@ jobs:
 
       - uses: wangyoucao577/go-release-action@279495102627de7960cbc33434ab01a12bae144b  # v1.55
         if: ${{ github.event_name == 'release' }}
+        env:
+          # Native linux/amd64 builds otherwise link against glibc.
+          CGO_ENABLED: "0"
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           goos: ${{ matrix.goos }}
