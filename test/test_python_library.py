@@ -27,6 +27,10 @@ def ensureconda_python_container(
             dockerfile=str(
                 (test_root / "docker-simple" / "Dockerfile").relative_to(root)
             ),
+            # Unlike the docker CLI, docker-py keeps a stopped container for
+            # each build step unless told otherwise.
+            rm=True,
+            forcerm=True,
         )
         return image
     return None
@@ -45,6 +49,10 @@ def ensureconda_python_container_full(
             dockerfile=str(
                 (test_root / "docker-full" / "Dockerfile").relative_to(src_root)
             ),
+            # Unlike the docker CLI, docker-py keeps a stopped container for
+            # each build step unless told otherwise.
+            rm=True,
+            forcerm=True,
         )
         return image
     return None
