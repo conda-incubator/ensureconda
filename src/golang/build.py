@@ -29,4 +29,5 @@ for goos, goarch in build_arches:
             "-s -w",
         ],
         env=env,
+        check=True,
     )
