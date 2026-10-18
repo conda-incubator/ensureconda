@@ -389,9 +389,11 @@ def install_micromamba() -> Optional[Path]:
         else:
             filename = "bin/micromamba"
 
-    return extract_files_from_tar_bz2(
-        tarball=tarball, filename=filename, dest_filename=f"micromamba{exe_suffix()}"
-    )
+        # Extract before releasing the lock, so that a process waiting for it
+        # finds the new executable instead of downloading it again.
+        return extract_files_from_tar_bz2(
+            tarball=tarball, filename=filename, dest_filename=dest_filename
+        )
 
 
 def exe_suffix() -> str:

@@ -20,7 +20,6 @@ import (
 	"time"
 
 	pep440 "github.com/aquasecurity/go-pep440-version"
-	"github.com/flowchartsman/retry"
 	"github.com/go-resty/resty/v2"
 	"github.com/gofrs/flock"
 	"github.com/klauspost/compress/zstd"
@@ -123,28 +122,16 @@ func InstallCondaStandalone() (string, error) {
 		return "", err
 	}
 
-	// Ensure site path exists before locking
-	_ = os.MkdirAll(sitePath(), 0700)
-
-	// Lock the install to prevent concurrent downloads, similar to Python implementation
-	lockPath := filepath.Join(sitePath(), "conda_exe_install.lock")
-	fileLock := flock.New(lockPath)
-
-	// Block until we acquire the lock (mimics Python's lock_with_feedback behavior)
-	log.WithFields(log.Fields{"lockPath": lockPath}).Info("acquiring conda download lock")
-	if err := fileLock.Lock(); err != nil {
-		return "", fmt.Errorf("acquiring conda download lock: %w", err)
+	unlock, err := lockInstall("conda_exe_install.lock")
+	if err != nil {
+		return "", err
 	}
-	defer func() { _ = fileLock.Unlock() }()
-	log.WithFields(log.Fields{"lockPath": lockPath}).Info("acquired conda download lock")
+	defer unlock()
 
-	// Check if already installed and fresh
+	// A concurrent process may have just installed it.
 	target := targetExeFilename("conda_standalone")
-	if st, statErr := os.Stat(target); statErr == nil {
-		age := time.Since(st.ModTime())
-		if age < redownloadWhenOlder && age > negativeAgeTolerance {
-			return target, nil
-		}
+	if isFresh(target) {
+		return target, nil
 	}
 
 	// Download and install
@@ -323,14 +310,50 @@ func downloadAndUnpackConda(url string, expectedSha256 string, fileNameMap map[s
 }
 
 func installMicromamba(url string) (string, error) {
-	// micro.mamba.pm publishes no digest to verify against.
-	installedExe, err := downloadAndUnpackArchive(
-		url, "", map[string]string{
-			"Library/bin/micromamba.exe": targetExeFilename("micromamba"),
-			"bin/micromamba":             targetExeFilename("micromamba"),
-		})
+	unlock, err := lockInstall("micromamba_install.lock")
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
 
-	return installedExe, err
+	// A concurrent process may have just installed it.
+	target := targetExeFilename("micromamba")
+	if isFresh(target) {
+		return target, nil
+	}
+
+	// micro.mamba.pm publishes no digest to verify against.
+	return downloadAndUnpackArchive(
+		url, "", map[string]string{
+			"Library/bin/micromamba.exe": target,
+			"bin/micromamba":             target,
+		})
+}
+
+// lockInstall blocks until it holds the named lock in the site path, so that
+// concurrent processes download each executable only once. The lock names match
+// the Python implementation, so the two coordinate.
+func lockInstall(lockName string) (func(), error) {
+	_ = os.MkdirAll(sitePath(), 0700)
+	lockPath := filepath.Join(sitePath(), lockName)
+	fileLock := flock.New(lockPath)
+	log.WithFields(log.Fields{"lockPath": lockPath}).Info("acquiring download lock")
+	if err := fileLock.Lock(); err != nil {
+		return nil, fmt.Errorf("acquiring download lock %s: %w", lockPath, err)
+	}
+	log.WithFields(log.Fields{"lockPath": lockPath}).Info("acquired download lock")
+	return func() { _ = fileLock.Unlock() }, nil
+}
+
+// isFresh reports whether path exists and was written recently, as when
+// another process installed it while this one waited for the download lock.
+func isFresh(path string) bool {
+	st, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	age := time.Since(st.ModTime())
+	return age < redownloadWhenOlder && age > negativeAgeTolerance
 }
 
 func extractTarFiles(tarReader *tar.Reader, fileNameMap map[string]string) (string, error) {
@@ -346,21 +369,8 @@ func extractTarFiles(tarReader *tar.Reader, fileNameMap map[string]string) (stri
 
 		switch header.Typeflag {
 		case tar.TypeReg:
-			targetFileName := fileNameMap[header.Name]
-			tmpFileName := targetFileName + ".tmp"
-			if targetFileName != "" {
-				err2 := extractTarFile(header, tmpFileName, tarReader)
-				if err2 != nil {
-					return "", err2
-				}
-				st, err := os.Stat(tmpFileName)
-				if err != nil {
-					return "", fmt.Errorf("stat temp file: %w", err)
-				}
-				if err = os.Chmod(tmpFileName, st.Mode()|syscall.S_IXUSR); err != nil {
-					return "", err
-				}
-				if err = os.Rename(tmpFileName, targetFileName); err != nil {
+			if targetFileName := fileNameMap[header.Name]; targetFileName != "" {
+				if err := extractTarFile(header, targetFileName, tarReader); err != nil {
 					return "", err
 				}
 				return targetFileName, nil
@@ -370,41 +380,43 @@ func extractTarFiles(tarReader *tar.Reader, fileNameMap map[string]string) (stri
 	return "", errors.New("could not find file in the tarball")
 }
 
+// extractTarFile writes the current entry of tarReader to targetFileName as an
+// executable. It writes to a temporary file and renames it into place while
+// holding a lock on the target, the same lock the Python implementation uses,
+// so that concurrent writers don't interfere.
 func extractTarFile(header *tar.Header, targetFileName string, tarReader *tar.Reader) error {
 	log.WithFields(log.Fields{
 		"srcPath": header.Name,
 		"dstPath": targetFileName,
 	}).Debug("extracting from tarball")
 
-	fileInfo := header.FileInfo()
-	r := retry.NewRetrier(10, 100*time.Millisecond, 5*time.Second)
 	fileLock := flock.New(targetFileName + ".lock")
+	if err := fileLock.Lock(); err != nil {
+		return fmt.Errorf("locking %s: %w", targetFileName, err)
+	}
+	defer func() { _ = fileLock.Unlock() }()
 
-	err := r.Run(func() error {
-		locked, err := fileLock.TryLock()
-		if err != nil {
-			return err
-		}
-		if !locked {
-			return errors.New("could not lock")
-		}
-
-		file, err := os.OpenFile(targetFileName, os.O_RDWR|os.O_CREATE|os.O_TRUNC, fileInfo.Mode().Perm())
-		if err != nil {
-			return err
-		}
-		n, cpErr := io.Copy(file, tarReader)
-		if closeErr := file.Close(); closeErr != nil { // close file immediately
-			return closeErr
-		}
-		if cpErr != nil {
-			return cpErr
-		}
-		if n != fileInfo.Size() {
-			return fmt.Errorf("unexpected bytes written: wrote %d, want %d", n, fileInfo.Size())
-		}
+	tmpFileName := targetFileName + ".tmp"
+	file, err := os.OpenFile(tmpFileName, os.O_RDWR|os.O_CREATE|os.O_TRUNC, header.FileInfo().Mode().Perm())
+	if err != nil {
 		return err
-	})
-
-	return err
+	}
+	n, err := io.Copy(file, tarReader)
+	if closeErr := file.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return err
+	}
+	if n != header.Size {
+		return fmt.Errorf("unexpected bytes written: wrote %d, want %d", n, header.Size)
+	}
+	st, err := os.Stat(tmpFileName)
+	if err != nil {
+		return fmt.Errorf("stat temp file: %w", err)
+	}
+	if err := os.Chmod(tmpFileName, st.Mode()|syscall.S_IXUSR); err != nil {
+		return err
+	}
+	return os.Rename(tmpFileName, targetFileName)
 }

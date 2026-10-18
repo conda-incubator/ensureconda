@@ -9,6 +9,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
+import filelock
 import pytest
 import requests
 from conda_package_streaming.create import conda_builder
@@ -162,6 +163,28 @@ def test_compute_candidates_reads_optional_sha256(
     candidates = installer.compute_candidates("conda-forge", "linux-64")
 
     assert [candidate.sha256 for candidate in candidates] == [None, "ab" * 32]
+
+
+def test_micromamba_is_extracted_while_holding_the_download_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    lock_path = tmp_path / "micromamba_install.lock"
+    response = requests.Response()
+    response._content = b"tarball"
+
+    def extract(tarball: io.BytesIO, filename: str, dest_filename: str) -> Path:
+        # Another process must still be unable to take the download lock.
+        with pytest.raises(filelock.Timeout):
+            filelock.FileLock(str(lock_path)).acquire(timeout=0)
+        return tmp_path / dest_filename
+
+    monkeypatch.setattr(installer, "site_path", lambda: tmp_path)
+    monkeypatch.setattr(installer, "request_url_with_retry", lambda url: response)
+    monkeypatch.setattr(installer, "extract_files_from_tar_bz2", extract)
+
+    executable = installer.install_micromamba()
+
+    assert executable == tmp_path / ("micromamba" + installer.exe_suffix())
 
 
 @pytest.mark.parametrize("failure", ["http", "interrupted", "timeout"])
