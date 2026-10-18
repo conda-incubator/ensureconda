@@ -37,7 +37,11 @@ func targetExeFilename(exeName string) string {
 }
 
 func InstallMicromamba() (string, error) {
-	url := fmt.Sprintf("https://micro.mamba.pm/api/micromamba/%s/latest", PlatformSubdir())
+	subdir, err := PlatformSubdir()
+	if err != nil {
+		return "", err
+	}
+	url := fmt.Sprintf("https://micro.mamba.pm/api/micromamba/%s/latest", subdir)
 	return installMicromamba(url)
 }
 
@@ -117,7 +121,10 @@ func getChannelName() (string, error) {
 
 func InstallCondaStandalone() (string, error) {
 	// Get the most recent conda-standalone
-	subdir := PlatformSubdir()
+	subdir, err := PlatformSubdir()
+	if err != nil {
+		return "", err
+	}
 	channel, err := getChannelName()
 	if err != nil {
 		return "", err
