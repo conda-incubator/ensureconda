@@ -172,11 +172,14 @@ func computeCandidates(channel string, subdir string) ([]AnacondaPkg, error) {
 	url := fmt.Sprintf("%s/package/%s/conda-standalone/files", anacondaAPIBaseURL, channel)
 	client := newHTTPClient()
 	var data []AnacondaPkg
-	_, err := client.R().
+	resp, err := client.R().
 		SetResult(&data).
 		Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("GET candidates: %w", err)
+	}
+	if err := checkStatus(resp, url); err != nil {
+		return nil, err
 	}
 
 	var candidates = make([]AnacondaPkg, 0)
@@ -256,6 +259,9 @@ func downloadAndUnpackTarBz2(url string, expectedSha256 string, fileNameMap map[
 		return "", fmt.Errorf("nil response body from %s", url)
 	}
 	defer resp.RawBody().Close()
+	if err := checkStatus(resp, url); err != nil {
+		return "", err
+	}
 
 	var archive io.Reader = resp.RawBody()
 	if expectedSha256 != "" {
@@ -281,6 +287,9 @@ func downloadAndUnpackConda(url string, expectedSha256 string, fileNameMap map[s
 	resp, err := client.R().Get(url)
 
 	if err != nil {
+		return "", err
+	}
+	if err := checkStatus(resp, url); err != nil {
 		return "", err
 	}
 

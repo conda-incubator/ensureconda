@@ -3,6 +3,7 @@ package cmd
 import (
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -22,6 +23,36 @@ func useReadTimeout(t *testing.T, timeout time.Duration) {
 	previous := readTimeout
 	readTimeout = timeout
 	t.Cleanup(func() { readTimeout = previous })
+}
+
+func TestComputeCandidatesReportsHTTPStatus(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Error(w, "slow down", http.StatusTooManyRequests)
+	}))
+	defer server.Close()
+	useAnacondaAPI(t, server)
+
+	_, err := computeCandidates("conda-forge", "linux-64")
+	if err == nil || !strings.Contains(err.Error(), "HTTP 429") {
+		t.Fatalf("computeCandidates() error = %v, want HTTP 429", err)
+	}
+}
+
+func TestDownloadReportsHTTPStatus(t *testing.T) {
+	server := httptest.NewServer(http.NotFoundHandler())
+	defer server.Close()
+
+	for _, name := range []string{"package.conda", "package.tar.bz2"} {
+		t.Run(name, func(t *testing.T) {
+			target := filepath.Join(t.TempDir(), "conda_standalone")
+			_, err := downloadAndUnpackArchive(
+				server.URL+"/"+name, "", map[string]string{"standalone_conda/conda.exe": target},
+			)
+			if err == nil || !strings.Contains(err.Error(), "HTTP 404") {
+				t.Fatalf("downloadAndUnpackArchive() error = %v, want HTTP 404", err)
+			}
+		})
+	}
 }
 
 func TestDownloadTimesOutWhenServerStalls(t *testing.T) {

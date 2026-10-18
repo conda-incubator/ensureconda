@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"time"
@@ -50,4 +51,12 @@ func (c *idleTimeoutConn) Read(b []byte) (int, error) {
 		return 0, err
 	}
 	return c.Conn.Read(b)
+}
+
+// checkStatus returns an error unless the response has a 2xx status.
+func checkStatus(resp *resty.Response, url string) error {
+	if !resp.IsSuccess() {
+		return fmt.Errorf("GET %s: HTTP %s", url, resp.Status())
+	}
+	return nil
 }
