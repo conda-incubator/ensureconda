@@ -6,8 +6,21 @@ updates:
     directory: /
     schedule:
       interval: monthly
+    # Open one pull request per ecosystem instead of one per dependency.
+    groups:
+      github-actions:
+        patterns: ["*"]
+      github-actions-security:
+        applies-to: security-updates
+        patterns: ["*"]
 
   - package-ecosystem: gomod
     directory: /
     schedule:
       interval: monthly
+    groups:
+      go-modules:
+        patterns: ["*"]
+      go-modules-security:
+        applies-to: security-updates
+        patterns: ["*"]
