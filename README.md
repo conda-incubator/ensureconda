@@ -25,9 +25,9 @@ $ conda install -c conda-forge ensureconda
 
 ### Go based
 
-ensureconda is also available as a statically linked, fully stand-alone Go
-binary. It reimplements the same command-line interface, except for the
-`--min-conda-version` and `--min-mamba-version` options.
+ensureconda is also available as a stand-alone Go binary; the Linux builds are
+statically linked. It reimplements the same command-line interface, except for
+the `--min-conda-version` and `--min-mamba-version` options.
 
 These can be downloaded from [releases](https://github.com/conda-incubator/ensureconda/releases/latest)
 
