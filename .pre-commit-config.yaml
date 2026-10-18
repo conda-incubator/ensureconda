@@ -25,7 +25,7 @@ repos:
           - packaging
           - types-filelock
           - types-requests
-          - types-click
+          - click
 
   - repo: https://github.com/adrienverge/yamllint
     rev: v1.37.1

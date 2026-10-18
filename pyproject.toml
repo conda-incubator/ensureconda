@@ -47,7 +47,6 @@ dev = [
     "pip",
     "pre-commit",
     "pytest",
-    "types-click",
     "types-filelock",
     "types-requests",
 ]
