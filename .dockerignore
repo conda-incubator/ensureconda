@@ -12,6 +12,7 @@ build/
 dist/
 docs/build/
 venv/
+.pixi/
 wheelhouse/
 pip-wheel-metadata/
 # Rever
