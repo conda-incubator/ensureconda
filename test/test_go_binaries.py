@@ -55,7 +55,9 @@ def test_find_installed_micromamba(golang_exe: Optional[str]) -> None:
     found = subprocess.check_output(
         [golang_exe, "--no-install", *flags], encoding="utf8", env=env
     )
-    assert found == installed
+    # On Windows, a found executable's extension is spelled as in PATHEXT
+    # (".EXE"), while a fresh install reports ".exe".
+    assert os.path.normcase(found) == os.path.normcase(installed)
 
 
 @pytest.fixture(scope="session")
