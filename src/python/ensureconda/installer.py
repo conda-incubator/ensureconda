@@ -1,4 +1,5 @@
 import contextlib
+import hashlib
 import io
 import os
 import shutil
@@ -62,6 +63,7 @@ class AnacondaPkg(NamedTuple):
     type: str
     version: str
     download_url: str
+    sha256: Optional[str] = None
 
 
 def _retry_after_delay(value: str) -> Optional[float]:
@@ -225,20 +227,36 @@ def lock_with_feedback(lock_path: Union[str, Path], lock_name: str) -> Iterator[
             )
 
 
-def stream_conda_executable(url: str) -> Path:
+def verify_sha256(fileobj: IO[bytes], expected: str, url: str) -> None:
+    """Raise unless the contents of fileobj have the expected SHA-256 digest."""
+    digest = hashlib.sha256()
+    for chunk in iter(lambda: fileobj.read(1024 * 1024), b""):
+        digest.update(chunk)
+    fileobj.seek(0)
+    if digest.hexdigest() != expected.lower():
+        raise RuntimeError(
+            f"SHA-256 mismatch for {url}: expected {expected}, "
+            f"got {digest.hexdigest()}"
+        )
+
+
+def stream_conda_executable(url: str, sha256: Optional[str] = None) -> Path:
     """Extract `conda.exe` from the conda-standalone package at the given URL.
 
     This is roughly a more modern version of `extract_files_from_tar_bz2`
     that also works with `.conda` archives.
 
     Download the archive before extracting it to avoid an HTTP range request
-    for every small read made by the decompressor.
+    for every small read made by the decompressor. If sha256 is given, verify
+    the downloaded archive against it before extracting anything.
     """
     dest_filename = f"conda_standalone{exe_suffix()}"
 
     filename = urlparse(url).path.rsplit("/", 1)[-1]
     with TemporaryFile() as conda:
         request_url_with_retry(url, destination=conda)
+        if sha256:
+            verify_sha256(conda, sha256, url)
         with closing(
             stream_conda_component(filename, conda, component="pkg")
         ) as stream:
@@ -290,7 +308,7 @@ def install_conda_exe() -> Optional[Path]:
         candidates = compute_candidates(channel, platform_subdir())
         chosen = candidates[-1]
         url = "https:" + chosen.download_url
-        path_to_written_executable = stream_conda_executable(url)
+        path_to_written_executable = stream_conda_executable(url, chosen.sha256)
         return path_to_written_executable
 
 
@@ -315,6 +333,8 @@ def compute_candidates(channel: str, subdir: str) -> List[AnacondaPkg]:
             type=file_info["type"],
             version=file_info["version"],
             download_url=file_info["download_url"],
+            # Older conda-forge files lack a SHA-256 digest.
+            sha256=file_info.get("sha256"),
         )
         if (
             info.attrs.subdir == subdir

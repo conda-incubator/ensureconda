@@ -1,11 +1,13 @@
 import gzip
+import hashlib
 import http.client
 import io
+import json
 import os
 import tarfile
 import time
 from pathlib import Path
-from typing import Any, Iterator, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
 import pytest
 import requests
@@ -96,6 +98,70 @@ def test_download_before_extracting(
         installer.CONNECT_TIMEOUT_SEC,
         installer.READ_TIMEOUT_SEC,
     )
+
+
+@pytest.mark.parametrize("matches", [True, False], ids=["match", "mismatch"])
+def test_download_verifies_sha256(
+    matches: bool,
+    package: Tuple[str, bytes, bytes],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    filename, data, payload = package
+    sha256 = hashlib.sha256(data if matches else b"other archive").hexdigest()
+
+    def get(
+        session: requests.Session, method: str, url: str, **kwargs: Any
+    ) -> requests.Response:
+        response = requests.Response()
+        response.status_code = 200
+        response.raw = io.BytesIO(data)
+        return response
+
+    monkeypatch.setattr(requests.Session, "request", get)
+    cache = tmp_path / "cache"
+    monkeypatch.setattr(installer, "site_path", lambda: cache)
+    url = f"https://example.invalid/{filename}"
+
+    if matches:
+        # Digests compare case-insensitively.
+        executable = installer.stream_conda_executable(url, sha256.upper())
+        assert executable.read_bytes() == payload
+    else:
+        with pytest.raises(RuntimeError, match="SHA-256 mismatch"):
+            installer.stream_conda_executable(url, sha256)
+        assert not cache.exists()
+
+
+def test_compute_candidates_reads_optional_sha256(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def file_info(version: str, sha256: Optional[str] = None) -> Dict[str, Any]:
+        info: Dict[str, Any] = {
+            "size": 1,
+            "type": "conda",
+            "version": version,
+            "download_url": f"//example.invalid/conda-standalone-{version}.conda",
+            "attrs": {
+                "subdir": "linux-64",
+                "build": "h0_0",
+                "build_number": 0,
+                "timestamp": 0,
+            },
+        }
+        if sha256 is not None:
+            info["sha256"] = sha256
+        return info
+
+    response = requests.Response()
+    response._content = json.dumps(
+        [file_info("1.0"), file_info("2.0", "ab" * 32)]
+    ).encode()
+    monkeypatch.setattr(installer, "request_url_with_retry", lambda url: response)
+
+    candidates = installer.compute_candidates("conda-forge", "linux-64")
+
+    assert [candidate.sha256 for candidate in candidates] == [None, "ab" * 32]
 
 
 @pytest.mark.parametrize("failure", ["http", "interrupted", "timeout"])
