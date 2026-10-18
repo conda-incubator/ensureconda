@@ -1,11 +1,13 @@
+import json
 import sys
 import time
+from functools import partial
 from typing import Any, Optional, Union
 
 import click
 from packaging.version import Version
 
-from ensureconda.api import ensureconda
+from ensureconda.api import CondaExecutable, ensureconda, ensureconda_info
 
 
 def _as_loose_version(obj: Union[str, Version, None]) -> Version:
@@ -60,6 +62,12 @@ class VersionNumber(click.ParamType):
     type=VersionNumber(),
     help=f"minimum version of mamba/micromamba to accept (defaults to {_DEFAULT_MIN_MAMBA})",
 )
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    help="print the executable's path, flavor and version as JSON",
+)
 def ensureconda_cli(
     mamba: bool,
     micromamba: bool,
@@ -68,33 +76,32 @@ def ensureconda_cli(
     no_install: bool,
     min_conda_version: Optional[Version],
     min_mamba_version: Optional[Version],
+    as_json: bool,
 ) -> None:
-    # We run the loop twice, once to find all the eligible condas without installation
-    # and once if you haven't found anything after installation
-    exe = ensureconda(
+    # Only --json needs the flavor and version; finding them can take an extra
+    # `--version` call.
+    find = partial(
+        ensureconda_info if as_json else ensureconda,
         mamba=mamba,
         micromamba=micromamba,
         conda=conda,
         conda_exe=conda_exe,
-        no_install=True,
         min_mamba_version=min_mamba_version,
         min_conda_version=min_conda_version,
     )
+    # We run the loop twice, once to find all the eligible condas without installation
+    # and once if you haven't found anything after installation
+    exe = find(no_install=True)
     if not exe and not no_install:
-        exe = ensureconda(
-            mamba=mamba,
-            micromamba=micromamba,
-            conda=conda,
-            conda_exe=conda_exe,
-            no_install=False,
-            min_mamba_version=min_mamba_version,
-            min_conda_version=min_conda_version,
-        )
+        exe = find(no_install=False)
     if exe:
         print("Found compatible executable", file=sys.stderr, flush=True)
         # silly thing to force correct output order
         time.sleep(0.01)
-        print(str(exe), flush=True)
+        if isinstance(exe, CondaExecutable):
+            print(json.dumps(exe.to_json()), flush=True)
+        else:
+            print(str(exe), flush=True)
         sys.exit(0)
     else:
         print("Could not find compatible executable", file=sys.stderr)

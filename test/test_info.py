@@ -1,11 +1,13 @@
+import json
 import subprocess
 from pathlib import Path
 from typing import Any, Dict, List
 
 import pytest
+from click.testing import CliRunner
 from packaging.version import Version
 
-from ensureconda import api
+from ensureconda import api, cli
 from ensureconda.api import (
     CondaExecutable,
     Flavor,
@@ -112,3 +114,14 @@ def test_identify_rejects_unrecognized_executables(
 
     with pytest.raises(ValueError, match="not a recognized conda executable"):
         identify("bin/python")
+
+
+def test_cli_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    info = CondaExecutable(MICROMAMBA, "micromamba", Version("2.9.0"))
+    monkeypatch.setattr(cli, "ensureconda_info", lambda **kwargs: info)
+
+    result = CliRunner().invoke(cli.ensureconda_cli, ["--json"])
+
+    assert result.exit_code == 0
+    # Before click 8.2, the runner's stdout also includes stderr.
+    assert json.loads(result.stdout.splitlines()[-1]) == info.to_json()
