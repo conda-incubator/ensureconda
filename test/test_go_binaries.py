@@ -24,6 +24,8 @@ def golang_exe() -> Optional[str]:
             p = pathlib.Path(os.getcwd()) / exe
             if p.exists():
                 return str(p)
+        # Fail rather than skip, so a missing build can't pass CI unnoticed.
+        pytest.fail(f"ENSURECONDA_EXE is set, but {exe} was not found")
     return None
 
 
