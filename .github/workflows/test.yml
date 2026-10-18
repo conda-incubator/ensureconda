@@ -55,7 +55,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        pixi-env: ["test-py38", "test-py313"]
+        pixi-env: ["test-py38", "test-py313", "test-py314"]
     defaults:
       run:
         shell: bash -eo pipefail -l {0}
