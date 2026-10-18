@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 from packaging.version import InvalidVersion, Version
 
-from ensureconda import api
+from ensureconda import api, resolve
 
 BROKEN_MAMBA = Path("broken", "mamba")
 WORKING_MICROMAMBA = Path("working", "micromamba")
@@ -46,3 +46,12 @@ def test_skip_candidate_whose_version_check_fails(
 
     assert executable == WORKING_MICROMAMBA
     assert f"Skipping {BROKEN_MAMBA}" in capsys.readouterr().err
+
+
+def test_search_without_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """An unset PATH means there is nothing to find there, not an error."""
+    monkeypatch.delenv("PATH", raising=False)
+    monkeypatch.delenv("CONDA_EXE", raising=False)
+    monkeypatch.setattr(resolve, "site_path", lambda: tmp_path)
+
+    assert api.ensureconda(no_install=True) is None

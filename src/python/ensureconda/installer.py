@@ -408,17 +408,23 @@ def new_executable(target_filename: "Path") -> Iterator[IO[bytes]]:
     lock_path = f"{str(target_filename)}.lock"
     with lock_with_feedback(lock_path, f"file write ({target_filename})"):
         temp_filename = target_filename.with_name(uuid.uuid4().hex)
-        with open(temp_filename, "wb") as fo:
-            yield fo
-        st = os.stat(temp_filename)
-        os.chmod(temp_filename, st.st_mode | stat.S_IXUSR)
-        # On Windows, we need to handle the case where the target file already exists
-        if sys.platform in ["win32", "cygwin", "msys"] and target_filename.exists():
-            try:
-                target_filename.unlink()
-            except (PermissionError, OSError) as e:
-                raise RuntimeError(
-                    f"Could not remove existing executable {target_filename} "
-                    f"for replacement"
-                ) from e
-        os.rename(temp_filename, target_filename)
+        try:
+            with open(temp_filename, "wb") as fo:
+                yield fo
+            st = os.stat(temp_filename)
+            os.chmod(temp_filename, st.st_mode | stat.S_IXUSR)
+            # On Windows, we need to handle the case where the target file already exists
+            if sys.platform in ["win32", "cygwin", "msys"] and target_filename.exists():
+                try:
+                    target_filename.unlink()
+                except (PermissionError, OSError) as e:
+                    raise RuntimeError(
+                        f"Could not remove existing executable {target_filename} "
+                        f"for replacement"
+                    ) from e
+            os.rename(temp_filename, target_filename)
+        except BaseException:
+            # Don't leave a partial executable behind, for example after Ctrl-C.
+            with contextlib.suppress(OSError):
+                temp_filename.unlink()
+            raise

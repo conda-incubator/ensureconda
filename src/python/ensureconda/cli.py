@@ -3,7 +3,7 @@ import time
 from typing import Any, Optional, Union
 
 import click
-from packaging.version import Version
+from packaging.version import InvalidVersion, Version
 
 from ensureconda.api import ensureconda
 
@@ -27,7 +27,10 @@ class VersionNumber(click.ParamType):
     def convert(
         self, value: Union[str, Version, None], param: Any, ctx: Any
     ) -> Version:
-        return _as_loose_version(value)
+        try:
+            return _as_loose_version(value)
+        except InvalidVersion:
+            self.fail(f"{value!r} is not a valid version", param, ctx)
 
 
 @click.command(help="Ensures that a conda/mamba is installed.")
