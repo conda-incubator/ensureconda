@@ -2,8 +2,9 @@ name: publish-golang
 
 on:
   release:
+    # Not `created`, which never fires for releases published from drafts.
     types:
-      - created
+      - published
   push:
     branches:
       - main
