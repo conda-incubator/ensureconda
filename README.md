@@ -68,6 +68,30 @@ Options:
   --help                          Show this message and exit.
 ```
 
+With `--json`, ensureconda prints the executable's path, flavor and version
+instead of just its path:
+
+```console
+$ ensureconda --json
+{"path": "/home/user/.local/share/ensure-conda/micromamba", "flavor": "micromamba", "version": "2.9.0"}
+```
+
+### Python API
+
+```python
+from ensureconda import ensureconda, ensureconda_info, identify
+
+ensureconda()  # the path of a conda executable, or None
+ensureconda_info()  # CondaExecutable(path, flavor, version), or None
+identify("/opt/conda/bin/conda")  # CondaExecutable for a given executable
+```
+
+`ensureconda_info()` accepts the same arguments as `ensureconda()`. The flavor
+is `"mamba"`, `"micromamba"`, `"conda"` or `"conda_standalone"`, and the version
+is `None` if `--version` doesn't report one. `identify()` takes the flavor from
+the file name, or else from the shape of the `--version` output, which can't tell
+micromamba from mamba 2; both are reported as `"micromamba"`.
+
 ### Configuring conda-standalone channel
 
 When ensureconda downloads the conda-standalone executable, you can select the
