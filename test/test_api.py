@@ -2,6 +2,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import requests
 from packaging.version import InvalidVersion, Version
 
 from ensureconda import api
@@ -46,3 +47,54 @@ def test_skip_candidate_whose_version_check_fails(
 
     assert executable == WORKING_MICROMAMBA
     assert f"Skipping {BROKEN_MAMBA}" in capsys.readouterr().err
+
+
+def http_error(status: int) -> requests.HTTPError:
+    response = requests.Response()
+    response.status_code = status
+    return requests.HTTPError(f"{status} Error", response=response)
+
+
+@pytest.fixture
+def nothing_installed(monkeypatch: pytest.MonkeyPatch) -> None:
+    for finder in [
+        "mamba_executables",
+        "micromamba_executables",
+        "conda_executables",
+        "conda_standalone_executables",
+    ]:
+        monkeypatch.setattr(api, finder, lambda: iter([]))
+
+
+@pytest.mark.usefixtures("nothing_installed")
+def test_missing_micromamba_build_falls_back_to_conda_standalone(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def install_micromamba() -> Path:
+        raise http_error(404)
+
+    conda_standalone = Path("data", "conda_standalone")
+    monkeypatch.setattr(api, "install_micromamba", install_micromamba)
+    monkeypatch.setattr(api, "install_conda_exe", lambda: conda_standalone)
+
+    assert api.ensureconda(no_install=False) == conda_standalone
+    assert "micromamba is not available" in capsys.readouterr().err
+
+
+@pytest.mark.usefixtures("nothing_installed")
+@pytest.mark.parametrize(
+    "status, conda_exe",
+    [(404, False), (500, True), (403, True)],
+    ids=["404-without-conda-exe", "500", "403"],
+)
+def test_other_micromamba_failures_propagate(
+    status: int, conda_exe: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def install_micromamba() -> Path:
+        raise http_error(status)
+
+    monkeypatch.setattr(api, "install_micromamba", install_micromamba)
+    monkeypatch.setattr(api, "install_conda_exe", lambda: Path("unused"))
+
+    with pytest.raises(requests.HTTPError):
+        api.ensureconda(no_install=False, conda_exe=conda_exe)
