@@ -122,28 +122,16 @@ func InstallCondaStandalone() (string, error) {
 		return "", err
 	}
 
-	// Ensure site path exists before locking
-	_ = os.MkdirAll(sitePath(), 0700)
-
-	// Lock the install to prevent concurrent downloads, similar to Python implementation
-	lockPath := filepath.Join(sitePath(), "conda_exe_install.lock")
-	fileLock := flock.New(lockPath)
-
-	// Block until we acquire the lock (mimics Python's lock_with_feedback behavior)
-	log.WithFields(log.Fields{"lockPath": lockPath}).Info("acquiring conda download lock")
-	if err := fileLock.Lock(); err != nil {
-		return "", fmt.Errorf("acquiring conda download lock: %w", err)
+	unlock, err := lockInstall("conda_exe_install.lock")
+	if err != nil {
+		return "", err
 	}
-	defer func() { _ = fileLock.Unlock() }()
-	log.WithFields(log.Fields{"lockPath": lockPath}).Info("acquired conda download lock")
+	defer unlock()
 
-	// Check if already installed and fresh
+	// A concurrent process may have just installed it.
 	target := targetExeFilename("conda_standalone")
-	if st, statErr := os.Stat(target); statErr == nil {
-		age := time.Since(st.ModTime())
-		if age < redownloadWhenOlder && age > negativeAgeTolerance {
-			return target, nil
-		}
+	if isFresh(target) {
+		return target, nil
 	}
 
 	// Download and install
@@ -322,14 +310,50 @@ func downloadAndUnpackConda(url string, expectedSha256 string, fileNameMap map[s
 }
 
 func installMicromamba(url string) (string, error) {
-	// micro.mamba.pm publishes no digest to verify against.
-	installedExe, err := downloadAndUnpackArchive(
-		url, "", map[string]string{
-			"Library/bin/micromamba.exe": targetExeFilename("micromamba"),
-			"bin/micromamba":             targetExeFilename("micromamba"),
-		})
+	unlock, err := lockInstall("micromamba_install.lock")
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
 
-	return installedExe, err
+	// A concurrent process may have just installed it.
+	target := targetExeFilename("micromamba")
+	if isFresh(target) {
+		return target, nil
+	}
+
+	// micro.mamba.pm publishes no digest to verify against.
+	return downloadAndUnpackArchive(
+		url, "", map[string]string{
+			"Library/bin/micromamba.exe": target,
+			"bin/micromamba":             target,
+		})
+}
+
+// lockInstall blocks until it holds the named lock in the site path, so that
+// concurrent processes download each executable only once. The lock names match
+// the Python implementation, so the two coordinate.
+func lockInstall(lockName string) (func(), error) {
+	_ = os.MkdirAll(sitePath(), 0700)
+	lockPath := filepath.Join(sitePath(), lockName)
+	fileLock := flock.New(lockPath)
+	log.WithFields(log.Fields{"lockPath": lockPath}).Info("acquiring download lock")
+	if err := fileLock.Lock(); err != nil {
+		return nil, fmt.Errorf("acquiring download lock %s: %w", lockPath, err)
+	}
+	log.WithFields(log.Fields{"lockPath": lockPath}).Info("acquired download lock")
+	return func() { _ = fileLock.Unlock() }, nil
+}
+
+// isFresh reports whether path exists and was written recently, as when
+// another process installed it while this one waited for the download lock.
+func isFresh(path string) bool {
+	st, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	age := time.Since(st.ModTime())
+	return age < redownloadWhenOlder && age > negativeAgeTolerance
 }
 
 func extractTarFiles(tarReader *tar.Reader, fileNameMap map[string]string) (string, error) {
