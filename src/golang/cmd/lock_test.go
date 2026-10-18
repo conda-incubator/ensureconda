@@ -59,7 +59,11 @@ func TestExtractTarFilesReleasesLock(t *testing.T) {
 	}
 	// Earlier versions locked the temporary file instead, and never released it.
 	for _, lockPath := range []string{target + ".lock", target + ".tmp.lock"} {
-		locked, err := flock.New(lockPath).TryLock()
+		probe := flock.New(lockPath)
+		locked, err := probe.TryLock()
+		// Release the probe before the temporary directory is removed, which
+		// fails on Windows while a handle to a file in it is open.
+		t.Cleanup(func() { _ = probe.Unlock() })
 		if err != nil || !locked {
 			t.Errorf("%s still locked after extracting (locked=%v, err=%v)", lockPath, locked, err)
 		}
