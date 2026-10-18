@@ -8,9 +8,15 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 jobs:
   publish-go-binaries:
     runs-on: ubuntu-latest
+    permissions:
+      # Upload the binaries to the release.
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -23,16 +29,17 @@ jobs:
             goarch: ppc64le
 
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Set APP_VERSION env
         run: echo APP_VERSION=$(echo ${GITHUB_REF} | rev | cut -d'/' -f 1 | rev ) >> ${GITHUB_ENV}
       - name: Set BUILD_TIME env
         run: echo BUILD_TIME=$(date) >> ${GITHUB_ENV}
 
-      - uses: wangyoucao577/go-release-action@v1
+      - uses: wangyoucao577/go-release-action@279495102627de7960cbc33434ab01a12bae144b  # v1.55
         if: ${{ github.event_name == 'release' }}
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
