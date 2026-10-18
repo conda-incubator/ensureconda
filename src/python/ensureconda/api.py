@@ -1,8 +1,9 @@
 import subprocess
+import sys
 from functools import partial
 from typing import TYPE_CHECKING, Callable, Optional
 
-from packaging.version import Version
+from packaging.version import InvalidVersion, Version
 
 from ensureconda.installer import install_conda_exe, install_micromamba
 from ensureconda.resolve import (
@@ -89,7 +90,22 @@ def ensureconda(
         min_version: Optional[Version],
         version_fn: Callable[["StrPath"], Version],
     ) -> bool:
-        return (min_version is None) or (version_fn(executable) >= min_version)
+        if min_version is None:
+            return True
+        try:
+            version = version_fn(executable)
+        except subprocess.CalledProcessError as error:
+            reason = f"`--version` exited with status {error.returncode}"
+        except (OSError, InvalidVersion, UnicodeDecodeError) as error:
+            reason = str(error)
+        else:
+            return version >= min_version
+        # A broken candidate shouldn't prevent finding a working one.
+        print(
+            f"Skipping {executable}: could not determine its version ({reason})",
+            file=sys.stderr,
+        )
+        return False
 
     conda_constraints_met = partial(
         version_constraint_met,
