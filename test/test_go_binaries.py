@@ -75,6 +75,10 @@ def ensureconda_go_container(
             dockerfile=str(
                 (proj_root / "test" / "docker-go" / "Dockerfile").relative_to(proj_root)
             ),
+            # Unlike the docker CLI, docker-py keeps a stopped container for
+            # each build step unless told otherwise.
+            rm=True,
+            forcerm=True,
         )
         return image
     return None
