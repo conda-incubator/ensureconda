@@ -52,7 +52,9 @@ jobs:
           build_flags: -v
           sha256sum: TRUE
           binary_name: ensureconda
+          # -s -w strip the symbol table and debug info, roughly halving the download.
           ldflags: >-
+            -s -w
             -X "main.appVersion=${{ env.APP_VERSION }}"
             -X "main.buildTime=${{ env.BUILD_TIME }}"
             -X main.gitCommit=${{ github.sha }}
