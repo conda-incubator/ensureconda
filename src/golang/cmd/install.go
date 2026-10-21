@@ -21,7 +21,6 @@ import (
 
 	pep440 "github.com/aquasecurity/go-pep440-version"
 	"github.com/flowchartsman/retry"
-	"github.com/go-resty/resty/v2"
 	"github.com/gofrs/flock"
 	"github.com/klauspost/compress/zstd"
 	log "github.com/sirupsen/logrus"
@@ -170,14 +169,17 @@ func InstallCondaStandalone() (string, error) {
 // computeCandidates returns the sorted list of available conda-standalone
 // packages for the given channel and subdir (ascending by version/build/timestamp).
 func computeCandidates(channel string, subdir string) ([]AnacondaPkg, error) {
-	url := fmt.Sprintf("https://api.anaconda.org/package/%s/conda-standalone/files", channel)
-	client := resty.New()
+	url := fmt.Sprintf("%s/package/%s/conda-standalone/files", anacondaAPIBaseURL, channel)
+	client := httpClient()
 	var data []AnacondaPkg
-	_, err := client.R().
+	resp, err := client.R().
 		SetResult(&data).
 		Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("GET candidates: %w", err)
+	}
+	if err := checkStatus(resp, url); err != nil {
+		return nil, err
 	}
 
 	var candidates = make([]AnacondaPkg, 0)
@@ -245,7 +247,7 @@ func verifySha256(data []byte, expected string) error {
 }
 
 func downloadAndUnpackTarBz2(url string, expectedSha256 string, fileNameMap map[string]string) (string, error) {
-	client := resty.New()
+	client := httpClient()
 	resp, err := client.R().
 		SetDoNotParseResponse(true).
 		Get(url)
@@ -257,6 +259,9 @@ func downloadAndUnpackTarBz2(url string, expectedSha256 string, fileNameMap map[
 		return "", fmt.Errorf("nil response body from %s", url)
 	}
 	defer resp.RawBody().Close()
+	if err := checkStatus(resp, url); err != nil {
+		return "", err
+	}
 
 	var archive io.Reader = resp.RawBody()
 	if expectedSha256 != "" {
@@ -278,10 +283,13 @@ func downloadAndUnpackTarBz2(url string, expectedSha256 string, fileNameMap map[
 }
 
 func downloadAndUnpackConda(url string, expectedSha256 string, fileNameMap map[string]string) (string, error) {
-	client := resty.New()
+	client := httpClient()
 	resp, err := client.R().Get(url)
 
 	if err != nil {
+		return "", err
+	}
+	if err := checkStatus(resp, url); err != nil {
 		return "", err
 	}
 
