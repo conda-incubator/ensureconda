@@ -170,7 +170,7 @@ func InstallCondaStandalone() (string, error) {
 // packages for the given channel and subdir (ascending by version/build/timestamp).
 func computeCandidates(channel string, subdir string) ([]AnacondaPkg, error) {
 	url := fmt.Sprintf("%s/package/%s/conda-standalone/files", anacondaAPIBaseURL, channel)
-	client := newHTTPClient()
+	client := httpClient()
 	var data []AnacondaPkg
 	resp, err := client.R().
 		SetResult(&data).
@@ -247,7 +247,7 @@ func verifySha256(data []byte, expected string) error {
 }
 
 func downloadAndUnpackTarBz2(url string, expectedSha256 string, fileNameMap map[string]string) (string, error) {
-	client := newHTTPClient()
+	client := httpClient()
 	resp, err := client.R().
 		SetDoNotParseResponse(true).
 		Get(url)
@@ -283,7 +283,7 @@ func downloadAndUnpackTarBz2(url string, expectedSha256 string, fileNameMap map[
 }
 
 func downloadAndUnpackConda(url string, expectedSha256 string, fileNameMap map[string]string) (string, error) {
-	client := newHTTPClient()
+	client := httpClient()
 	resp, err := client.R().Get(url)
 
 	if err != nil {

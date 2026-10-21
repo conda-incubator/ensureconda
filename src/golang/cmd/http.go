@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/go-resty/resty/v2"
@@ -21,8 +22,14 @@ var (
 // anacondaAPIBaseURL is a variable so that tests can use a local server.
 var anacondaAPIBaseURL = "https://api.anaconda.org"
 
+// httpClient returns the client shared by all downloads, created on first use,
+// so that requests reuse connections instead of each building a transport.
+var httpClient = sync.OnceValue(newHTTPClient)
+
 // newHTTPClient returns a client that gives up on connections that can't be
 // established within connectTimeout, or that deliver no data for readTimeout.
+// The custom dialer disables Go's automatic HTTP/2 upgrade; HTTP/1.1 is enough
+// for the few requests made per run, and keeps the inactivity timeout simple.
 func newHTTPClient() *resty.Client {
 	dialer := &net.Dialer{Timeout: connectTimeout, KeepAlive: 30 * time.Second}
 	transport := &http.Transport{
