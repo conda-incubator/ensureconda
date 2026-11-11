@@ -39,9 +39,8 @@ dev = [
     "isort",
     "mypy",
     "pip",
-    "pre-commit",
+    "prek",
     "pytest",
-    "types-click",
     "types-filelock",
     "types-requests",
 ]
