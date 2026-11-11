@@ -39,7 +39,7 @@ dev = [
     "isort",
     "mypy",
     "pip",
-    "pre-commit",
+    "prek",
     "pytest",
     "types-filelock",
     "types-requests",
