@@ -41,6 +41,26 @@ READ_TIMEOUT_SEC = 60
 RETRY_TIME_BUDGET_SEC = 70
 """Elapsed seconds allowed for scheduling retries; active downloads may finish."""
 
+MICROMAMBA_SUBDIRS = frozenset(
+    {
+        "linux-64",
+        "linux-aarch64",
+        "linux-ppc64le",
+        "linux-riscv64",
+        "osx-64",
+        "osx-arm64",
+        "win-64",
+        "win-arm64",
+    }
+)
+"""Platforms that micromamba is published for.
+
+This is `conda_platforms` in
+<https://api.anaconda.org/package/conda-forge/micromamba>. It only decides what
+a 404 from micro.mamba.pm means, so a platform that is missing here still gets
+micromamba as soon as one is published.
+"""
+
 
 class NotPublishedError(RuntimeError):
     """Nothing that could be installed is published for this platform."""
@@ -400,7 +420,22 @@ def install_micromamba() -> Optional[Path]:
 
         subdir = platform_subdir()
         url = f"https://micro.mamba.pm/api/micromamba/{subdir}/latest"
-        resp = request_url_with_retry(url)
+        try:
+            resp = request_url_with_retry(url)
+        except requests.HTTPError as error:
+            # micro.mamba.pm answers 404 when it has no build of a version for
+            # a platform. That can also be a release that conda-forge hasn't
+            # finished uploading, so for a platform that micromamba is
+            # published for, a 404 remains an error.
+            if (
+                error.response is not None
+                and error.response.status_code == 404
+                and subdir not in MICROMAMBA_SUBDIRS
+            ):
+                raise NotPublishedError(
+                    f"micromamba is not published for {subdir}"
+                ) from error
+            raise
 
         tarball = io.BytesIO(resp.content)
         if is_windows:
