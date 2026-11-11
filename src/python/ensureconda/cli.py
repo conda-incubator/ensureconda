@@ -21,7 +21,8 @@ _DEFAULT_MIN_CONDA = "4.8.2"
 _DEFAULT_MIN_MAMBA = "0.7.3"
 
 
-class VersionNumber(click.ParamType):
+# ParamType is generic only in click 8.4 and later, which require Python 3.10.
+class VersionNumber(click.ParamType):  # type: ignore[type-arg, unused-ignore]
     name = "VersionNumber"
 
     def convert(
