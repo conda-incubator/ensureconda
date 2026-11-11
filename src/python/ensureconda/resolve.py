@@ -35,7 +35,7 @@ def which_no_shims(executable: str) -> Optional[str]:
     """
     path_list = [
         p
-        for p in os.environ["PATH"].split(os.pathsep)
+        for p in os.environ.get("PATH", "").split(os.pathsep)
         if os.path.join(".pyenv", "shims") not in p
     ]
     return shutil.which(executable, path=os.pathsep.join(path_list))

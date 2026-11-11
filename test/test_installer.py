@@ -52,6 +52,25 @@ def test_copy_executable_with_bounded_reads(
     assert os.access(executable, os.X_OK)
 
 
+def test_failed_write_leaves_no_temporary_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    class FailingReader(io.BytesIO):
+        def read(self, size: Optional[int] = -1) -> bytes:
+            if self.tell() > 0:
+                raise OSError("Connection lost while copying")
+            return super().read(1024)
+
+    monkeypatch.setattr(installer, "site_path", lambda: tmp_path)
+    with pytest.raises(OSError, match="Connection lost"):
+        installer.write_executable_from_file_object(
+            FailingReader(b"x" * 4096), "executable"
+        )
+
+    leftovers = [p.name for p in tmp_path.iterdir() if p.suffix != ".lock"]
+    assert leftovers == []
+
+
 @pytest.fixture(params=[".conda", ".tar.bz2"])
 def package(request: pytest.FixtureRequest, tmp_path: Path) -> Tuple[str, bytes, bytes]:
     # Incompressible data exercises many decompressor reads in the old downloader.
