@@ -3,7 +3,7 @@
 # Source files:
 # - pyproject.toml
 
-[project]
+[workspace]
 name = "ensureconda"
 platforms = ["linux-64", "osx-64", "osx-arm64", "win-64"]
 channels = ["conda-forge"]
