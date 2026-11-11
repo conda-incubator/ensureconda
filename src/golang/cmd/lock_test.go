@@ -64,3 +64,29 @@ func TestExtractTarFilesReleasesLock(t *testing.T) {
 		}
 	}
 }
+
+func TestExtractTarFilesRemovesTemporaryFileOnError(t *testing.T) {
+	// An archive whose entry promises more content than it holds.
+	var buf bytes.Buffer
+	w := tar.NewWriter(&buf)
+	header := &tar.Header{Name: "bin/tool", Mode: 0644, Size: 1 << 20, Typeflag: tar.TypeReg}
+	if err := w.WriteHeader(header); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("truncated")); err != nil {
+		t.Fatal(err)
+	}
+	// Not closed: closing would report the missing content instead.
+	target := filepath.Join(t.TempDir(), "tool")
+
+	_, err := extractTarFiles(tar.NewReader(&buf), map[string]string{"bin/tool": target})
+
+	if err == nil {
+		t.Fatal("extractTarFiles() succeeded on a truncated archive")
+	}
+	for _, path := range []string{target, target + ".tmp"} {
+		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
+			t.Errorf("%s exists after a failed extraction (stat error %v)", path, statErr)
+		}
+	}
+}
