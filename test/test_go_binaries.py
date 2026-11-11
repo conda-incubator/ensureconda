@@ -29,6 +29,20 @@ def golang_exe() -> Optional[str]:
     return None
 
 
+@pytest.fixture()
+def isolated_env(tmp_path: pathlib.Path) -> Dict[str, str]:
+    """An environment that gives the binary a data directory of its own.
+
+    Otherwise the tests install into the user's real data directory, and reuse
+    whatever a previous run or test left there.
+
+    Only on Linux does the binary take the directory from the environment. On
+    macOS and Windows it asks the system, so there the tests still use the real
+    one.
+    """
+    return {**os.environ, "XDG_DATA_HOME": str(tmp_path)}
+
+
 @pytest.mark.parametrize(
     "flags",
     [
@@ -36,23 +50,30 @@ def golang_exe() -> Optional[str]:
         pytest.param(["--no-micromamba"], id="no-micromamba"),
     ],
 )
-def test_install(golang_exe: Optional[str], flags: List[str]) -> None:
+def test_install(
+    golang_exe: Optional[str], isolated_env: Dict[str, str], flags: List[str]
+) -> None:
     if golang_exe is None:
         raise pytest.skip("environment variable not set")
     args = [golang_exe, "--verbosity=3"]
     args.extend(flags)
     print(args)
-    result = subprocess.check_output(args, encoding="utf8")
+    result = subprocess.check_output(args, encoding="utf8", env=isolated_env)
     subprocess.check_call([result, "--help"])
 
 
-def test_find_installed_micromamba(golang_exe: Optional[str]) -> None:
+def test_find_installed_micromamba(
+    golang_exe: Optional[str],
+    isolated_env: Dict[str, str],
+    tmp_path: pathlib.Path,
+    platform: str,
+) -> None:
     """A second run must find the micromamba installed by the first one."""
     if golang_exe is None:
         raise pytest.skip("environment variable not set")
     flags = ["--no-mamba", "--no-conda", "--no-conda-exe"]
     # Hide PATH so that both runs must use ensureconda's data directory.
-    env = {**os.environ, "PATH": ""}
+    env = {**isolated_env, "PATH": ""}
     installed = subprocess.check_output([golang_exe, *flags], encoding="utf8", env=env)
     found = subprocess.check_output(
         [golang_exe, "--no-install", *flags], encoding="utf8", env=env
@@ -60,6 +81,8 @@ def test_find_installed_micromamba(golang_exe: Optional[str]) -> None:
     # On Windows, a found executable's extension is spelled as in PATHEXT
     # (".EXE"), while a fresh install reports ".exe".
     assert os.path.normcase(found) == os.path.normcase(installed)
+    if platform == "linux":
+        assert pathlib.Path(installed).parent == tmp_path / "ensure-conda"
 
 
 @pytest.fixture(scope="session")
