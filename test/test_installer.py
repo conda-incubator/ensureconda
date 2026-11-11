@@ -190,6 +190,18 @@ def test_compute_candidates_reads_optional_sha256(
     assert [candidate.sha256 for candidate in candidates] == [None, "ab" * 32]
 
 
+def test_compute_candidates_without_a_build_for_the_platform(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    serve_file_listing(monkeypatch, [file_info("1.0")])
+
+    with pytest.raises(
+        installer.NotPublishedError,
+        match="No conda-standalone package found for linux-s390x in channel conda-forge",
+    ):
+        installer.compute_candidates("conda-forge", "linux-s390x")
+
+
 def test_compute_candidates_skips_broken_and_invalid_versions(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -776,3 +788,51 @@ def test_missing_executable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> 
     with pytest.raises(RuntimeError, match="Could not find conda.exe"):
         installer.stream_conda_executable("https://example.invalid/package.tar.bz2")
     assert not list(tmp_path.iterdir())
+
+
+def request_micromamba(
+    subdir: str, status: int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Install micromamba for subdir from a server that answers with status."""
+
+    def get(
+        session: requests.Session, method: str, url: str, **kwargs: Any
+    ) -> requests.Response:
+        assert url == f"https://micro.mamba.pm/api/micromamba/{subdir}/latest"
+        response = requests.Response()
+        response.status_code = status
+        response.raw = io.BytesIO()
+        return response
+
+    monkeypatch.setattr(requests.Session, "request", get)
+    monkeypatch.setattr(installer, "site_path", lambda: tmp_path)
+    monkeypatch.setattr(installer, "platform_subdir", lambda: subdir)
+    installer.install_micromamba()
+
+
+def test_micromamba_not_published_for_the_platform(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with pytest.raises(
+        installer.NotPublishedError, match="micromamba is not published for linux-s390x"
+    ) as error:
+        request_micromamba("linux-s390x", 404, tmp_path, monkeypatch)
+
+    assert isinstance(error.value.__cause__, requests.HTTPError)
+
+
+@pytest.mark.parametrize(
+    "subdir, status",
+    [
+        # A release that hasn't been uploaded for this platform yet.
+        ("linux-64", 404),
+        ("linux-s390x", 403),
+    ],
+)
+def test_other_micromamba_download_failures_remain_http_errors(
+    subdir: str, status: int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    with pytest.raises(requests.HTTPError) as error:
+        request_micromamba(subdir, status, tmp_path, monkeypatch)
+
+    assert error.value.response.status_code == status

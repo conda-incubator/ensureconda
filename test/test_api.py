@@ -2,9 +2,11 @@ import subprocess
 from pathlib import Path
 
 import pytest
+import requests
 from packaging.version import InvalidVersion, Version
 
 from ensureconda import api, resolve
+from ensureconda.installer import NotPublishedError
 
 BROKEN_MAMBA = Path("broken", "mamba")
 WORKING_MICROMAMBA = Path("working", "micromamba")
@@ -55,3 +57,85 @@ def test_search_without_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     monkeypatch.setattr(resolve, "site_path", lambda: tmp_path)
 
     assert api.ensureconda(no_install=True) is None
+
+
+@pytest.fixture
+def nothing_installed(monkeypatch: pytest.MonkeyPatch) -> None:
+    for finder in [
+        "mamba_executables",
+        "micromamba_executables",
+        "conda_executables",
+        "conda_standalone_executables",
+    ]:
+        monkeypatch.setattr(api, finder, lambda: iter([]))
+
+
+def failing_micromamba_install(
+    monkeypatch: pytest.MonkeyPatch, error: Exception
+) -> None:
+    def install_micromamba() -> Path:
+        raise error
+
+    monkeypatch.setattr(api, "install_micromamba", install_micromamba)
+
+
+NOT_PUBLISHED = "micromamba is not published for linux-s390x"
+
+
+@pytest.mark.usefixtures("nothing_installed")
+def test_unpublished_micromamba_falls_back_to_conda_standalone(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    conda_standalone = Path("data", "conda_standalone")
+    failing_micromamba_install(monkeypatch, NotPublishedError(NOT_PUBLISHED))
+    monkeypatch.setattr(api, "install_conda_exe", lambda: conda_standalone)
+
+    assert api.ensureconda() == conda_standalone
+    assert capsys.readouterr().err == (
+        f"{NOT_PUBLISHED}; trying conda or conda-standalone instead\n"
+    )
+
+
+@pytest.mark.usefixtures("nothing_installed")
+def test_unpublished_micromamba_falls_back_to_conda(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    conda = Path("opt", "conda", "bin", "conda")
+    failing_micromamba_install(monkeypatch, NotPublishedError(NOT_PUBLISHED))
+    monkeypatch.setattr(api, "conda_executables", lambda: iter([conda]))
+
+    assert api.ensureconda(conda_exe=False) == conda
+    assert capsys.readouterr().err == f"{NOT_PUBLISHED}; trying conda instead\n"
+
+
+@pytest.mark.usefixtures("nothing_installed")
+def test_unpublished_micromamba_with_nothing_left_to_try(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failing_micromamba_install(monkeypatch, NotPublishedError(NOT_PUBLISHED))
+
+    with pytest.raises(NotPublishedError, match=NOT_PUBLISHED):
+        api.ensureconda(conda=False, conda_exe=False)
+
+
+@pytest.mark.usefixtures("nothing_installed")
+@pytest.mark.parametrize(
+    "status",
+    [
+        # As for a release that hasn't been uploaded for this platform yet.
+        404,
+        500,
+    ],
+)
+def test_failed_micromamba_download_does_not_fall_back(
+    status: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    response = requests.Response()
+    response.status_code = status
+    failing_micromamba_install(
+        monkeypatch, requests.HTTPError(f"{status} Error", response=response)
+    )
+    monkeypatch.setattr(api, "install_conda_exe", lambda: Path("unused"))
+
+    with pytest.raises(requests.HTTPError):
+        api.ensureconda()

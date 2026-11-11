@@ -5,7 +5,11 @@ from typing import TYPE_CHECKING, Callable, Optional
 
 from packaging.version import InvalidVersion, Version
 
-from ensureconda.installer import install_conda_exe, install_micromamba
+from ensureconda.installer import (
+    NotPublishedError,
+    install_conda_exe,
+    install_micromamba,
+)
 from ensureconda.resolve import (
     conda_executables,
     conda_standalone_executables,
@@ -132,7 +136,26 @@ def ensureconda(
             if exe and micromamba_constraints_met(exe):
                 return exe
         if not no_install:
-            maybe_exe = install_micromamba()
+            try:
+                maybe_exe = install_micromamba()
+            except NotPublishedError as error:
+                # conda-standalone is published for platforms that micromamba
+                # isn't, for example linux-s390x in the anaconda channel.
+                remaining = [
+                    name
+                    for enabled, name in [
+                        (conda, "conda"),
+                        (conda_exe, "conda-standalone"),
+                    ]
+                    if enabled
+                ]
+                if not remaining:
+                    raise
+                print(
+                    f"{error}; trying {' or '.join(remaining)} instead",
+                    file=sys.stderr,
+                )
+                maybe_exe = None
             if maybe_exe is not None and micromamba_constraints_met(maybe_exe):
                 return maybe_exe
     if conda:
