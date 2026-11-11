@@ -37,12 +37,9 @@ go = "*"
 
 [feature.py38.dependencies]
 python = "3.8.*"
-# Version 0.12 and newer require Python >=3.9.
-conda-package-streaming = "0.11.*"
 
-[feature.py313.dependencies]
-python = "3.13.*"
-conda-package-streaming = "0.13.*"
+[feature.py315.dependencies]
+python = "3.15.*"
 
 [environments]
 # Redefine the default environment to include all categories.
@@ -53,4 +50,4 @@ minimal = []
 dev = ["dev"]
 
 test-py38 = ["dev", "py38"]
-test-py313 = ["dev", "py313"]
+test-py315 = ["dev", "py315"]

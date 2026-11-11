@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling>=0.21.1", "hatch-vcs"]
+requires = ["hatchling>=1.27", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
@@ -14,16 +14,10 @@ authors = [
 classifiers = [
     "Development Status :: 5 - Production/Stable",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Programming Language :: Python",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
-    "Programming Language :: Python :: 3.10",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Programming Language :: Python :: 3.13",
+    "Typing :: Typed",
 ]
 dependencies = [
     "appdirs",
@@ -54,6 +48,8 @@ dev = [
 
 [project.urls]
 Homepage = "https://github.com/conda-incubator/ensureconda"
+Issues = "https://github.com/conda-incubator/ensureconda/issues"
+Changelog = "https://github.com/conda-incubator/ensureconda/releases"
 
 [project.scripts]
 ensureconda = "ensureconda.cli:ensureconda_cli"
