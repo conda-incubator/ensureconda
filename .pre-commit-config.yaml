@@ -27,6 +27,28 @@ repos:
           - types-requests
           - click
 
+  # Also type-check on Python 3.8, the oldest version we support. mypy 1.14.1
+  # is the last release that runs on it, and the other dependencies resolve to
+  # their newest versions for Python 3.8, such as click 8.1.
+  - repo: local
+    hooks:
+      - id: mypy-py38
+        name: mypy (Python 3.8)
+        language: python
+        language_version: python3.8
+        entry: mypy
+        args:
+          - --ignore-missing-imports
+          - --scripts-are-modules
+        types_or: [python, pyi]
+        require_serial: true
+        additional_dependencies:
+          - mypy==1.14.1
+          - packaging
+          - types-filelock
+          - types-requests
+          - click
+
   - repo: https://github.com/adrienverge/yamllint
     rev: v1.37.1
     hooks:
