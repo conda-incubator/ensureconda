@@ -190,6 +190,18 @@ def test_compute_candidates_reads_optional_sha256(
     assert [candidate.sha256 for candidate in candidates] == [None, "ab" * 32]
 
 
+def test_compute_candidates_without_a_build_for_the_platform(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    serve_file_listing(monkeypatch, [file_info("1.0")])
+
+    with pytest.raises(
+        installer.NotPublishedError,
+        match="No conda-standalone package found for linux-s390x in channel conda-forge",
+    ):
+        installer.compute_candidates("conda-forge", "linux-s390x")
+
+
 def test_compute_candidates_skips_broken_and_invalid_versions(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:

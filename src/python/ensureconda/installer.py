@@ -42,6 +42,10 @@ RETRY_TIME_BUDGET_SEC = 70
 """Elapsed seconds allowed for scheduling retries; active downloads may finish."""
 
 
+class NotPublishedError(RuntimeError):
+    """Nothing that could be installed is published for this platform."""
+
+
 class AnacondaPkgAttr(NamedTuple):
     """Inner for data from Anaconda API
 
@@ -366,7 +370,7 @@ def compute_candidates(channel: str, subdir: str) -> List[AnacondaPkg]:
         )
     )
     if len(candidates) == 0:
-        raise RuntimeError(
+        raise NotPublishedError(
             f"No conda-standalone package found for {subdir} in channel {channel}"
         )
     return candidates
