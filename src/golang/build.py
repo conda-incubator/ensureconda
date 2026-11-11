@@ -6,8 +6,7 @@ build_arches = [
     ["linux", "arm64"],
     ["linux", "ppc64le"],
     ["darwin", "amd64"],
-    # https://github.com/golang/go/issues/38485
-    # ["darwin", "arm64"],
+    ["darwin", "arm64"],
     ["windows", "amd64"],
     # ["windows", "arm64"],
 ]
