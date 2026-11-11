@@ -48,6 +48,8 @@ dev = [
 
 [project.urls]
 Homepage = "https://github.com/conda-incubator/ensureconda"
+Issues = "https://github.com/conda-incubator/ensureconda/issues"
+Changelog = "https://github.com/conda-incubator/ensureconda/releases"
 
 [project.scripts]
 ensureconda = "ensureconda.cli:ensureconda_cli"
