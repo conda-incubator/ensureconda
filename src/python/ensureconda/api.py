@@ -235,11 +235,10 @@ def ensure(
     followed by version constraints such as ">=2,<3". Names follow packaging's
     canonicalization: case is ignored, and runs of dots, underscores, and
     hyphens are equivalent. Metadata uses the fixed Flavor values above.
-    Search all targets for
-    installed matches before attempting installation, using target order in
-    each pass. With prefer_installed=False, search and attempt installation
-    for each target before moving on. Only micromamba and conda_standalone can
-    be installed.
+    Search all targets for installed matches before attempting installation,
+    using target order in each pass. With prefer_installed=False, search and
+    attempt installation for each target before moving on. Only micromamba
+    and conda_standalone can be installed.
 
     Return the path, flavor, and version, or None if no compatible executable
     is found. With probe_version=False, run --version only when a target has
