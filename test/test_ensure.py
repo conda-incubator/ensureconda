@@ -1,12 +1,14 @@
+import json
 from pathlib import Path
 from test.test_info import fake_version_outputs
 from typing import List, Optional
 
 import pytest
 import requests
+from click.testing import CliRunner
 from packaging.version import Version
 
-from ensureconda import CondaExecutable, api, ensure, ensureconda
+from ensureconda import CondaExecutable, api, cli, ensure, ensureconda
 from ensureconda.installer import NotPublishedError
 
 MICROMAMBA = Path("data", "micromamba")
@@ -313,3 +315,64 @@ def test_all_targets_are_validated_before_searching(
 def test_bare_string_is_not_a_target_sequence() -> None:
     with pytest.raises(TypeError, match="sequence of strings"):
         ensure("micromamba")
+
+
+@pytest.mark.parametrize("as_json", [False, True])
+def test_cli_prefers_installed_conda(
+    as_json: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(api, "conda_executables", lambda: iter([CONDA]))
+    fake_version_outputs(monkeypatch, {"conda": "conda 25.1.1"})
+
+    result = CliRunner().invoke(cli.ensureconda_cli, ["--json"] if as_json else [])
+
+    assert result.exit_code == 0
+    output = result.stdout.splitlines()[-1]
+    assert (json.loads(output)["path"] if as_json else output) == str(CONDA)
+
+
+def test_cli_json_translates_legacy_options(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(api, "mamba_executables", lambda: iter([Path("mamba")]))
+    monkeypatch.setattr(api, "micromamba_executables", lambda: iter([MICROMAMBA]))
+    monkeypatch.setattr(api, "conda_executables", lambda: iter([CONDA]))
+    monkeypatch.setattr(api, "conda_standalone_executables", lambda: iter([STANDALONE]))
+    calls = fake_version_outputs(
+        monkeypatch, {"micromamba": "2.9.0", "conda_standalone": "conda 25.1.1"}
+    )
+
+    result = CliRunner().invoke(
+        cli.ensureconda_cli,
+        [
+            "--json",
+            "--no-mamba",
+            "--no-conda",
+            "--min-mamba-version",
+            "3",
+            "--min-conda-version",
+            "25",
+            "--no-install",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout.splitlines()[-1])["flavor"] == "conda_standalone"
+    assert calls == ["micromamba", "conda_standalone"]
+
+
+@pytest.mark.parametrize(
+    "error", [NotPublishedError("No build"), requests.ConnectionError("Disconnected")]
+)
+def test_cli_json_reports_installation_failure(
+    error: Exception, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail() -> Path:
+        raise error
+
+    monkeypatch.setattr(api, "install_micromamba", fail)
+
+    result = CliRunner().invoke(cli.ensureconda_cli, ["--json", "--no-conda-exe"])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, SystemExit)
+    assert "Error:" in result.output
+    assert str(error) in result.output

@@ -1,12 +1,14 @@
+import json
 import subprocess
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
 
 import pytest
+from click.testing import CliRunner
 from packaging.version import Version
 
-from ensureconda import api, ensure
+from ensureconda import api, cli, ensure
 from ensureconda.api import (
     CondaExecutable,
     Flavor,
@@ -148,3 +150,25 @@ def test_identify_rejects_missing_and_unexecutable_files(
         with pytest.raises(PermissionError):
             identify(conda)
     assert calls == []
+
+
+def test_cli_json(monkeypatch: pytest.MonkeyPatch) -> None:
+    info = CondaExecutable(MICROMAMBA, "micromamba", Version("2.9.0"))
+    monkeypatch.setattr(cli, "ensure", lambda *args, **kwargs: info)
+
+    result = CliRunner().invoke(cli.ensureconda_cli, ["--json"])
+
+    assert result.exit_code == 0
+    # Before click 8.2, the runner's stdout also includes stderr.
+    assert json.loads(result.stdout.splitlines()[-1]) == info.to_json()
+
+
+@pytest.mark.usefixtures("only_micromamba")
+def test_cli_json_runs_one_version_check(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls = fake_version_outputs(monkeypatch, {"micromamba": "2.9.0\n"})
+
+    result = CliRunner().invoke(cli.ensureconda_cli, ["--json", "--no-install"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout.splitlines()[-1])["version"] == "2.9.0"
+    assert calls == ["micromamba"]
