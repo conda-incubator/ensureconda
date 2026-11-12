@@ -170,6 +170,23 @@ def test_no_install() -> None:
     assert ensure(["micromamba", "conda_standalone"], no_install=True) is None
 
 
+@pytest.mark.parametrize("installed", [False, True])
+def test_canonicalized_target_finds_or_installs_the_same_flavor(
+    installed: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if installed:
+        monkeypatch.setattr(
+            api, "conda_standalone_executables", lambda: iter([STANDALONE])
+        )
+    else:
+        monkeypatch.setattr(api, "install_conda_exe", lambda: STANDALONE)
+    fake_version_outputs(monkeypatch, {"conda_standalone": "conda 25.1.1"})
+
+    result = ensure(["Conda.Standalone>=25,<26"])
+
+    assert result == CondaExecutable(STANDALONE, "conda_standalone", Version("25.1.1"))
+
+
 @pytest.mark.parametrize("output", ["1.9.0", "3.0.0", "2.5.0", "garbage", ""])
 def test_target_constraints_allow_a_later_installed_tool(
     output: str, monkeypatch: pytest.MonkeyPatch

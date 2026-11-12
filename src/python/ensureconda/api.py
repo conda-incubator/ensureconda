@@ -15,10 +15,10 @@ from typing import (
     Optional,
     Sequence,
     Tuple,
-    cast,
 )
 
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
+from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
 
 from ensureconda.installer import (
@@ -96,6 +96,7 @@ class CondaExecutable(NamedTuple):
 
 
 _FLAVORS: Tuple[Flavor, ...] = ("mamba", "micromamba", "conda", "conda_standalone")
+_TARGET_FLAVORS = {canonicalize_name(flavor): flavor for flavor in _FLAVORS}
 
 
 def _probe_version(
@@ -198,13 +199,13 @@ def ensureconda(
 
 
 def _parse_target(target: str) -> Tuple[Flavor, _VersionCheck]:
-    match = re.fullmatch(r"([a-z_]+)\s*(.*)", target.strip())
-    if match is None or match[1] not in _FLAVORS:
+    match = re.fullmatch(r"([A-Za-z0-9][A-Za-z0-9._-]*)\s*(.*)", target.strip())
+    flavor = _TARGET_FLAVORS.get(canonicalize_name(match[1])) if match else None
+    if match is None or flavor is None:
         raise ValueError(
             f"Unknown target {target!r}; expected mamba, micromamba, conda, "
             "or conda_standalone, optionally followed by version constraints"
         )
-    flavor = cast(Flavor, match[1])
     constraint = match[2].strip()
     if not constraint:
         return flavor, None
@@ -231,7 +232,10 @@ def ensure(
     """Find or install an executable matching an ordered sequence of targets.
 
     Each target names mamba, micromamba, conda, or conda_standalone, optionally
-    followed by version constraints such as ">=2,<3". Search all targets for
+    followed by version constraints such as ">=2,<3". Names follow packaging's
+    canonicalization: case is ignored, and runs of dots, underscores, and
+    hyphens are equivalent. Metadata uses the fixed Flavor values above.
+    Search all targets for
     installed matches before attempting installation, using target order in
     each pass. With prefer_installed=False, search and attempt installation
     for each target before moving on. Only micromamba and conda_standalone can
