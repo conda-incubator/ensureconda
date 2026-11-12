@@ -1,5 +1,6 @@
 import errno
 import os
+import re
 import subprocess
 import sys
 from functools import partial
@@ -11,8 +12,11 @@ from typing import (
     Literal,
     NamedTuple,
     Optional,
+    Tuple,
+    cast,
 )
 
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.version import InvalidVersion, Version
 
 from ensureconda.installer import (
@@ -69,6 +73,7 @@ def determine_conda_version(exe: "StrPath") -> Version:
 
 
 Flavor = Literal["mamba", "micromamba", "conda", "conda_standalone"]
+_VersionCheck = Optional[Callable[[Version], bool]]
 
 
 class CondaExecutable(NamedTuple):
@@ -253,6 +258,33 @@ def ensureconda(
             if maybe_exe is not None and conda_constraints_met(maybe_exe):
                 return maybe_exe
     return None
+
+
+_FLAVORS: Tuple[Flavor, ...] = ("mamba", "micromamba", "conda", "conda_standalone")
+
+
+def _parse_target(target: str) -> Tuple[Flavor, _VersionCheck]:
+    match = re.fullmatch(r"([a-z_]+)\s*(.*)", target.strip())
+    if match is None or match[1] not in _FLAVORS:
+        raise ValueError(
+            f"Unknown target {target!r}; expected mamba, micromamba, conda, "
+            "or conda_standalone, optionally followed by version constraints"
+        )
+    flavor = cast(Flavor, match[1])
+    constraint = match[2].strip()
+    if not constraint:
+        return flavor, None
+    try:
+        lower_bound = re.fullmatch(r">=\s*([^,]+)", constraint)
+        if lower_bound is not None:
+            # Preserve the legacy API's Version comparison, including local
+            # version labels, which SpecifierSet disallows in >= bounds.
+            minimum = Version(lower_bound[1])
+            return flavor, lambda version: version >= minimum
+        specifier = SpecifierSet(constraint)
+    except (InvalidSpecifier, InvalidVersion) as error:
+        raise ValueError(f"Invalid version constraint in target {target!r}") from error
+    return flavor, lambda version: specifier.contains(version, prereleases=True)
 
 
 def identify(executable: "StrPath") -> CondaExecutable:
