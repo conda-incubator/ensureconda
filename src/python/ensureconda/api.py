@@ -9,9 +9,12 @@ from typing import (
     TYPE_CHECKING,
     Callable,
     Dict,
+    Iterator,
+    List,
     Literal,
     NamedTuple,
     Optional,
+    Sequence,
     Tuple,
     cast,
 )
@@ -93,7 +96,9 @@ class CondaExecutable(NamedTuple):
         }
 
 
-def _probe_version(executable: "StrPath", flavor: Flavor) -> Optional[Version]:
+def _probe_version(
+    executable: "StrPath", flavor: Flavor, *, report_errors: bool = False
+) -> Optional[Version]:
     probes: Dict[Flavor, Callable[["StrPath"], Version]] = {
         "mamba": determine_mamba_version,
         "micromamba": determine_micromamba_version,
@@ -102,8 +107,16 @@ def _probe_version(executable: "StrPath", flavor: Flavor) -> Optional[Version]:
     }
     try:
         return probes[flavor](executable)
-    except (subprocess.CalledProcessError, OSError, InvalidVersion, UnicodeDecodeError):
-        return None
+    except subprocess.CalledProcessError as error:
+        reason = f"`--version` exited with status {error.returncode}"
+    except (OSError, InvalidVersion, UnicodeDecodeError) as error:
+        reason = str(error)
+    if report_errors:
+        print(
+            f"Skipping {executable}: could not determine its version ({reason})",
+            file=sys.stderr,
+        )
+    return None
 
 
 def _known_version(version: Optional[Version]) -> Optional[Version]:
@@ -285,6 +298,103 @@ def _parse_target(target: str) -> Tuple[Flavor, _VersionCheck]:
     except (InvalidSpecifier, InvalidVersion) as error:
         raise ValueError(f"Invalid version constraint in target {target!r}") from error
     return flavor, lambda version: specifier.contains(version, prereleases=True)
+
+
+def ensure(
+    targets: Sequence[str] = _FLAVORS,
+    *,
+    no_install: bool = False,
+    prefer_installed: bool = True,
+    probe_version: bool = True,
+) -> Optional[CondaExecutable]:
+    """Find or install an executable matching an ordered sequence of targets.
+
+    Each target names mamba, micromamba, conda, or conda_standalone, optionally
+    followed by version constraints such as ">=2,<3". Search all targets for
+    installed matches before attempting installation, using target order in
+    each pass. With prefer_installed=False, search and attempt installation
+    for each target before moving on. Only micromamba and conda_standalone can
+    be installed.
+
+    Return the path, flavor, and version, or None if no compatible executable
+    is found. With probe_version=False, run --version only when a target has
+    constraints; otherwise the result's version is None. Failed version
+    probes cannot satisfy a constraint. The version probes retain their
+    legacy 0.0.0 fallback for unrecognized output, reported as None in metadata.
+    Prereleases are considered when they satisfy the version constraints.
+    Installation fetches the latest available build; constraints filter the
+    result and do not select an older release to download.
+
+    Set no_install=True to search only. An empty target sequence returns None.
+    Invalid targets raise ValueError before any search or installation.
+    """
+    if isinstance(targets, str):
+        raise TypeError("targets must be a sequence of strings, not a single string")
+    parsed = [_parse_target(target) for target in targets]
+    finders: Dict[Flavor, Callable[[], Iterator[Path]]] = {
+        "mamba": mamba_executables,
+        "micromamba": micromamba_executables,
+        "conda": conda_executables,
+        "conda_standalone": conda_standalone_executables,
+    }
+    installers: Dict[Flavor, Callable[[], Optional[Path]]] = {
+        "micromamba": install_micromamba,
+        "conda_standalone": install_conda_exe,
+    }
+
+    def compatible(
+        path: Path, flavor: Flavor, accepts_version: _VersionCheck
+    ) -> Optional[CondaExecutable]:
+        version = None
+        if accepts_version is not None or probe_version:
+            version = _probe_version(
+                path, flavor, report_errors=accepts_version is not None
+            )
+        if accepts_version is not None and (
+            version is None or not accepts_version(version)
+        ):
+            return None
+        return CondaExecutable(path, flavor, _known_version(version))
+
+    # False denotes searching; True denotes installation. Interleave the two
+    # operations for the legacy API, or put every search before installation.
+    steps: List[Tuple[Flavor, _VersionCheck, bool]] = []
+    for flavor, accepts_version in parsed:
+        steps.append((flavor, accepts_version, False))
+        if not prefer_installed and not no_install and flavor in installers:
+            steps.append((flavor, accepts_version, True))
+    if prefer_installed and not no_install:
+        steps.extend(
+            (flavor, accepts_version, True)
+            for flavor, accepts_version in parsed
+            if flavor in installers
+        )
+
+    for index, (flavor, accepts_version, installing) in enumerate(steps):
+        if installing:
+            try:
+                installed_path = installers[flavor]()
+            except NotPublishedError as error:
+                remaining = dict.fromkeys(
+                    name.replace("_", "-") for name, _, _ in steps[index + 1 :]
+                )
+                if not remaining:
+                    raise
+                print(
+                    f"{error}; trying {' or '.join(remaining)} instead",
+                    file=sys.stderr,
+                )
+                continue
+            candidates = (
+                iter([installed_path]) if installed_path is not None else iter([])
+            )
+        else:
+            candidates = finders[flavor]()
+        for path in candidates:
+            result = compatible(path, flavor, accepts_version)
+            if result is not None:
+                return result
+    return None
 
 
 def identify(executable: "StrPath") -> CondaExecutable:

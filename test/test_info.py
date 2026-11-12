@@ -6,6 +6,7 @@ from typing import Any, Dict, List
 import pytest
 from packaging.version import Version
 
+from ensureconda import api, ensure
 from ensureconda.api import (
     CondaExecutable,
     Flavor,
@@ -38,6 +39,50 @@ def fake_version_outputs(
 
     monkeypatch.setattr(subprocess, "check_output", check_output)
     return calls
+
+
+@pytest.fixture
+def only_micromamba(monkeypatch: pytest.MonkeyPatch) -> None:
+    for finder in ["mamba_executables", "conda_executables"]:
+        monkeypatch.setattr(api, finder, lambda: iter([]))
+    monkeypatch.setattr(api, "micromamba_executables", lambda: iter([MICROMAMBA]))
+
+
+@pytest.mark.usefixtures("only_micromamba")
+def test_ensure_reports_flavor_and_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_version_outputs(monkeypatch, {"micromamba": "2.9.0\n"})
+
+    info = ensure(no_install=True)
+
+    assert info == CondaExecutable(MICROMAMBA, "micromamba", Version("2.9.0"))
+    assert info.to_json() == {
+        "path": str(MICROMAMBA),
+        "flavor": "micromamba",
+        "version": "2.9.0",
+    }
+
+
+@pytest.mark.usefixtures("only_micromamba")
+def test_ensure_reports_unknown_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_version_outputs(monkeypatch, {})
+
+    assert ensure(no_install=True) == CondaExecutable(MICROMAMBA, "micromamba", None)
+
+
+@pytest.mark.usefixtures("only_micromamba")
+def test_ensure_reuses_the_target_version_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = fake_version_outputs(monkeypatch, {"micromamba": "2.9.0\n"})
+
+    info = ensure(["micromamba>=1.0"], no_install=True)
+
+    assert info == CondaExecutable(MICROMAMBA, "micromamba", Version("2.9.0"))
+    assert calls == ["micromamba"]
 
 
 @pytest.mark.parametrize(
