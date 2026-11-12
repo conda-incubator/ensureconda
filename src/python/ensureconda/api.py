@@ -3,7 +3,6 @@ import os
 import re
 import subprocess
 import sys
-from functools import partial
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -96,6 +95,9 @@ class CondaExecutable(NamedTuple):
         }
 
 
+_FLAVORS: Tuple[Flavor, ...] = ("mamba", "micromamba", "conda", "conda_standalone")
+
+
 def _probe_version(
     executable: "StrPath", flavor: Flavor, *, report_errors: bool = False
 ) -> Optional[Version]:
@@ -168,112 +170,31 @@ def ensureconda(
     min_conda_version: Optional[Version] = None,
     min_mamba_version: Optional[Version] = None,
 ) -> "Optional[StrPath]":
-    """Ensures that conda is installed
+    """Compatibility API returning an executable path, or None.
 
-    Parameters
-    ----------
-    mamba:
-        Allow resolving mamba
-    micromamba:
-        Allow resolving micromamba.  Micromamba implements a subset of features of conda su
-        it may not be the correct choice in all cases.
-    conda:
-        Allow resolving conda.
-    conda_exe
-        Allow resolving conda-standalong
-    min_conda_version:
-        Minimum version of conda required
-    min_mamba_version:
-        Minimum version of mamba required
+    The booleans select targets in the legacy order: mamba, micromamba, conda,
+    conda_standalone. Search and attempt installation for each target before
+    moving on. Version probes run only when a minimum version is requested.
 
-    Returns the path to a conda executable.
+    For an ordered target sequence and executable metadata, use :func:`ensure`.
     """
-
-    def version_constraint_met(
-        executable: "StrPath",
-        min_version: Optional[Version],
-        version_fn: Callable[["StrPath"], Version],
-    ) -> bool:
-        if min_version is None:
-            return True
-        try:
-            version = version_fn(executable)
-        except subprocess.CalledProcessError as error:
-            reason = f"`--version` exited with status {error.returncode}"
-        except (OSError, InvalidVersion, UnicodeDecodeError) as error:
-            reason = str(error)
-        else:
-            return version >= min_version
-        # A broken candidate shouldn't prevent finding a working one.
-        print(
-            f"Skipping {executable}: could not determine its version ({reason})",
-            file=sys.stderr,
-        )
-        return False
-
-    conda_constraints_met = partial(
-        version_constraint_met,
-        min_version=min_conda_version,
-        version_fn=determine_conda_version,
+    targets = [
+        name if minimum is None else f"{name}>={minimum}"
+        for enabled, name, minimum in [
+            (mamba, "mamba", min_mamba_version),
+            (micromamba, "micromamba", min_mamba_version),
+            (conda, "conda", min_conda_version),
+            (conda_exe, "conda_standalone", min_conda_version),
+        ]
+        if enabled
+    ]
+    result = ensure(
+        targets,
+        no_install=no_install,
+        prefer_installed=False,
+        probe_version=False,
     )
-    mamba_constraints_met = partial(
-        version_constraint_met,
-        min_version=min_mamba_version,
-        version_fn=determine_mamba_version,
-    )
-    micromamba_constraints_met = partial(
-        version_constraint_met,
-        min_version=min_mamba_version,
-        version_fn=determine_micromamba_version,
-    )
-
-    if mamba:
-        for exe in mamba_executables():
-            if exe and mamba_constraints_met(exe):
-                return exe
-    if micromamba:
-        for exe in micromamba_executables():
-            if exe and micromamba_constraints_met(exe):
-                return exe
-        if not no_install:
-            try:
-                maybe_exe = install_micromamba()
-            except NotPublishedError as error:
-                # conda-standalone is published for platforms that micromamba
-                # isn't, for example linux-s390x in the anaconda channel.
-                remaining = [
-                    name
-                    for enabled, name in [
-                        (conda, "conda"),
-                        (conda_exe, "conda-standalone"),
-                    ]
-                    if enabled
-                ]
-                if not remaining:
-                    raise
-                print(
-                    f"{error}; trying {' or '.join(remaining)} instead",
-                    file=sys.stderr,
-                )
-                maybe_exe = None
-            if maybe_exe is not None and micromamba_constraints_met(maybe_exe):
-                return maybe_exe
-    if conda:
-        for exe in conda_executables():
-            if exe and conda_constraints_met(exe):
-                return exe
-    if conda_exe:
-        for exe in conda_standalone_executables():
-            if exe and conda_constraints_met(exe):
-                return exe
-        if not no_install:
-            maybe_exe = install_conda_exe()
-            if maybe_exe is not None and conda_constraints_met(maybe_exe):
-                return maybe_exe
-    return None
-
-
-_FLAVORS: Tuple[Flavor, ...] = ("mamba", "micromamba", "conda", "conda_standalone")
+    return None if result is None else result.path
 
 
 def _parse_target(target: str) -> Tuple[Flavor, _VersionCheck]:

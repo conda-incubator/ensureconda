@@ -1,12 +1,12 @@
 from pathlib import Path
 from test.test_info import fake_version_outputs
-from typing import List
+from typing import List, Optional
 
 import pytest
 import requests
 from packaging.version import Version
 
-from ensureconda import CondaExecutable, api, ensure
+from ensureconda import CondaExecutable, api, ensure, ensureconda
 from ensureconda.installer import NotPublishedError
 
 MICROMAMBA = Path("data", "micromamba")
@@ -65,6 +65,18 @@ def test_installed_conda_precedes_installing_micromamba(
     assert calls == ["conda"]
 
 
+def test_legacy_api_installs_micromamba_before_searching_for_conda(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(api, "conda_executables", lambda: iter([CONDA]))
+    monkeypatch.setattr(api, "install_micromamba", lambda: MICROMAMBA)
+    calls = fake_version_outputs(monkeypatch, {})
+
+    assert ensureconda() == MICROMAMBA
+    assert ensureconda(no_install=True) == CONDA
+    assert calls == []
+
+
 def test_prefer_installed_can_be_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(api, "conda_executables", lambda: iter([CONDA]))
     monkeypatch.setattr(api, "install_micromamba", lambda: MICROMAMBA)
@@ -112,6 +124,33 @@ def test_no_install_applies_with_target_preference(
     result = ensure(["micromamba", "conda"], prefer_installed=False, no_install=True)
 
     assert result is not None and result.path == CONDA
+
+
+@pytest.mark.parametrize("version", ["2.0rc1", ""])
+def test_legacy_version_comparison_is_preserved(
+    version: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(api, "micromamba_executables", lambda: iter([MICROMAMBA]))
+    calls = fake_version_outputs(monkeypatch, {"micromamba": version})
+
+    # Legacy comparisons accept prereleases and the probes' 0.0.0 fallback.
+    assert ensureconda(no_install=True, min_mamba_version=Version("0")) == MICROMAMBA
+    assert calls == ["micromamba"]
+
+
+@pytest.mark.parametrize(
+    "version, expected",
+    [("1.0", None), ("1.0+aaa", None), ("1.0+local", MICROMAMBA), ("1.1", MICROMAMBA)],
+)
+def test_legacy_minimum_can_have_a_local_version_label(
+    version: str, expected: Optional[Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(api, "micromamba_executables", lambda: iter([MICROMAMBA]))
+    fake_version_outputs(monkeypatch, {"micromamba": version})
+
+    assert (
+        ensureconda(no_install=True, min_mamba_version=Version("1.0+local")) == expected
+    )
 
 
 @pytest.mark.parametrize("targets", [[], ["conda"], ["mamba"]])

@@ -10,6 +10,7 @@ from ensureconda import api, ensure
 from ensureconda.api import (
     CondaExecutable,
     Flavor,
+    ensureconda,
     identify,
 )
 
@@ -71,6 +72,16 @@ def test_ensure_reports_unknown_version(
     fake_version_outputs(monkeypatch, {})
 
     assert ensure(no_install=True) == CondaExecutable(MICROMAMBA, "micromamba", None)
+
+
+@pytest.mark.usefixtures("only_micromamba")
+def test_ensureconda_still_runs_no_version_check_by_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = fake_version_outputs(monkeypatch, {"micromamba": "2.9.0\n"})
+
+    assert ensureconda(no_install=True) == MICROMAMBA
+    assert calls == []
 
 
 @pytest.mark.usefixtures("only_micromamba")
