@@ -21,6 +21,9 @@ from ensureconda.resolve import (
         ("linux", "ppc64le", 64, "linux-ppc64le"),
         ("darwin", "x86_64", 64, "osx-64"),
         ("darwin", "arm64", 64, "osx-arm64"),
+        # Machine names are matched in any case.
+        ("linux", "X86_64", 64, "linux-64"),
+        ("linux", "AArch64", 64, "linux-aarch64"),
         ("zos", "", 64, "zos-z"),
         ("zos", "s390x", 64, "zos-z"),
     ],

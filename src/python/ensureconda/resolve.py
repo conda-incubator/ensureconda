@@ -145,8 +145,9 @@ def subdir_for(sys_platform: str, machine: str, bits: int) -> str:
         return "zos-z"
     os_name = os_names.get(sys_platform)
     if os_name is not None:
-        if machine in non_x86_machines:
-            return f"{os_name}-{machine}"
+        name = machine.lower()
+        if name in non_x86_machines:
+            return f"{os_name}-{name}"
         return f"{os_name}-{bits}"
     raise UnsupportedPlatformError(
         f"Unsupported platform {sys_platform!r} ({machine}): "
