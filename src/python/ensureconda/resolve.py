@@ -137,8 +137,12 @@ def subdir_for(sys_platform: str, machine: str, bits: int) -> str:
     non_x86_machines = {
         "aarch64",  # for linux
         "arm64",  # for osx
+        "armv6l",
+        "armv7l",
         "ppc64",
         "ppc64le",
+        "riscv64",
+        "s390x",
     }
 
     if sys_platform == "zos":

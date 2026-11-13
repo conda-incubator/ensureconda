@@ -19,6 +19,9 @@ from ensureconda.resolve import (
         ("linux", "i686", 32, "linux-32"),
         ("linux", "aarch64", 64, "linux-aarch64"),
         ("linux", "ppc64le", 64, "linux-ppc64le"),
+        ("linux", "s390x", 64, "linux-s390x"),
+        ("linux", "riscv64", 64, "linux-riscv64"),
+        ("linux", "armv7l", 32, "linux-armv7l"),
         ("darwin", "x86_64", 64, "osx-64"),
         ("darwin", "arm64", 64, "osx-arm64"),
         # Machine names are matched in any case.
@@ -56,6 +59,14 @@ def test_platform_subdir_goes_by_the_python_build_on_windows(
     monkeypatch.setattr(sysconfig, "get_platform", lambda: "win-amd64")
     monkeypatch.setattr(platform, "machine", lambda: "ARM64")
     assert platform_subdir() == "win-64"
+
+
+def test_platform_subdir_goes_by_the_machine_off_windows(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(platform, "machine", lambda: "s390x")
+    assert platform_subdir() == "linux-s390x"
 
 
 @pytest.mark.parametrize("sys_platform", ["freebsd14", "cygwin", "aix"])
