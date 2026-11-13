@@ -11,10 +11,12 @@ from ensureconda.installer import (
     install_micromamba,
 )
 from ensureconda.resolve import (
+    UnsupportedPlatformError,
     conda_executables,
     conda_standalone_executables,
     mamba_executables,
     micromamba_executables,
+    platform_subdir,
 )
 
 if TYPE_CHECKING:
@@ -127,6 +129,17 @@ def ensureconda(
         version_fn=determine_micromamba_version,
     )
 
+    # Nothing can be installed on a platform that has no conda subdir. Still
+    # look for what is already installed there, and raise only if that finds
+    # nothing.
+    unsupported_platform: Optional[UnsupportedPlatformError] = None
+    if not no_install and (micromamba or conda_exe):
+        try:
+            platform_subdir()
+        except UnsupportedPlatformError as error:
+            unsupported_platform = error
+            no_install = True
+
     if mamba:
         for exe in mamba_executables():
             if exe and mamba_constraints_met(exe):
@@ -170,4 +183,6 @@ def ensureconda(
             maybe_exe = install_conda_exe()
             if maybe_exe is not None and conda_constraints_met(maybe_exe):
                 return maybe_exe
+    if unsupported_platform is not None:
+        raise unsupported_platform
     return None
