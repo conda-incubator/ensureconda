@@ -3,13 +3,17 @@ package cmd
 import (
 	"archive/tar"
 	"bytes"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/go-resty/resty/v2"
 	"github.com/gofrs/flock"
 	log "github.com/sirupsen/logrus"
 )
@@ -217,5 +221,130 @@ func TestExtractTarFilesReportsWaitingForLock(t *testing.T) {
 	}
 	if message := messages.next(t); !strings.Contains(message, "lock acquired after") {
 		t.Errorf("logged %q, want a notice that the lock was acquired", message)
+	}
+}
+
+func TestInstallersHoldDownloadLock(t *testing.T) {
+	tests := []struct {
+		name string
+		// The Python implementation uses the same names, so the two coordinate.
+		lockName string
+		install  func(serverURL string) (string, error)
+	}{
+		{"micromamba", "micromamba_install.lock", func(serverURL string) (string, error) {
+			return installMicromamba(serverURL + "/latest")
+		}},
+		{"conda-standalone", "conda_exe_install.lock", func(string) (string, error) {
+			return InstallCondaStandalone()
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			useSitePath(t)
+			lockPath := filepath.Join(sitePath(), tt.lockName)
+			var requests, requestsUnderLock atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				if held, err := lockIsHeld(lockPath); err == nil && held {
+					requestsUnderLock.Add(1)
+				}
+				http.NotFound(w, r)
+			}))
+			defer server.Close()
+			// InstallCondaStandalone starts by asking the Anaconda API.
+			useAnacondaAPI(t, server)
+
+			if _, err := tt.install(server.URL); err == nil {
+				t.Fatal("the install succeeded, want the refused download to fail")
+			}
+			if n, locked := requests.Load(), requestsUnderLock.Load(); n == 0 || locked != n {
+				t.Errorf("%d of %d requests were made while holding %s, want all of at least one", locked, n, tt.lockName)
+			}
+			if held, err := lockIsHeld(lockPath); err != nil || held {
+				t.Errorf("%s is still locked after the failed download (error %v)", tt.lockName, err)
+			}
+		})
+	}
+}
+
+func TestInstallMicromambaReusesUsableInstall(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the stand-in for micromamba is a shell script")
+	}
+	useSitePath(t)
+	var requests atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	// As if another process installed micromamba while this one waited.
+	target := targetExeFilename("micromamba")
+	if err := os.WriteFile(target, []byte("#!/bin/sh\necho 2.0.0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	got, err := installMicromamba(server.URL + "/latest")
+	if err != nil || got != target {
+		t.Fatalf("installMicromamba() = %v, %v; want %v", got, err, target)
+	}
+	if n := requests.Load(); n != 0 {
+		t.Errorf("made %d requests, want none for a usable install", n)
+	}
+}
+
+// refuseDownloads answers every request of the shared HTTP client with a 404,
+// and returns the number of requests made.
+func refuseDownloads(t *testing.T) *atomic.Int32 {
+	t.Helper()
+	var requests atomic.Int32
+	client := resty.New().SetTransport(roundTripper(func(r *http.Request) (*http.Response, error) {
+		requests.Add(1)
+		return &http.Response{StatusCode: http.StatusNotFound, Status: "404 Not Found", Body: http.NoBody, Request: r}, nil
+	}))
+	previous := httpClient
+	httpClient = func() *resty.Client { return client }
+	t.Cleanup(func() { httpClient = previous })
+	return &requests
+}
+
+type roundTripper func(*http.Request) (*http.Response, error)
+
+func (f roundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestEnsureCondaReplacesUnusableMicromamba(t *testing.T) {
+	tests := []struct {
+		name     string
+		content  string
+		mode     os.FileMode
+		unixOnly bool
+	}{
+		{"corrupt", "not an executable", 0755, false},
+		{"older than the minimum version", "#!/bin/sh\necho 0.1.0\n", 0755, true},
+		{"not executable", "#!/bin/sh\necho 2.0.0\n", 0644, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.unixOnly && runtime.GOOS == "windows" {
+				t.Skip("the stand-in for micromamba is a shell script")
+			}
+			useSitePath(t)
+			// Nothing to find elsewhere.
+			t.Setenv("PATH", "")
+			requests := refuseDownloads(t)
+			// Newly written, as a micromamba that was installed today.
+			if err := os.WriteFile(targetExeFilename("micromamba"), []byte(tt.content), tt.mode); err != nil {
+				t.Fatal(err)
+			}
+
+			_, err := EnsureConda(false, true, false, false, false)
+
+			if err == nil {
+				t.Error("EnsureConda() succeeded, want the refused download to fail")
+			}
+			if n := requests.Load(); n != 1 {
+				t.Errorf("made %d requests, want 1 to replace the micromamba", n)
+			}
+		})
 	}
 }
