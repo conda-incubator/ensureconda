@@ -92,6 +92,10 @@ def safe_next(it: Iterator[T]) -> Optional[T]:
         return None
 
 
+class UnsupportedPlatformError(RuntimeError):
+    """No conda subdir is known for the platform."""
+
+
 def platform_subdir() -> str:
     """Return the conda subdir of the running Python, detected as conda does."""
     import struct
@@ -122,7 +126,8 @@ def windows_subdir(sysconfig_platform: str, bits: int) -> str:
 def subdir_for(sys_platform: str, machine: str, bits: int) -> str:
     """Map a platform other than Windows to its conda subdir.
 
-    This follows conda's own detection.
+    This follows conda's own detection, but raises for a platform that conda
+    has no subdir for.
     """
     os_names = {
         "linux2": "linux",
@@ -138,10 +143,15 @@ def subdir_for(sys_platform: str, machine: str, bits: int) -> str:
 
     if sys_platform == "zos":
         return "zos-z"
-    os_name = os_names[sys_platform]
-    if machine in non_x86_machines:
-        return f"{os_name}-{machine}"
-    return f"{os_name}-{bits}"
+    os_name = os_names.get(sys_platform)
+    if os_name is not None:
+        if machine in non_x86_machines:
+            return f"{os_name}-{machine}"
+        return f"{os_name}-{bits}"
+    raise UnsupportedPlatformError(
+        f"Unsupported platform {sys_platform!r} ({machine}): "
+        "no conda subdir is known for it"
+    )
 
 
 is_windows = platform.system() == "Windows"
