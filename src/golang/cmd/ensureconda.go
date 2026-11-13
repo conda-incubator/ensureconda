@@ -204,10 +204,16 @@ func platformSubdir(goos string, goarch string) (string, error) {
 	platformMap := map[ArchSpec]string{
 		{"darwin", "amd64"}:  "osx-64",
 		{"darwin", "arm64"}:  "osx-arm64",
+		{"linux", "386"}:     "linux-32",
 		{"linux", "amd64"}:   "linux-64",
 		{"linux", "arm64"}:   "linux-aarch64",
+		{"linux", "ppc64"}:   "linux-ppc64",
 		{"linux", "ppc64le"}: "linux-ppc64le",
+		{"linux", "riscv64"}: "linux-riscv64",
+		{"linux", "s390x"}:   "linux-s390x",
+		{"windows", "386"}:   "win-32",
 		{"windows", "amd64"}: "win-64",
+		{"windows", "arm64"}: "win-arm64",
 	}
 
 	subdir, ok := platformMap[ArchSpec{goos, goarch}]
