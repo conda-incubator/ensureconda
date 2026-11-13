@@ -195,10 +195,12 @@ type ArchSpec struct {
 	arch string
 }
 
-func PlatformSubdir() string {
-	os_ := runtime.GOOS
-	arch := runtime.GOARCH
+// PlatformSubdir returns the conda subdir of the running platform.
+func PlatformSubdir() (string, error) {
+	return platformSubdir(runtime.GOOS, runtime.GOARCH)
+}
 
+func platformSubdir(goos string, goarch string) (string, error) {
 	platformMap := map[ArchSpec]string{
 		{"darwin", "amd64"}:  "osx-64",
 		{"darwin", "arm64"}:  "osx-arm64",
@@ -208,7 +210,11 @@ func PlatformSubdir() string {
 		{"windows", "amd64"}: "win-64",
 	}
 
-	return platformMap[ArchSpec{os_, arch}]
+	subdir, ok := platformMap[ArchSpec{goos, goarch}]
+	if !ok {
+		return "", fmt.Errorf("unsupported platform %s/%s: no conda subdir is known for it", goos, goarch)
+	}
+	return subdir, nil
 }
 
 // Execute executes the root command.
