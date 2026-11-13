@@ -24,3 +24,14 @@ updates:
       go-modules-security:
         applies-to: security-updates
         patterns: ["*"]
+
+  # The hook revisions in .pre-commit-config.yaml. Dependabot has no security
+  # updates for hooks, so there is only one group. It skips local hooks, which
+  # leaves the mypy pin of the Python 3.8 hook alone.
+  - package-ecosystem: pre-commit
+    directory: /
+    schedule:
+      interval: monthly
+    groups:
+      pre-commit:
+        patterns: ["*"]
