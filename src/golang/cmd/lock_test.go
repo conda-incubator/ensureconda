@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -48,6 +49,20 @@ func lockIsHeld(lockPath string) (bool, error) {
 	return !acquired, probe.Unlock()
 }
 
+// fileNames returns the names of the entries in dir, sorted.
+func fileNames(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, len(entries))
+	for i, entry := range entries {
+		names[i] = entry.Name()
+	}
+	return names
+}
+
 func TestExtractTarFilesReleasesLock(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "tool")
 
@@ -84,17 +99,39 @@ func TestExtractTarFilesRemovesTemporaryFileOnError(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Not closed: closing would report the missing content instead.
-	target := filepath.Join(t.TempDir(), "tool")
+	dir := t.TempDir()
+	target := filepath.Join(dir, "tool")
 
 	_, err := extractTarFiles(tar.NewReader(&buf), map[string]string{"bin/tool": target})
 
 	if err == nil {
 		t.Fatal("extractTarFiles() succeeded on a truncated archive")
 	}
-	for _, path := range []string{target, target + ".tmp"} {
-		if _, statErr := os.Stat(path); !os.IsNotExist(statErr) {
-			t.Errorf("%s exists after a failed extraction (stat error %v)", path, statErr)
-		}
+	// Neither the executable nor its temporary file, whatever that was called.
+	if names, want := fileNames(t, dir), []string{"tool.lock"}; !slices.Equal(names, want) {
+		t.Errorf("the directory holds %v after a failed extraction, want %v", names, want)
+	}
+}
+
+func TestExtractTarFilesLeavesOtherTemporaryFilesAlone(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "tool")
+	// Releases that locked the temporary file wrote it here. They don't take the
+	// lock on the target, so one of them may be writing it at the same time.
+	otherWriter := target + ".tmp"
+	if err := os.WriteFile(otherWriter, []byte("partial"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := extractTarFiles(tarWith(t, "bin/tool", []byte("binary")), map[string]string{"bin/tool": target}); err != nil {
+		t.Fatalf("extractTarFiles() error = %v", err)
+	}
+
+	if content, err := os.ReadFile(otherWriter); err != nil || string(content) != "partial" {
+		t.Errorf("the other writer's file holds %q, %v; want it untouched", content, err)
+	}
+	if names, want := fileNames(t, dir), []string{"tool", "tool.lock", "tool.tmp"}; !slices.Equal(names, want) {
+		t.Errorf("the directory holds %v after extracting, want %v", names, want)
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/bzip2"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -420,7 +421,9 @@ func extractTarFile(header *tar.Header, targetFileName string, tarReader *tar.Re
 	}
 	defer unlock()
 
-	tmpFileName := targetFileName + ".tmp"
+	// A name of its own, as in the Python implementation. A writer that doesn't
+	// take this lock, such as an older release, then can't write to the same file.
+	tmpFileName := fmt.Sprintf("%s.%s.tmp", targetFileName, rand.Text())
 	err = writeExecutable(tmpFileName, header, tarReader)
 	if err == nil {
 		err = os.Rename(tmpFileName, targetFileName)
