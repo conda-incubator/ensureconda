@@ -421,6 +421,10 @@ func extractTarFile(header *tar.Header, targetFileName string, tarReader *tar.Re
 	}
 	defer unlock()
 
+	// Every extraction writes its temporary file while holding this lock, so
+	// one that is here now was left behind by a run that was interrupted.
+	removeTemporaryFiles(targetFileName)
+
 	// A name of its own, as in the Python implementation. A writer that doesn't
 	// take this lock, such as an older release, then can't write to the same file.
 	tmpFileName := fmt.Sprintf("%s.%s.tmp", targetFileName, rand.Text())
@@ -433,6 +437,19 @@ func extractTarFile(header *tar.Header, targetFileName string, tarReader *tar.Re
 		_ = os.Remove(tmpFileName)
 	}
 	return err
+}
+
+// removeTemporaryFiles removes the temporary files of extractions to
+// targetFileName. It leaves "<target>.tmp" alone, which older releases write
+// without taking the lock on the target.
+func removeTemporaryFiles(targetFileName string) {
+	dir, name := filepath.Split(targetFileName)
+	entries, _ := os.ReadDir(dir)
+	for _, entry := range entries {
+		if isTemporary, _ := filepath.Match(name+".*.tmp", entry.Name()); isTemporary {
+			_ = os.Remove(filepath.Join(dir, entry.Name()))
+		}
+	}
 }
 
 // writeExecutable writes the current entry of tarReader to fileName and marks

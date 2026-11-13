@@ -135,6 +135,24 @@ func TestExtractTarFilesLeavesOtherTemporaryFilesAlone(t *testing.T) {
 	}
 }
 
+func TestExtractTarFilesRemovesLeftoverTemporaryFiles(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "tool")
+	// As an extraction leaves behind when it is killed while writing.
+	leftover := target + ".4Z65VGLRJJTMOIYW5CPAR3EMTQ.tmp"
+	if err := os.WriteFile(leftover, []byte("partial"), 0755); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := extractTarFiles(tarWith(t, "bin/tool", []byte("binary")), map[string]string{"bin/tool": target}); err != nil {
+		t.Fatalf("extractTarFiles() error = %v", err)
+	}
+
+	if names, want := fileNames(t, dir), []string{"tool", "tool.lock"}; !slices.Equal(names, want) {
+		t.Errorf("the directory holds %v after extracting, want %v", names, want)
+	}
+}
+
 // useSitePath points the install location at a temporary directory.
 func useSitePath(t *testing.T) {
 	t.Helper()
