@@ -1,4 +1,5 @@
 import json
+import subprocess
 from pathlib import Path
 from test.test_info import fake_version_outputs
 from typing import List, Optional
@@ -6,7 +7,7 @@ from typing import List, Optional
 import pytest
 import requests
 from click.testing import CliRunner
-from packaging.version import Version
+from packaging.version import InvalidVersion, Version
 
 from ensureconda import CondaExecutable, api, cli, ensure, ensureconda
 from ensureconda.installer import NotPublishedError
@@ -115,6 +116,95 @@ def test_unprobed_installation(monkeypatch: pytest.MonkeyPatch) -> None:
         MICROMAMBA, "micromamba", None
     )
     assert calls == []
+
+
+@pytest.mark.parametrize("installed", [False, True])
+@pytest.mark.parametrize(
+    "error, skip",
+    [
+        (subprocess.CalledProcessError(1, [str(MICROMAMBA), "--version"]), True),
+        (OSError(8, "Exec format error"), True),
+        (InvalidVersion("Invalid version: 'garbage'"), False),
+        (UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"), False),
+    ],
+    ids=["nonzero-exit", "exec-error", "invalid-version", "undecodable-output"],
+)
+def test_unconstrained_probe_errors(
+    installed: bool,
+    error: Exception,
+    skip: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def broken_version(executable: object) -> Version:
+        raise error
+
+    monkeypatch.setattr(api, "determine_micromamba_version", broken_version)
+    if installed:
+        monkeypatch.setattr(api, "micromamba_executables", lambda: iter([MICROMAMBA]))
+    else:
+        monkeypatch.setattr(api, "install_micromamba", lambda: MICROMAMBA)
+
+    result = ensure(["micromamba"], no_install=installed)
+
+    assert result == (None if skip else CondaExecutable(MICROMAMBA, "micromamba", None))
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    if skip:
+        reason = (
+            "`--version` exited with status 1"
+            if isinstance(error, subprocess.CalledProcessError)
+            else str(error)
+        )
+        assert captured.err == (
+            f"Skipping {MICROMAMBA}: could not determine its version ({reason})\n"
+        )
+    else:
+        assert captured.err == ""
+
+
+def test_unconstrained_target_can_disable_execution_check(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(api, "micromamba_executables", lambda: iter([MICROMAMBA]))
+    calls = fake_version_outputs(monkeypatch, {})
+
+    assert ensure(["micromamba"], probe_version=False) == CondaExecutable(
+        MICROMAMBA, "micromamba", None
+    )
+    assert calls == []
+    assert capsys.readouterr().err == ""
+
+
+def test_failed_probe_reports_skip_before_installation(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def install() -> Path:
+        assert f"Skipping {CONDA}" in capsys.readouterr().err
+        return MICROMAMBA
+
+    monkeypatch.setattr(api, "conda_executables", lambda: iter([CONDA]))
+    monkeypatch.setattr(api, "install_micromamba", install)
+    calls = fake_version_outputs(monkeypatch, {"micromamba": "2.9.0"})
+
+    assert ensure(["conda", "micromamba"]) == CondaExecutable(
+        MICROMAMBA, "micromamba", Version("2.9.0")
+    )
+    assert calls == ["conda", "micromamba"]
+
+
+def test_failed_probe_allows_a_later_installer(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(api, "install_micromamba", lambda: MICROMAMBA)
+    monkeypatch.setattr(api, "install_conda_exe", lambda: STANDALONE)
+    calls = fake_version_outputs(monkeypatch, {"conda_standalone": "conda 25.1.1"})
+
+    assert ensure(["micromamba", "conda_standalone"]) == CondaExecutable(
+        STANDALONE, "conda_standalone", Version("25.1.1")
+    )
+    assert calls == ["micromamba", "conda_standalone"]
+    assert f"Skipping {MICROMAMBA}" in capsys.readouterr().err
 
 
 def test_no_install_applies_with_target_preference(

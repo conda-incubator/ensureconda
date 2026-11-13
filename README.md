@@ -122,9 +122,21 @@ version probes cannot satisfy constraints. For compatibility, the existing
 probes' `0.0.0` fallback for unrecognized output is retained for constraint
 checks, but reported as `None` in metadata.
 
-By default, `ensure()` probes versions to populate the result. Set
-`probe_version=False` to run `--version` only when a target's constraints
-require it; an unmeasured version is returned as `None`.
+By default, `ensure()` runs `--version` on each candidate it considers:
+
+- If the command succeeds and reports a recognized version, that version is
+  returned as metadata.
+- If it succeeds but the version cannot be parsed or the output cannot be
+  decoded, an unconstrained target can still return it with `version=None`.
+- If the command cannot start or exits unsuccessfully, `ensure()` reports the
+  failure on stderr and skips the candidate. It continues with other candidates,
+  later targets, and installation according to the selected search order.
+
+This check also applies to candidates returned by an installer. It does not
+force replacement of a cached executable that the installer considers fresh.
+Set `probe_version=False` to run `--version` only when a target's constraints
+require it. For an unconstrained target, this also disables checking that the
+executable runs, and the returned version is `None`.
 
 `ensureconda()` is a compatibility wrapper around `ensure()`, translating its
 booleans and minimum versions into targets and passing `prefer_installed=False`

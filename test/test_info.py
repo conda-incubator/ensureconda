@@ -6,7 +6,7 @@ from typing import Any, Dict, List
 
 import pytest
 from click.testing import CliRunner
-from packaging.version import Version
+from packaging.version import InvalidVersion, Version
 
 from ensureconda import api, cli, ensure
 from ensureconda.api import (
@@ -68,12 +68,14 @@ def test_ensure_reports_flavor_and_version(
 
 
 @pytest.mark.usefixtures("only_micromamba")
+@pytest.mark.parametrize("output", ["garbage", ""])
 def test_ensure_reports_unknown_version(
-    monkeypatch: pytest.MonkeyPatch,
+    output: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    fake_version_outputs(monkeypatch, {})
+    fake_version_outputs(monkeypatch, {"micromamba": output})
 
     assert ensure(no_install=True) == CondaExecutable(MICROMAMBA, "micromamba", None)
+    assert capsys.readouterr().err == ""
 
 
 @pytest.mark.usefixtures("only_micromamba")
@@ -135,6 +137,32 @@ def test_identify_rejects_unrecognized_executables(
 
     with pytest.raises(ValueError, match="not a recognized conda executable"):
         identify(python)
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        subprocess.CalledProcessError(1, ["micromamba", "--version"]),
+        OSError(8, "Exec format error"),
+        InvalidVersion("Invalid version: 'garbage'"),
+        UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"),
+    ],
+    ids=["nonzero-exit", "exec-error", "invalid-version", "undecodable-output"],
+)
+def test_identify_still_reports_unknown_version_after_probe_failure(
+    error: Exception,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def broken_version(executable: object) -> Version:
+        raise error
+
+    executable = executable_file(tmp_path / "micromamba")
+    monkeypatch.setattr(api, "determine_micromamba_version", broken_version)
+
+    assert identify(executable) == CondaExecutable(executable, "micromamba", None)
+    assert capsys.readouterr().err == ""
 
 
 def test_identify_rejects_missing_and_unexecutable_files(

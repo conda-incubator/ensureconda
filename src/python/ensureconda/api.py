@@ -99,27 +99,14 @@ _FLAVORS: Tuple[Flavor, ...] = ("mamba", "micromamba", "conda", "conda_standalon
 _TARGET_FLAVORS = {canonicalize_name(flavor): flavor for flavor in _FLAVORS}
 
 
-def _probe_version(
-    executable: "StrPath", flavor: Flavor, *, report_errors: bool = False
-) -> Optional[Version]:
+def _probe_version(executable: "StrPath", flavor: Flavor) -> Version:
     probes: Dict[Flavor, Callable[["StrPath"], Version]] = {
         "mamba": determine_mamba_version,
         "micromamba": determine_micromamba_version,
         "conda": determine_conda_version,
         "conda_standalone": determine_conda_version,
     }
-    try:
-        return probes[flavor](executable)
-    except subprocess.CalledProcessError as error:
-        reason = f"`--version` exited with status {error.returncode}"
-    except (OSError, InvalidVersion, UnicodeDecodeError) as error:
-        reason = str(error)
-    if report_errors:
-        print(
-            f"Skipping {executable}: could not determine its version ({reason})",
-            file=sys.stderr,
-        )
-    return None
+    return probes[flavor](executable)
 
 
 def _known_version(version: Optional[Version]) -> Optional[Version]:
@@ -241,10 +228,16 @@ def ensure(
     and conda_standalone can be installed.
 
     Return the path, flavor, and version, or None if no compatible executable
-    is found. With probe_version=False, run --version only when a target has
-    constraints; otherwise the result's version is None. Failed version
-    probes cannot satisfy a constraint. The version probes retain their
-    legacy 0.0.0 fallback for unrecognized output, reported as None in metadata.
+    is found. If --version cannot start or exits unsuccessfully, report the
+    failure on stderr and skip the candidate, including after installation.
+    Successful commands with unparseable or undecodable output can satisfy
+    unconstrained targets, with version=None.
+
+    With probe_version=False, run --version only when a target has constraints;
+    otherwise the version is None and the executable is not checked by running
+    it. Failed version probes cannot satisfy a constraint. The version probes
+    retain their legacy 0.0.0 fallback for unrecognized output, reported as None
+    in metadata.
     Prereleases are considered when they satisfy the version constraints.
     Installation fetches the latest available build; constraints filter the
     result and do not select an older release to download.
@@ -271,9 +264,29 @@ def ensure(
     ) -> Optional[CondaExecutable]:
         version = None
         if accepts_version is not None or probe_version:
-            version = _probe_version(
-                path, flavor, report_errors=accepts_version is not None
-            )
+            try:
+                version = _probe_version(path, flavor)
+            except (
+                subprocess.CalledProcessError,
+                OSError,
+                InvalidVersion,
+                UnicodeDecodeError,
+            ) as error:
+                # Unknown metadata is acceptable without a constraint, but a
+                # command that cannot run must never pass a requested probe.
+                if accepts_version is not None or isinstance(
+                    error, (subprocess.CalledProcessError, OSError)
+                ):
+                    reason = (
+                        f"`--version` exited with status {error.returncode}"
+                        if isinstance(error, subprocess.CalledProcessError)
+                        else str(error)
+                    )
+                    print(
+                        f"Skipping {path}: could not determine its version ({reason})",
+                        file=sys.stderr,
+                    )
+                    return None
         if accepts_version is not None and (
             version is None or not accepts_version(version)
         ):
@@ -341,5 +354,8 @@ def identify(executable: "StrPath") -> CondaExecutable:
     flavor = _flavor_from_name(executable) or _flavor_from_output(executable)
     if flavor is None:
         raise ValueError(f"{executable} is not a recognized conda executable")
-    version = _known_version(_probe_version(executable, flavor))
+    try:
+        version = _known_version(_probe_version(executable, flavor))
+    except (subprocess.CalledProcessError, OSError, InvalidVersion, UnicodeDecodeError):
+        version = None
     return CondaExecutable(path, flavor, version)
