@@ -400,14 +400,14 @@ func extractTarFile(header *tar.Header, targetFileName string, tarReader *tar.Re
 		"dstPath": targetFileName,
 	}).Debug("extracting from tarball")
 
-	fileLock := flock.New(targetFileName + ".lock")
-	if err := fileLock.Lock(); err != nil {
-		return fmt.Errorf("locking %s: %w", targetFileName, err)
+	unlock, err := lockFile(targetFileName+".lock", "writing "+filepath.Base(targetFileName))
+	if err != nil {
+		return err
 	}
-	defer func() { _ = fileLock.Unlock() }()
+	defer unlock()
 
 	tmpFileName := targetFileName + ".tmp"
-	err := writeExecutable(tmpFileName, header, tarReader)
+	err = writeExecutable(tmpFileName, header, tarReader)
 	if err == nil {
 		err = os.Rename(tmpFileName, targetFileName)
 	}

@@ -187,3 +187,35 @@ func TestLockInstallReportsOnlyWhenWaiting(t *testing.T) {
 		t.Errorf("logged %q, want a notice that the lock was acquired", message)
 	}
 }
+
+func TestExtractTarFilesReportsWaitingForLock(t *testing.T) {
+	messages := captureLog(t)
+	target := filepath.Join(t.TempDir(), "tool")
+	// As another process that is writing the executable.
+	writer := flock.New(target + ".lock")
+	if locked, err := writer.TryLock(); err != nil || !locked {
+		t.Fatalf("TryLock() = %v, %v; want the lock", locked, err)
+	}
+	t.Cleanup(func() { _ = writer.Unlock() })
+
+	archive := tarWith(t, "bin/tool", []byte("binary"))
+	done := make(chan error, 1)
+	go func() {
+		_, err := extractTarFiles(archive, map[string]string{"bin/tool": target})
+		done <- err
+	}()
+	if message := messages.next(t); !strings.Contains(message, "waiting for another process to finish writing tool") {
+		t.Errorf("logged %q, want a notice about waiting", message)
+	}
+	expectStillWaiting(t, done)
+
+	if err := writer.Unlock(); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatalf("extractTarFiles() error = %v after the lock was released", err)
+	}
+	if message := messages.next(t); !strings.Contains(message, "lock acquired after") {
+		t.Errorf("logged %q, want a notice that the lock was acquired", message)
+	}
+}
