@@ -1,9 +1,9 @@
 # ensureconda
 
-[![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/conda-incubator/ensureconda/test.yml?branch=main)](https://github.com/conda-incubator/ensureconda/actions?query=workflow%3A%22Python+package%22)
-[![Licence: MIT](https://img.shields.io/github/license/conda-incubator/ensureconda)](https://github.com/conda-incubator/ensureconda/blob/master/LICENSE-MIT)
+[![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/conda-incubator/ensureconda/test.yml?branch=main)](https://github.com/conda-incubator/ensureconda/actions/workflows/test.yml)
+[![Licence: MIT](https://img.shields.io/github/license/conda-incubator/ensureconda)](https://github.com/conda-incubator/ensureconda/blob/main/LICENSE-MIT)
 [![PyPI](https://img.shields.io/pypi/v/ensureconda)](https://pypi.org/project/ensureconda)
-[![code-style Black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://https://github.com/psf/black)
+[![code-style Black](https://img.shields.io/badge/code%20style-black-000000.svg)](https://github.com/psf/black)
 
 ## Installation
 
@@ -17,14 +17,21 @@ Python 3.8+ and PyPy.
 $ pip install ensureconda
 ```
 
+It's also available from conda-forge:
+
+```bash
+$ conda install -c conda-forge ensureconda
+```
+
 ### Go based
 
-Additionally ensureconda is also available as a statically linked fully stand-alone
-golang binary.  This is a full reimplementation with the same cli as the python version
+ensureconda is also available as a stand-alone Go binary; the Linux builds are
+statically linked. It reimplements the same command-line interface, except for
+the `--min-conda-version` and `--min-mamba-version` options.
 
 These can be downloaded from [releases](https://github.com/conda-incubator/ensureconda/releases/latest)
 
-Alternatively if you have go installed you can install from githubg using
+Alternatively, if you have Go installed, you can install it from GitHub using
 
 ```shell
 $ go install github.com/conda-incubator/ensureconda@latest
