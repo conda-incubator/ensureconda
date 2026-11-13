@@ -3,6 +3,7 @@ package cmd
 import (
 	"archive/tar"
 	"bytes"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -11,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -276,6 +278,87 @@ func TestExtractTarFilesReportsWaitingForLock(t *testing.T) {
 	}
 	if message := messages.next(t); !strings.Contains(message, "lock acquired after") {
 		t.Errorf("logged %q, want a notice that the lock was acquired", message)
+	}
+}
+
+func TestRetryWhileBeingDeleted(t *testing.T) {
+	previousDelay := lockOpenRetryDelay
+	lockOpenRetryDelay = 0
+	t.Cleanup(func() { lockOpenRetryDelay = previousDelay })
+
+	sharingViolation := &os.PathError{Op: "open", Path: "test.lock", Err: syscall.Errno(32)}
+	accessDenied := &os.PathError{Op: "open", Path: "test.lock", Err: os.ErrPermission}
+	diskFull := &os.PathError{Op: "open", Path: "test.lock", Err: syscall.ENOSPC}
+	tests := []struct {
+		name string
+		goos string
+		// The error of each call in turn; the last one repeats.
+		results   []error
+		wantCalls int
+		wantErr   error
+	}{
+		{"the lock file is free", "windows", []error{nil}, 1, nil},
+		{"the deletion finishes", "windows", []error{sharingViolation, accessDenied, nil}, 3, nil},
+		{"the lock file stays out of reach", "windows", []error{accessDenied}, lockOpenAttempts, accessDenied},
+		{"another failure", "windows", []error{diskFull}, 1, diskFull},
+		{"another system", "linux", []error{accessDenied}, 1, accessDenied},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			calls := 0
+			err := retryWhileBeingDeleted(tt.goos, func() error {
+				result := tt.results[min(calls, len(tt.results)-1)]
+				calls++
+				return result
+			})
+			if err != tt.wantErr || calls != tt.wantCalls {
+				t.Errorf("retryWhileBeingDeleted() = %v after %d calls, want %v after %d", err, calls, tt.wantErr, tt.wantCalls)
+			}
+		})
+	}
+}
+
+func TestLockFileWhileLockFileIsDeleted(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("only Windows refuses to open a file that is being deleted")
+	}
+	lockPath := filepath.Join(t.TempDir(), "test.lock")
+	logger := log.StandardLogger()
+	previousOutput := logger.Out
+	logger.SetOutput(io.Discard)
+	t.Cleanup(func() { logger.SetOutput(previousOutput) })
+
+	// As the Python implementation on Windows: take the lock, release it, and
+	// delete the lock file, over and over.
+	stop := make(chan struct{})
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			peer := flock.New(lockPath)
+			if locked, _ := peer.TryLock(); locked {
+				_ = peer.Unlock()
+			}
+			_ = os.Remove(lockPath)
+		}
+	}()
+	t.Cleanup(func() {
+		close(stop)
+		<-stopped
+	})
+
+	// In CI, two seconds of this were enough for a plain TryLock to fail.
+	for deadline := time.Now().Add(2 * time.Second); time.Now().Before(deadline); {
+		unlock, err := lockFile(lockPath, "testing")
+		if err != nil {
+			t.Fatalf("lockFile() error = %v", err)
+		}
+		unlock()
 	}
 }
 

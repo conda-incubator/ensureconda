@@ -365,19 +365,51 @@ func lockInstall(lockName string) (func(), error) {
 // to wait for another process, which it describes as busy with activity.
 func lockFile(lockPath string, activity string) (func(), error) {
 	fileLock := flock.New(lockPath)
-	locked, err := fileLock.TryLock()
+	var locked bool
+	err := retryWhileBeingDeleted(runtime.GOOS, func() (err error) {
+		locked, err = fileLock.TryLock()
+		return err
+	})
 	if err != nil {
 		return nil, fmt.Errorf("locking %s: %w", lockPath, err)
 	}
 	if !locked {
 		log.WithField("lockPath", lockPath).Infof("waiting for another process to finish %s", activity)
 		start := time.Now()
-		if err := fileLock.Lock(); err != nil {
+		if err := retryWhileBeingDeleted(runtime.GOOS, fileLock.Lock); err != nil {
 			return nil, fmt.Errorf("locking %s: %w", lockPath, err)
 		}
 		log.WithField("lockPath", lockPath).Infof("lock acquired after %s", time.Since(start).Round(100*time.Millisecond))
 	}
 	return func() { _ = fileLock.Unlock() }, nil
+}
+
+// How often and how long apart to try to open a lock file that is being
+// deleted, before reporting the failure. The delay is a variable so that tests
+// don't have to wait.
+const lockOpenAttempts = 50
+
+var lockOpenRetryDelay = 20 * time.Millisecond
+
+// retryWhileBeingDeleted calls acquire until it no longer fails because its
+// lock file is being deleted. On Windows, the Python implementation deletes a
+// lock file when it releases the lock, and the file can't be opened while that
+// is under way. The Python implementation treats that as a held lock too.
+func retryWhileBeingDeleted(goos string, acquire func() error) error {
+	err := acquire()
+	for attempt := 1; attempt < lockOpenAttempts && isBeingDeleted(goos, err); attempt++ {
+		time.Sleep(lockOpenRetryDelay)
+		err = acquire()
+	}
+	return err
+}
+
+// isBeingDeleted reports whether err is what opening a file that is being
+// deleted fails with: access denied or a sharing violation on Windows, and
+// nothing elsewhere.
+func isBeingDeleted(goos string, err error) bool {
+	const windowsSharingViolation = syscall.Errno(32)
+	return goos == "windows" && (errors.Is(err, os.ErrPermission) || errors.Is(err, windowsSharingViolation))
 }
 
 func extractTarFiles(tarReader *tar.Reader, fileNameMap map[string]string) (string, error) {
