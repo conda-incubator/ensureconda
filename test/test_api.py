@@ -1,4 +1,6 @@
+import platform
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -10,6 +12,48 @@ from ensureconda.installer import NotPublishedError
 
 BROKEN_MAMBA = Path("broken", "mamba")
 WORKING_MICROMAMBA = Path("working", "micromamba")
+INSTALLED_CONDA = Path("opt", "conda", "bin", "conda")
+
+
+def on_unsupported_platform(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, *installed_conda: Path
+) -> None:
+    # No conda subdir exists for mips64.
+    monkeypatch.setattr(sys, "platform", "linux")
+    monkeypatch.setattr(platform, "machine", lambda: "mips64")
+    monkeypatch.setattr("ensureconda.installer.site_path", lambda: tmp_path)
+    for finder in [
+        "mamba_executables",
+        "micromamba_executables",
+        "conda_standalone_executables",
+    ]:
+        monkeypatch.setattr(api, finder, lambda: iter([]))
+    monkeypatch.setattr(api, "conda_executables", lambda: iter(installed_conda))
+
+
+def test_unsupported_platform_still_finds_an_installed_conda(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    on_unsupported_platform(monkeypatch, tmp_path, INSTALLED_CONDA)
+
+    assert api.ensureconda() == INSTALLED_CONDA
+
+
+def test_unsupported_platform_with_nothing_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    on_unsupported_platform(monkeypatch, tmp_path)
+
+    with pytest.raises(RuntimeError, match=r"Unsupported platform 'linux' \(mips64\)"):
+        api.ensureconda()
+
+
+def test_unsupported_platform_is_no_error_when_nothing_would_be_installed(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    on_unsupported_platform(monkeypatch, tmp_path)
+
+    assert api.ensureconda(micromamba=False, conda_exe=False) is None
 
 
 @pytest.mark.parametrize(

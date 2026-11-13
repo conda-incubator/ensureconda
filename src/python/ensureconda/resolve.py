@@ -3,6 +3,7 @@ import pathlib
 import platform
 import shutil
 import sys
+import sysconfig
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterator, Optional, TypeVar
 
@@ -91,36 +92,81 @@ def safe_next(it: Iterator[T]) -> Optional[T]:
         return None
 
 
-def platform_subdir() -> str:
-    # Adapted from conda.context
-    _platform_map = {
-        "linux2": "linux",
-        "linux": "linux",
-        "darwin": "osx",
-        "win32": "win",
-    }
-    non_x86_machines = {
-        "aarch64",  # for linux
-        "arm64",  # for osx
-        "ppc64",
-        "ppc64le",
-    }
-    _arch_names = {
-        32: "x86",
-        64: "x86_64",
-    }
+class UnsupportedPlatformError(RuntimeError):
+    """No conda subdir is known for the platform."""
 
+
+def platform_subdir() -> str:
+    """Return the conda subdir of the running Python, detected as conda does."""
     import struct
 
     bits = 8 * struct.calcsize("P")
-    plat = _platform_map[sys.platform]
-    machine = platform.machine()
-    if machine in non_x86_machines:
-        return f"{plat}-{machine}"
-    elif sys.platform.lower() == "zos":
+    if sys.platform == "win32":
+        return windows_subdir(sysconfig.get_platform(), bits)
+    return subdir_for(sys.platform, platform.machine(), bits)
+
+
+def windows_subdir(sysconfig_platform: str, bits: int) -> str:
+    """Map the build of a Windows Python to its conda subdir.
+
+    Like conda, this goes by what the interpreter was built for, so an x86-64
+    Python on Windows on ARM gets win-64. platform.machine() can't decide
+    this: for that Python it answers ARM64 from Python 3.12 on, and AMD64
+    before.
+    """
+    windows_subdirs = {
+        "win-amd64": "win-64",
+        "win-arm64": "win-arm64",
+        "win32": "win-32",
+    }
+    # Other builds, such as MinGW's, keep the pointer-size subdir as before.
+    return windows_subdirs.get(sysconfig_platform, f"win-{bits}")
+
+
+def subdir_for(sys_platform: str, machine: str, bits: int) -> str:
+    """Map a platform other than Windows to its conda subdir.
+
+    This follows conda's own detection, but raises for a platform that conda
+    has no subdir for. conda itself takes any machine it doesn't list for x86.
+    """
+    os_names = {
+        "linux2": "linux",
+        "linux": "linux",
+        "darwin": "osx",
+    }
+    # Keep this in step with platformSubdir in src/golang/cmd/ensureconda.go.
+    non_x86_subdirs = {
+        ("linux", "aarch64"): "linux-aarch64",
+        ("linux", "armv6l"): "linux-armv6l",
+        ("linux", "armv7l"): "linux-armv7l",
+        # What a 64-bit kernel reports to a process with the 32-bit
+        # personality, as in an arm/v7 container on an arm64 host.
+        ("linux", "armv8l"): "linux-armv7l",
+        ("linux", "ppc64"): "linux-ppc64",
+        ("linux", "ppc64le"): "linux-ppc64le",
+        ("linux", "riscv64"): "linux-riscv64",
+        ("linux", "s390x"): "linux-s390x",
+        ("osx", "arm64"): "osx-arm64",
+    }
+    # Machine names for x86, whose subdir depends on the pointer size instead.
+    x86_machines = {"x86_64", "amd64", "i386", "i486", "i586", "i686", "x86"}
+
+    if sys_platform == "zos":
         return "zos-z"
-    else:
-        return f"{plat}-{bits}"
+    os_name = os_names.get(sys_platform)
+    if os_name is not None:
+        name = machine.lower()
+        # platform.machine() returns an empty string when it can't tell. Take
+        # that for x86, as before.
+        if not name or name in x86_machines:
+            return f"{os_name}-{bits}"
+        subdir = non_x86_subdirs.get((os_name, name))
+        if subdir is not None:
+            return subdir
+    raise UnsupportedPlatformError(
+        f"Unsupported platform {sys_platform!r} ({machine}): "
+        "no conda subdir is known for it"
+    )
 
 
 is_windows = platform.system() == "Windows"

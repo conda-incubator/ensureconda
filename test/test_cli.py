@@ -8,6 +8,7 @@ from click.testing import CliRunner
 from ensureconda import cli
 from ensureconda.cli import ensureconda_cli
 from ensureconda.installer import NotPublishedError
+from ensureconda.resolve import UnsupportedPlatformError
 
 
 @pytest.mark.parametrize("option", ["--min-conda-version", "--min-mamba-version"])
@@ -30,8 +31,12 @@ def test_invalid_version_is_a_usage_error(option: str) -> None:
             NotPublishedError("No conda-standalone package found for linux-s390x"),
             "Error: No conda-standalone package found for linux-s390x\n",
         ),
+        (
+            UnsupportedPlatformError("Unsupported platform 'linux' (mips64)"),
+            "Error: Unsupported platform 'linux' (mips64)\n",
+        ),
     ],
-    ids=["download-failure", "not-published"],
+    ids=["download-failure", "not-published", "unsupported-platform"],
 )
 def test_failed_installation_ends_with_one_line(
     error: Exception, expected_output: str, monkeypatch: pytest.MonkeyPatch
