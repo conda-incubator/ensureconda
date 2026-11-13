@@ -92,8 +92,16 @@ def safe_next(it: Iterator[T]) -> Optional[T]:
 
 
 def platform_subdir() -> str:
-    # Adapted from conda.context
-    _platform_map = {
+    """Return the conda subdir of the running Python, detected as conda does."""
+    import struct
+
+    bits = 8 * struct.calcsize("P")
+    return subdir_for(sys.platform, platform.machine(), bits)
+
+
+def subdir_for(sys_platform: str, machine: str, bits: int) -> str:
+    """Map a platform to its conda subdir, following conda's own detection."""
+    os_names = {
         "linux2": "linux",
         "linux": "linux",
         "darwin": "osx",
@@ -105,22 +113,14 @@ def platform_subdir() -> str:
         "ppc64",
         "ppc64le",
     }
-    _arch_names = {
-        32: "x86",
-        64: "x86_64",
-    }
 
-    import struct
-
-    bits = 8 * struct.calcsize("P")
-    plat = _platform_map[sys.platform]
-    machine = platform.machine()
+    os_name = os_names[sys_platform]
     if machine in non_x86_machines:
-        return f"{plat}-{machine}"
-    elif sys.platform.lower() == "zos":
+        return f"{os_name}-{machine}"
+    elif sys_platform.lower() == "zos":
         return "zos-z"
     else:
-        return f"{plat}-{bits}"
+        return f"{os_name}-{bits}"
 
 
 is_windows = platform.system() == "Windows"
