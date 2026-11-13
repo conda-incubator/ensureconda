@@ -17,12 +17,14 @@ from ensureconda.resolve import (
     [
         ("linux", "x86_64", 64, "linux-64"),
         ("linux", "i686", 32, "linux-32"),
+        ("linux", "", 64, "linux-64"),
         ("linux", "aarch64", 64, "linux-aarch64"),
         ("linux", "ppc64le", 64, "linux-ppc64le"),
         ("linux", "s390x", 64, "linux-s390x"),
         ("linux", "riscv64", 64, "linux-riscv64"),
         ("linux", "armv7l", 32, "linux-armv7l"),
         ("darwin", "x86_64", 64, "osx-64"),
+        ("darwin", "", 64, "osx-64"),
         ("darwin", "arm64", 64, "osx-arm64"),
         # Machine names are matched in any case.
         ("linux", "X86_64", 64, "linux-64"),
@@ -75,3 +77,17 @@ def test_subdir_for_unsupported_platform(sys_platform: str) -> None:
         UnsupportedPlatformError, match=f"Unsupported platform '{sys_platform}'"
     ):
         subdir_for(sys_platform, "x86_64", 64)
+
+
+@pytest.mark.parametrize("machine", ["mips64", "loongarch64", "sparc64"])
+def test_subdir_for_unsupported_machine(machine: str) -> None:
+    with pytest.raises(
+        UnsupportedPlatformError,
+        match=f"Unsupported platform 'linux' \\({machine}\\)",
+    ):
+        subdir_for("linux", machine, 64)
+
+
+def test_unsupported_platform_error_names_the_machine_as_reported() -> None:
+    with pytest.raises(UnsupportedPlatformError, match=r"\(Power Macintosh\)"):
+        subdir_for("darwin", "Power Macintosh", 32)

@@ -127,7 +127,7 @@ def subdir_for(sys_platform: str, machine: str, bits: int) -> str:
     """Map a platform other than Windows to its conda subdir.
 
     This follows conda's own detection, but raises for a platform that conda
-    has no subdir for.
+    has no subdir for. conda itself takes any machine it doesn't list for x86.
     """
     os_names = {
         "linux2": "linux",
@@ -144,15 +144,20 @@ def subdir_for(sys_platform: str, machine: str, bits: int) -> str:
         "riscv64",
         "s390x",
     }
+    # Machine names for x86, whose subdir depends on the pointer size instead.
+    x86_machines = {"x86_64", "amd64", "i386", "i486", "i586", "i686", "x86"}
 
     if sys_platform == "zos":
         return "zos-z"
     os_name = os_names.get(sys_platform)
     if os_name is not None:
         name = machine.lower()
+        # platform.machine() returns an empty string when it can't tell. Take
+        # that for x86, as before.
+        if not name or name in x86_machines:
+            return f"{os_name}-{bits}"
         if name in non_x86_machines:
             return f"{os_name}-{name}"
-        return f"{os_name}-{bits}"
     raise UnsupportedPlatformError(
         f"Unsupported platform {sys_platform!r} ({machine}): "
         "no conda subdir is known for it"
