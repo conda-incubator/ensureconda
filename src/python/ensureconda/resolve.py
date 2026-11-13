@@ -136,13 +136,12 @@ def subdir_for(sys_platform: str, machine: str, bits: int) -> str:
         "ppc64le",
     }
 
+    if sys_platform == "zos":
+        return "zos-z"
     os_name = os_names[sys_platform]
     if machine in non_x86_machines:
         return f"{os_name}-{machine}"
-    elif sys_platform.lower() == "zos":
-        return "zos-z"
-    else:
-        return f"{os_name}-{bits}"
+    return f"{os_name}-{bits}"
 
 
 is_windows = platform.system() == "Windows"
