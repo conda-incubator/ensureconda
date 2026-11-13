@@ -1,4 +1,6 @@
-from .api import ensureconda
+from .api import CondaExecutable, ensure, ensureconda, identify
+
+__all__ = ["CondaExecutable", "ensure", "ensureconda", "identify", "__version__"]
 
 try:
     from ._version import version as __version__
