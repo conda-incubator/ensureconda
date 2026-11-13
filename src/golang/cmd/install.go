@@ -124,20 +124,11 @@ func InstallCondaStandalone() (string, error) {
 		return "", err
 	}
 
-	// Ensure site path exists before locking
-	_ = os.MkdirAll(sitePath(), 0700)
-
-	// Lock the install to prevent concurrent downloads, similar to Python implementation
-	lockPath := filepath.Join(sitePath(), "conda_exe_install.lock")
-	fileLock := flock.New(lockPath)
-
-	// Block until we acquire the lock (mimics Python's lock_with_feedback behavior)
-	log.WithFields(log.Fields{"lockPath": lockPath}).Info("acquiring conda download lock")
-	if err := fileLock.Lock(); err != nil {
-		return "", fmt.Errorf("acquiring conda download lock: %w", err)
+	unlock, err := lockInstall("conda_exe_install.lock")
+	if err != nil {
+		return "", err
 	}
-	defer func() { _ = fileLock.Unlock() }()
-	log.WithFields(log.Fields{"lockPath": lockPath}).Info("acquired conda download lock")
+	defer unlock()
 
 	// Check if already installed and fresh
 	target := targetExeFilename("conda_standalone")
@@ -344,6 +335,34 @@ func installMicromamba(url string) (string, error) {
 		})
 
 	return installedExe, err
+}
+
+// lockInstall takes the named download lock in the site path, so that
+// concurrent processes download each executable only once. The lock names match
+// the Python implementation, so the two coordinate.
+func lockInstall(lockName string) (func(), error) {
+	_ = os.MkdirAll(sitePath(), 0700)
+	return lockFile(filepath.Join(sitePath(), lockName), "downloading")
+}
+
+// lockFile blocks until it holds the lock at lockPath, and returns a function
+// that releases it. Like the Python implementation, it reports only when it has
+// to wait for another process, which it describes as busy with activity.
+func lockFile(lockPath string, activity string) (func(), error) {
+	fileLock := flock.New(lockPath)
+	locked, err := fileLock.TryLock()
+	if err != nil {
+		return nil, fmt.Errorf("locking %s: %w", lockPath, err)
+	}
+	if !locked {
+		log.WithField("lockPath", lockPath).Infof("waiting for another process to finish %s", activity)
+		start := time.Now()
+		if err := fileLock.Lock(); err != nil {
+			return nil, fmt.Errorf("locking %s: %w", lockPath, err)
+		}
+		log.WithField("lockPath", lockPath).Infof("lock acquired after %s", time.Since(start).Round(100*time.Millisecond))
+	}
+	return func() { _ = fileLock.Unlock() }, nil
 }
 
 func extractTarFiles(tarReader *tar.Reader, fileNameMap map[string]string) (string, error) {
