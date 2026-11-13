@@ -3,6 +3,7 @@ import pathlib
 import platform
 import shutil
 import sys
+import sysconfig
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterator, Optional, TypeVar
 
@@ -96,16 +97,37 @@ def platform_subdir() -> str:
     import struct
 
     bits = 8 * struct.calcsize("P")
+    if sys.platform == "win32":
+        return windows_subdir(sysconfig.get_platform(), bits)
     return subdir_for(sys.platform, platform.machine(), bits)
 
 
+def windows_subdir(sysconfig_platform: str, bits: int) -> str:
+    """Map the build of a Windows Python to its conda subdir.
+
+    Like conda, this goes by what the interpreter was built for, so an x86-64
+    Python on Windows on ARM gets win-64. platform.machine() can't decide
+    this: for that Python it answers ARM64 from Python 3.12 on, and AMD64
+    before.
+    """
+    windows_subdirs = {
+        "win-amd64": "win-64",
+        "win-arm64": "win-arm64",
+        "win32": "win-32",
+    }
+    # Other builds, such as MinGW's, keep the pointer-size subdir as before.
+    return windows_subdirs.get(sysconfig_platform, f"win-{bits}")
+
+
 def subdir_for(sys_platform: str, machine: str, bits: int) -> str:
-    """Map a platform to its conda subdir, following conda's own detection."""
+    """Map a platform other than Windows to its conda subdir.
+
+    This follows conda's own detection.
+    """
     os_names = {
         "linux2": "linux",
         "linux": "linux",
         "darwin": "osx",
-        "win32": "win",
     }
     non_x86_machines = {
         "aarch64",  # for linux
