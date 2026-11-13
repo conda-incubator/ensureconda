@@ -138,6 +138,9 @@ def subdir_for(sys_platform: str, machine: str, bits: int) -> str:
         ("linux", "aarch64"): "linux-aarch64",
         ("linux", "armv6l"): "linux-armv6l",
         ("linux", "armv7l"): "linux-armv7l",
+        # What a 64-bit kernel reports to a process with the 32-bit
+        # personality, as in an arm/v7 container on an arm64 host.
+        ("linux", "armv8l"): "linux-armv7l",
         ("linux", "ppc64"): "linux-ppc64",
         ("linux", "ppc64le"): "linux-ppc64le",
         ("linux", "riscv64"): "linux-riscv64",

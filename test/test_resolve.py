@@ -23,6 +23,7 @@ from ensureconda.resolve import (
         ("linux", "s390x", 64, "linux-s390x"),
         ("linux", "riscv64", 64, "linux-riscv64"),
         ("linux", "armv7l", 32, "linux-armv7l"),
+        ("linux", "armv8l", 32, "linux-armv7l"),
         ("darwin", "x86_64", 64, "osx-64"),
         ("darwin", "", 64, "osx-64"),
         ("darwin", "arm64", 64, "osx-arm64"),
