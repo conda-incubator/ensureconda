@@ -134,15 +134,15 @@ def subdir_for(sys_platform: str, machine: str, bits: int) -> str:
         "linux": "linux",
         "darwin": "osx",
     }
-    non_x86_machines = {
-        "aarch64",  # for linux
-        "arm64",  # for osx
-        "armv6l",
-        "armv7l",
-        "ppc64",
-        "ppc64le",
-        "riscv64",
-        "s390x",
+    non_x86_subdirs = {
+        ("linux", "aarch64"): "linux-aarch64",
+        ("linux", "armv6l"): "linux-armv6l",
+        ("linux", "armv7l"): "linux-armv7l",
+        ("linux", "ppc64"): "linux-ppc64",
+        ("linux", "ppc64le"): "linux-ppc64le",
+        ("linux", "riscv64"): "linux-riscv64",
+        ("linux", "s390x"): "linux-s390x",
+        ("osx", "arm64"): "osx-arm64",
     }
     # Machine names for x86, whose subdir depends on the pointer size instead.
     x86_machines = {"x86_64", "amd64", "i386", "i486", "i586", "i686", "x86"}
@@ -156,8 +156,9 @@ def subdir_for(sys_platform: str, machine: str, bits: int) -> str:
         # that for x86, as before.
         if not name or name in x86_machines:
             return f"{os_name}-{bits}"
-        if name in non_x86_machines:
-            return f"{os_name}-{name}"
+        subdir = non_x86_subdirs.get((os_name, name))
+        if subdir is not None:
+            return subdir
     raise UnsupportedPlatformError(
         f"Unsupported platform {sys_platform!r} ({machine}): "
         "no conda subdir is known for it"
