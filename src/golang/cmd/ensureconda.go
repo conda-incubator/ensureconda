@@ -201,6 +201,10 @@ func PlatformSubdir() (string, error) {
 }
 
 func platformSubdir(goos string, goarch string) (string, error) {
+	// Keep this in step with subdir_for and windows_subdir in
+	// src/python/ensureconda/resolve.py. linux/arm is missing because GOARCH
+	// doesn't tell ARMv6 from ARMv7, and z/OS because upstream Go has no
+	// port to it.
 	platformMap := map[ArchSpec]string{
 		{"darwin", "amd64"}:  "osx-64",
 		{"darwin", "arm64"}:  "osx-arm64",

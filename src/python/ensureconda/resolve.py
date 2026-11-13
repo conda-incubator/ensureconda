@@ -134,6 +134,7 @@ def subdir_for(sys_platform: str, machine: str, bits: int) -> str:
         "linux": "linux",
         "darwin": "osx",
     }
+    # Keep this in step with platformSubdir in src/golang/cmd/ensureconda.go.
     non_x86_subdirs = {
         ("linux", "aarch64"): "linux-aarch64",
         ("linux", "armv6l"): "linux-armv6l",
