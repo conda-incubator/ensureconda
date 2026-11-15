@@ -340,20 +340,23 @@ func installMicromamba(url string) (string, error) {
 
 // lockInstall takes the named download lock in the site path, so that
 // concurrent processes download each executable only once. The lock names match
-// the Python implementation, so the two coordinate. Like that implementation,
-// it reports only when it has to wait for another process.
+// the Python implementation, so the two coordinate.
 func lockInstall(lockName string) (func(), error) {
-	// Ensure site path exists before locking
 	_ = os.MkdirAll(sitePath(), 0700)
+	return lockFile(filepath.Join(sitePath(), lockName), "downloading")
+}
 
-	lockPath := filepath.Join(sitePath(), lockName)
+// lockFile blocks until it holds the lock at lockPath, and returns a function
+// that releases it. Like the Python implementation, it reports only when it has
+// to wait for another process, which it describes as busy with activity.
+func lockFile(lockPath string, activity string) (func(), error) {
 	fileLock := flock.New(lockPath)
 	locked, err := fileLock.TryLock()
 	if err != nil {
 		return nil, fmt.Errorf("locking %s: %w", lockPath, err)
 	}
 	if !locked {
-		log.WithField("lockPath", lockPath).Info("waiting for another process to finish downloading")
+		log.WithField("lockPath", lockPath).Infof("waiting for another process to finish %s", activity)
 		start := time.Now()
 		if err := fileLock.Lock(); err != nil {
 			return nil, fmt.Errorf("locking %s: %w", lockPath, err)
