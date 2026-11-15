@@ -440,17 +440,20 @@ func extractTarFiles(tarReader *tar.Reader, fileNameMap map[string]string) (stri
 
 // extractTarFile writes the current entry of tarReader to targetFileName as an
 // executable. It writes to a temporary file and renames it into place while
-// holding a lock, so that concurrent writers don't interfere. The temporary
-// file is removed if anything fails.
+// holding a lock on the target, the same lock the Python implementation uses,
+// so that concurrent writers don't interfere. The temporary file is removed if
+// anything fails.
 func extractTarFile(header *tar.Header, targetFileName string, tarReader *tar.Reader) error {
-	// A name of its own, as in the Python implementation.
+	// A name of its own, as in the Python implementation. A writer that doesn't
+	// take the lock below, such as an older release, then can't write to the
+	// same file.
 	tmpFileName := fmt.Sprintf("%s.%s.tmp", targetFileName, rand.Text())
 	log.WithFields(log.Fields{
 		"srcPath": header.Name,
 		"dstPath": tmpFileName,
 	}).Debug("extracting from tarball")
 
-	unlock, err := lockFile(targetFileName+".tmp.lock", "writing "+filepath.Base(targetFileName))
+	unlock, err := lockFile(targetFileName+".lock", "writing "+filepath.Base(targetFileName))
 	if err != nil {
 		return err
 	}
@@ -472,8 +475,8 @@ func extractTarFile(header *tar.Header, targetFileName string, tarReader *tar.Re
 }
 
 // removeTemporaryFiles removes the temporary files of extractions to
-// targetFileName. It leaves "<target>.tmp" alone, the temporary file of older
-// releases.
+// targetFileName. It leaves "<target>.tmp" alone, which older releases write
+// without taking the lock on the target.
 func removeTemporaryFiles(targetFileName string) {
 	dir, name := filepath.Split(targetFileName)
 	entries, _ := os.ReadDir(dir)

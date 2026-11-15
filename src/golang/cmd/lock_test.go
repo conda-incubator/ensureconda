@@ -81,9 +81,11 @@ func TestExtractTarFilesReleasesLock(t *testing.T) {
 	if st, err := os.Stat(target); err == nil && runtime.GOOS != "windows" && st.Mode()&0100 == 0 {
 		t.Errorf("target mode = %v, want it executable", st.Mode())
 	}
-	// Earlier versions never released the lock.
-	if held, err := lockIsHeld(target + ".tmp.lock"); err != nil || held {
-		t.Errorf("the lock is still held after extracting (error %v)", err)
+	// Earlier versions locked the temporary file instead, and never released it.
+	for _, lockPath := range []string{target + ".lock", target + ".tmp.lock"} {
+		if held, err := lockIsHeld(lockPath); err != nil || held {
+			t.Errorf("%s is still locked after extracting (error %v)", lockPath, err)
+		}
 	}
 }
 
@@ -108,7 +110,7 @@ func TestExtractTarFilesRemovesTemporaryFileOnError(t *testing.T) {
 		t.Fatal("extractTarFiles() succeeded on a truncated archive")
 	}
 	// Neither the executable nor its temporary file, whatever that was called.
-	if names, want := fileNames(t, dir), []string{"tool.tmp.lock"}; !slices.Equal(names, want) {
+	if names, want := fileNames(t, dir), []string{"tool.lock"}; !slices.Equal(names, want) {
 		t.Errorf("the directory holds %v after a failed extraction, want %v", names, want)
 	}
 }
@@ -116,7 +118,8 @@ func TestExtractTarFilesRemovesTemporaryFileOnError(t *testing.T) {
 func TestExtractTarFilesLeavesOtherTemporaryFilesAlone(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "tool")
-	// Older releases write their temporary file here.
+	// Releases that locked the temporary file wrote it here. They don't take the
+	// lock on the target, so one of them may be writing it at the same time.
 	otherWriter := target + ".tmp"
 	if err := os.WriteFile(otherWriter, []byte("partial"), 0644); err != nil {
 		t.Fatal(err)
@@ -129,7 +132,7 @@ func TestExtractTarFilesLeavesOtherTemporaryFilesAlone(t *testing.T) {
 	if content, err := os.ReadFile(otherWriter); err != nil || string(content) != "partial" {
 		t.Errorf("the other writer's file holds %q, %v; want it untouched", content, err)
 	}
-	if names, want := fileNames(t, dir), []string{"tool", "tool.tmp", "tool.tmp.lock"}; !slices.Equal(names, want) {
+	if names, want := fileNames(t, dir), []string{"tool", "tool.lock", "tool.tmp"}; !slices.Equal(names, want) {
 		t.Errorf("the directory holds %v after extracting, want %v", names, want)
 	}
 }
@@ -147,7 +150,7 @@ func TestExtractTarFilesRemovesLeftoverTemporaryFiles(t *testing.T) {
 		t.Fatalf("extractTarFiles() error = %v", err)
 	}
 
-	if names, want := fileNames(t, dir), []string{"tool", "tool.tmp.lock"}; !slices.Equal(names, want) {
+	if names, want := fileNames(t, dir), []string{"tool", "tool.lock"}; !slices.Equal(names, want) {
 		t.Errorf("the directory holds %v after extracting, want %v", names, want)
 	}
 }
@@ -250,7 +253,7 @@ func TestExtractTarFilesReportsWaitingForLock(t *testing.T) {
 	messages := captureLog(t)
 	target := filepath.Join(t.TempDir(), "tool")
 	// As another process that is writing the executable.
-	writer := flock.New(target + ".tmp.lock")
+	writer := flock.New(target + ".lock")
 	if locked, err := writer.TryLock(); err != nil || !locked {
 		t.Fatalf("TryLock() = %v, %v; want the lock", locked, err)
 	}
