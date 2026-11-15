@@ -23,10 +23,21 @@ func TestPlatformSubdir(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.goos+"/"+tt.goarch, func(t *testing.T) {
-			got := platformSubdir(tt.goos, tt.goarch)
+			got, err := platformSubdir(tt.goos, tt.goarch)
+			if err != nil {
+				t.Fatalf("platformSubdir() error = %v", err)
+			}
 			if got != tt.want {
 				t.Errorf("platformSubdir() = %v, want %v", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestPlatformSubdirUnsupported(t *testing.T) {
+	for _, platform := range [][2]string{{"freebsd", "amd64"}, {"linux", "arm"}, {"linux", "mips64"}} {
+		if got, err := platformSubdir(platform[0], platform[1]); err == nil {
+			t.Errorf("platformSubdir(%q, %q) = %q, want an error", platform[0], platform[1], got)
+		}
 	}
 }
