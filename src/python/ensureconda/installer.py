@@ -443,9 +443,9 @@ def install_micromamba() -> Optional[Path]:
         else:
             filename = "bin/micromamba"
 
-    return extract_files_from_tar_bz2(
-        tarball=tarball, filename=filename, dest_filename=f"micromamba{exe_suffix()}"
-    )
+        return extract_files_from_tar_bz2(
+            tarball=tarball, filename=filename, dest_filename=dest_filename
+        )
 
 
 def exe_suffix() -> str:
