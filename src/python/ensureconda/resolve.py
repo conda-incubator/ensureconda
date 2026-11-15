@@ -48,10 +48,9 @@ def site_path() -> pathlib.Path:
 def resolve_executable(exe_name: str) -> Iterator[Path]:
     path_prefix = site_path()
     for candidate in ext_candidates(exe_name):
-        if path_prefix is not None:
-            prefixed_exe = path_prefix / candidate
-            if is_exe(prefixed_exe):
-                yield prefixed_exe
+        prefixed_exe = path_prefix / candidate
+        if is_exe(prefixed_exe):
+            yield prefixed_exe
 
         # which based exe
         exe = which_no_shims(candidate)
