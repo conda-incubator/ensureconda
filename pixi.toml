@@ -30,7 +30,6 @@ pip = "*"
 prek = "*"
 pytest = "*"
 python-build = "*"
-types-filelock = "*"
 types-requests = "*"
 go = "*"
 

@@ -1,6 +1,7 @@
 import subprocess
 import sys
 from functools import partial
+from pathlib import Path
 from typing import TYPE_CHECKING, Callable, Optional
 
 from packaging.version import InvalidVersion, Version
@@ -67,7 +68,7 @@ def ensureconda(
     no_install: bool = False,
     min_conda_version: Optional[Version] = None,
     min_mamba_version: Optional[Version] = None,
-) -> "Optional[StrPath]":
+) -> Optional[Path]:
     """Ensures that conda is installed
 
     Parameters
