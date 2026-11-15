@@ -427,21 +427,8 @@ func extractTarFiles(tarReader *tar.Reader, fileNameMap map[string]string) (stri
 
 		switch header.Typeflag {
 		case tar.TypeReg:
-			targetFileName := fileNameMap[header.Name]
-			tmpFileName := targetFileName + ".tmp"
-			if targetFileName != "" {
-				err2 := extractTarFile(header, tmpFileName, tarReader)
-				if err2 != nil {
-					return "", err2
-				}
-				st, err := os.Stat(tmpFileName)
-				if err != nil {
-					return "", fmt.Errorf("stat temp file: %w", err)
-				}
-				if err = os.Chmod(tmpFileName, st.Mode()|syscall.S_IXUSR); err != nil {
-					return "", err
-				}
-				if err = os.Rename(tmpFileName, targetFileName); err != nil {
+			if targetFileName := fileNameMap[header.Name]; targetFileName != "" {
+				if err := extractTarFile(header, targetFileName, tarReader); err != nil {
 					return "", err
 				}
 				return targetFileName, nil
@@ -451,15 +438,18 @@ func extractTarFiles(tarReader *tar.Reader, fileNameMap map[string]string) (stri
 	return "", errors.New("could not find file in the tarball")
 }
 
+// extractTarFile writes the current entry of tarReader to targetFileName as an
+// executable. It writes to a temporary file and renames it into place.
 func extractTarFile(header *tar.Header, targetFileName string, tarReader *tar.Reader) error {
+	tmpFileName := targetFileName + ".tmp"
 	log.WithFields(log.Fields{
 		"srcPath": header.Name,
-		"dstPath": targetFileName,
+		"dstPath": tmpFileName,
 	}).Debug("extracting from tarball")
 
 	fileInfo := header.FileInfo()
 	r := retry.NewRetrier(10, 100*time.Millisecond, 5*time.Second)
-	fileLock := flock.New(targetFileName + ".lock")
+	fileLock := flock.New(tmpFileName + ".lock")
 
 	err := r.Run(func() error {
 		locked, err := fileLock.TryLock()
@@ -470,7 +460,7 @@ func extractTarFile(header *tar.Header, targetFileName string, tarReader *tar.Re
 			return errors.New("could not lock")
 		}
 
-		file, err := os.OpenFile(targetFileName, os.O_RDWR|os.O_CREATE|os.O_TRUNC, fileInfo.Mode().Perm())
+		file, err := os.OpenFile(tmpFileName, os.O_RDWR|os.O_CREATE|os.O_TRUNC, fileInfo.Mode().Perm())
 		if err != nil {
 			return err
 		}
@@ -486,6 +476,16 @@ func extractTarFile(header *tar.Header, targetFileName string, tarReader *tar.Re
 		}
 		return err
 	})
+	if err != nil {
+		return err
+	}
 
-	return err
+	st, err := os.Stat(tmpFileName)
+	if err != nil {
+		return fmt.Errorf("stat temp file: %w", err)
+	}
+	if err = os.Chmod(tmpFileName, st.Mode()|syscall.S_IXUSR); err != nil {
+		return err
+	}
+	return os.Rename(tmpFileName, targetFileName)
 }
