@@ -21,6 +21,9 @@ repos:
     rev: v2.4.1
     hooks:
       - id: mypy
+        # Replaces the default arguments, which ignore missing imports.
+        args:
+          - --scripts-are-modules
         additional_dependencies:
           - packaging
           - filelock
@@ -42,7 +45,6 @@ repos:
         language_version: python3.8
         entry: mypy
         args:
-          - --ignore-missing-imports
           - --scripts-are-modules
         types_or: [python, pyi]
         require_serial: true
