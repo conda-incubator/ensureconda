@@ -143,6 +143,7 @@ def subdir_for(sys_platform: str, machine: str, bits: int) -> str:
         ("linux", "s390x"): "linux-s390x",
         ("osx", "arm64"): "osx-arm64",
     }
+    x86_machines = {"x86_64", "amd64", "i386", "i486", "i586", "i686", "x86"}
     _arch_names = {
         32: "x86",
         64: "x86_64",
@@ -153,11 +154,12 @@ def subdir_for(sys_platform: str, machine: str, bits: int) -> str:
     plat = _platform_map.get(sys_platform)
     if plat is not None:
         name = machine.lower()
+        # platform.machine() returns an empty string when it can't tell.
+        if not name or name in x86_machines:
+            return f"{plat}-{bits}"
         subdir = non_x86_subdirs.get((plat, name))
         if subdir is not None:
             return subdir
-        if name not in {non_x86 for _, non_x86 in non_x86_subdirs}:
-            return f"{plat}-{bits}"
     raise UnsupportedPlatformError(
         f"Unsupported platform {sys_platform!r} ({machine}): "
         "no conda subdir is known for it"

@@ -91,3 +91,17 @@ def test_subdir_for_unsupported_platform(sys_platform: str) -> None:
 def test_subdir_for_unsupported_combination(sys_platform: str, machine: str) -> None:
     with pytest.raises(UnsupportedPlatformError, match="Unsupported platform"):
         subdir_for(sys_platform, machine, 64)
+
+
+@pytest.mark.parametrize("machine", ["mips64", "loongarch64", "sparc64"])
+def test_subdir_for_unsupported_machine(machine: str) -> None:
+    with pytest.raises(
+        UnsupportedPlatformError,
+        match=f"Unsupported platform 'linux' \\({machine}\\)",
+    ):
+        subdir_for("linux", machine, 64)
+
+
+def test_unsupported_platform_error_names_the_machine_as_reported() -> None:
+    with pytest.raises(UnsupportedPlatformError, match=r"\(Power Macintosh\)"):
+        subdir_for("darwin", "Power Macintosh", 32)
