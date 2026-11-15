@@ -439,7 +439,8 @@ func extractTarFiles(tarReader *tar.Reader, fileNameMap map[string]string) (stri
 
 // extractTarFile writes the current entry of tarReader to targetFileName as an
 // executable. It writes to a temporary file and renames it into place while
-// holding a lock, so that concurrent writers don't interfere.
+// holding a lock, so that concurrent writers don't interfere. The temporary
+// file is removed if anything fails.
 func extractTarFile(header *tar.Header, targetFileName string, tarReader *tar.Reader) error {
 	tmpFileName := targetFileName + ".tmp"
 	log.WithFields(log.Fields{
@@ -453,10 +454,15 @@ func extractTarFile(header *tar.Header, targetFileName string, tarReader *tar.Re
 	}
 	defer unlock()
 
-	if err := writeExecutable(tmpFileName, header, tarReader); err != nil {
-		return err
+	err = writeExecutable(tmpFileName, header, tarReader)
+	if err == nil {
+		err = os.Rename(tmpFileName, targetFileName)
 	}
-	return os.Rename(tmpFileName, targetFileName)
+	if err != nil {
+		// Don't leave a partial executable behind.
+		_ = os.Remove(tmpFileName)
+	}
+	return err
 }
 
 // writeExecutable writes the current entry of tarReader to fileName and marks

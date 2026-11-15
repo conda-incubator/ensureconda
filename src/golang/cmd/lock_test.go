@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -50,6 +51,20 @@ func lockIsHeld(lockPath string) (bool, error) {
 	return !acquired, probe.Unlock()
 }
 
+// fileNames returns the names of the entries in dir, sorted.
+func fileNames(t *testing.T, dir string) []string {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]string, len(entries))
+	for i, entry := range entries {
+		names[i] = entry.Name()
+	}
+	return names
+}
+
 func TestExtractTarFilesReleasesLock(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "tool")
 
@@ -69,6 +84,32 @@ func TestExtractTarFilesReleasesLock(t *testing.T) {
 	// Earlier versions never released the lock.
 	if held, err := lockIsHeld(target + ".tmp.lock"); err != nil || held {
 		t.Errorf("the lock is still held after extracting (error %v)", err)
+	}
+}
+
+func TestExtractTarFilesRemovesTemporaryFileOnError(t *testing.T) {
+	// An archive whose entry promises more content than it holds.
+	var buf bytes.Buffer
+	w := tar.NewWriter(&buf)
+	header := &tar.Header{Name: "bin/tool", Mode: 0644, Size: 1 << 20, Typeflag: tar.TypeReg}
+	if err := w.WriteHeader(header); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Write([]byte("truncated")); err != nil {
+		t.Fatal(err)
+	}
+	// Not closed: closing would report the missing content instead.
+	dir := t.TempDir()
+	target := filepath.Join(dir, "tool")
+
+	_, err := extractTarFiles(tar.NewReader(&buf), map[string]string{"bin/tool": target})
+
+	if err == nil {
+		t.Fatal("extractTarFiles() succeeded on a truncated archive")
+	}
+	// Neither the executable nor its temporary file, whatever that was called.
+	if names, want := fileNames(t, dir), []string{"tool.tmp.lock"}; !slices.Equal(names, want) {
+		t.Errorf("the directory holds %v after a failed extraction, want %v", names, want)
 	}
 }
 
