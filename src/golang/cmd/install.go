@@ -327,7 +327,23 @@ func downloadAndUnpackConda(url string, expectedSha256 string, fileNameMap map[s
 	return "", errors.New("could not find pkg-conda-standalone*.tar.zst file in the .conda archive")
 }
 
+// installMicromamba downloads micromamba from url, unless a concurrent process
+// has just installed one that can be used.
 func installMicromamba(url string) (string, error) {
+	unlock, err := lockInstall("micromamba_install.lock")
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+
+	// A concurrent process may have installed it while this one waited for the
+	// lock. Check it instead of trusting its age: any micromamba that was here
+	// before has already been rejected, or this install wouldn't be running.
+	target := targetExeFilename("micromamba")
+	if usable, _ := micromambaIsUsable(target); usable {
+		return target, nil
+	}
+
 	// micro.mamba.pm publishes no digest to verify against.
 	installedExe, err := downloadAndUnpackArchive(
 		url, "", map[string]string{
