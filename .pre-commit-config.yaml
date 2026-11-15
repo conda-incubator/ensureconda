@@ -12,13 +12,13 @@ repos:
       - id: isort
 
   - repo: https://github.com/psf/black
-    rev: 25.9.0
+    rev: 26.10.1
     hooks:
       - id: black
         language_version: python3
 
   - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.18.2
+    rev: v2.4.1
     hooks:
       - id: mypy
         additional_dependencies:
@@ -50,7 +50,7 @@ repos:
           - click
 
   - repo: https://github.com/adrienverge/yamllint
-    rev: v1.37.1
+    rev: v1.38.0
     hooks:
       - id: yamllint
         args:
@@ -58,7 +58,7 @@ repos:
           - "{extends: default, rules: {document-start: disable, truthy: disable, line-length: {max: 120}}}"
 
   - repo: https://github.com/TekWizely/pre-commit-golang
-    rev: v1.0.0-rc.2
+    rev: v1.0.0-rc.4
     hooks:
       - id: go-fmt
         args:
