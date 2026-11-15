@@ -136,11 +136,11 @@ def subdir_for(sys_platform: str, machine: str, bits: int) -> str:
         64: "x86_64",
     }
 
+    if sys_platform == "zos":
+        return "zos-z"
     plat = _platform_map[sys_platform]
     if machine in non_x86_machines:
         return f"{plat}-{machine}"
-    elif sys_platform.lower() == "zos":
-        return "zos-z"
     else:
         return f"{plat}-{bits}"
 

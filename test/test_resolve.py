@@ -19,6 +19,7 @@ from ensureconda.resolve import platform_subdir, subdir_for, windows_subdir
         ("darwin", "x86_64", 64, "osx-64"),
         ("darwin", "", 64, "osx-64"),
         ("darwin", "arm64", 64, "osx-arm64"),
+        ("zos", "", 64, "zos-z"),
     ],
 )
 def test_subdir_for(sys_platform: str, machine: str, bits: int, expected: str) -> None:
