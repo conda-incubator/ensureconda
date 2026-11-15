@@ -36,13 +36,46 @@ func targetExeFilename(exeName string) string {
 	return targetFileName
 }
 
+// micromambaSubdirs are the platforms that micromamba is published for. Keep
+// it in step with MICROMAMBA_SUBDIRS in src/python/ensureconda/installer.py.
+// It is a variable so that tests can change it.
+var micromambaSubdirs = map[string]bool{
+	"linux-64":      true,
+	"linux-aarch64": true,
+	"linux-ppc64le": true,
+	"linux-riscv64": true,
+	"osx-64":        true,
+	"osx-arm64":     true,
+	"win-64":        true,
+	"win-arm64":     true,
+}
+
+// notPublishedError means that nothing to install is published for the platform.
+type notPublishedError struct {
+	message string
+}
+
+func (e *notPublishedError) Error() string { return e.message }
+
 func InstallMicromamba() (string, error) {
 	subdir, err := PlatformSubdir()
 	if err != nil {
 		return "", err
 	}
 	url := fmt.Sprintf("https://micro.mamba.pm/api/micromamba/%s/latest", subdir)
-	return installMicromamba(url)
+	exe, err := installMicromamba(url)
+	return exe, micromambaInstallError(err, subdir)
+}
+
+// micromambaInstallError turns a 404 into a notPublishedError, unless
+// micromamba is published for the platform: micro.mamba.pm also answers 404
+// for a release that hasn't been uploaded for a platform yet.
+func micromambaInstallError(err error, subdir string) error {
+	var status *httpStatusError
+	if errors.As(err, &status) && status.statusCode == 404 && !micromambaSubdirs[subdir] {
+		return &notPublishedError{fmt.Sprintf("micromamba is not published for %s", subdir)}
+	}
+	return err
 }
 
 type AnacondaPkgAttr struct {

@@ -60,10 +60,21 @@ func (c *idleTimeoutConn) Read(b []byte) (int, error) {
 	return c.Conn.Read(b)
 }
 
+// httpStatusError is a response with a status other than 2xx.
+type httpStatusError struct {
+	url        string
+	statusCode int
+	status     string
+}
+
+func (e *httpStatusError) Error() string {
+	return fmt.Sprintf("GET %s: HTTP %s", e.url, e.status)
+}
+
 // checkStatus returns an error unless the response has a 2xx status.
 func checkStatus(resp *resty.Response, url string) error {
 	if !resp.IsSuccess() {
-		return fmt.Errorf("GET %s: HTTP %s", url, resp.Status())
+		return &httpStatusError{url: url, statusCode: resp.StatusCode(), status: resp.Status()}
 	}
 	return nil
 }
