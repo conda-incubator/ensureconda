@@ -8,6 +8,7 @@ from packaging.version import InvalidVersion, Version
 
 from ensureconda.api import ensureconda
 from ensureconda.installer import NotPublishedError
+from ensureconda.resolve import UnsupportedPlatformError
 
 
 def _as_loose_version(obj: Union[str, Version, None]) -> Version:
@@ -101,7 +102,7 @@ def ensureconda_cli(
             # Each attempt has already been reported on stderr, so end with
             # one line instead of a traceback.
             raise click.ClickException(f"download failed: {error}")
-        except NotPublishedError as error:
+        except (NotPublishedError, UnsupportedPlatformError) as error:
             raise click.ClickException(str(error))
     if exe:
         print("Found compatible executable", file=sys.stderr, flush=True)
