@@ -21,7 +21,6 @@ import (
 	"time"
 
 	pep440 "github.com/aquasecurity/go-pep440-version"
-	"github.com/flowchartsman/retry"
 	"github.com/gofrs/flock"
 	"github.com/klauspost/compress/zstd"
 	log "github.com/sirupsen/logrus"
@@ -448,38 +447,26 @@ func extractTarFile(header *tar.Header, targetFileName string, tarReader *tar.Re
 		"dstPath": tmpFileName,
 	}).Debug("extracting from tarball")
 
-	fileInfo := header.FileInfo()
-	r := retry.NewRetrier(10, 100*time.Millisecond, 5*time.Second)
-	fileLock := flock.New(tmpFileName + ".lock")
-	defer func() { _ = fileLock.Unlock() }()
-
-	err := r.Run(func() error {
-		locked, err := fileLock.TryLock()
-		if err != nil {
-			return err
-		}
-		if !locked {
-			return errors.New("could not lock")
-		}
-
-		file, err := os.OpenFile(tmpFileName, os.O_RDWR|os.O_CREATE|os.O_TRUNC, fileInfo.Mode().Perm())
-		if err != nil {
-			return err
-		}
-		n, cpErr := io.Copy(file, tarReader)
-		if closeErr := file.Close(); closeErr != nil { // close file immediately
-			return closeErr
-		}
-		if cpErr != nil {
-			return cpErr
-		}
-		if n != fileInfo.Size() {
-			return fmt.Errorf("unexpected bytes written: wrote %d, want %d", n, fileInfo.Size())
-		}
-		return err
-	})
+	unlock, err := lockFile(tmpFileName+".lock", "writing "+filepath.Base(targetFileName))
 	if err != nil {
 		return err
+	}
+	defer unlock()
+
+	fileInfo := header.FileInfo()
+	file, err := os.OpenFile(tmpFileName, os.O_RDWR|os.O_CREATE|os.O_TRUNC, fileInfo.Mode().Perm())
+	if err != nil {
+		return err
+	}
+	n, cpErr := io.Copy(file, tarReader)
+	if closeErr := file.Close(); closeErr != nil { // close file immediately
+		return closeErr
+	}
+	if cpErr != nil {
+		return cpErr
+	}
+	if n != fileInfo.Size() {
+		return fmt.Errorf("unexpected bytes written: wrote %d, want %d", n, fileInfo.Size())
 	}
 
 	st, err := os.Stat(tmpFileName)
