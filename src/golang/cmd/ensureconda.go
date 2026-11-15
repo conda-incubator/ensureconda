@@ -6,6 +6,7 @@ import (
 	"os"
 	"runtime"
 	"strconv"
+	"strings"
 
 	"github.com/Wessie/appdirs"
 	pep440 "github.com/aquasecurity/go-pep440-version"
@@ -160,10 +161,19 @@ func EnsureConda(mamba bool, micromamba bool, conda bool, condaStandalone bool, 
 		}
 		if !noInstall {
 			exe, err := InstallMicromamba()
-			if err != nil {
-				return "", err
+			var remaining []string
+			if conda {
+				remaining = append(remaining, "conda")
 			}
-			if valid, _ := microMambaVersionCheck(exe); valid {
+			if condaStandalone {
+				remaining = append(remaining, "conda-standalone")
+			}
+			var notPublished *notPublishedError
+			if errors.As(err, &notPublished) && len(remaining) > 0 {
+				log.Warnf("%v; trying %s instead", err, strings.Join(remaining, " or "))
+			} else if err != nil {
+				return "", err
+			} else if valid, _ := microMambaVersionCheck(exe); valid {
 				return exe, nil
 			}
 		}
