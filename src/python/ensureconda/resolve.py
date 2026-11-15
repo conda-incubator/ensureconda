@@ -92,6 +92,13 @@ def safe_next(it: Iterator[T]) -> Optional[T]:
 
 
 def platform_subdir() -> str:
+    import struct
+
+    bits = 8 * struct.calcsize("P")
+    return subdir_for(sys.platform, platform.machine(), bits)
+
+
+def subdir_for(sys_platform: str, machine: str, bits: int) -> str:
     # Adapted from conda.context
     _platform_map = {
         "linux2": "linux",
@@ -110,14 +117,10 @@ def platform_subdir() -> str:
         64: "x86_64",
     }
 
-    import struct
-
-    bits = 8 * struct.calcsize("P")
-    plat = _platform_map[sys.platform]
-    machine = platform.machine()
+    plat = _platform_map[sys_platform]
     if machine in non_x86_machines:
         return f"{plat}-{machine}"
-    elif sys.platform.lower() == "zos":
+    elif sys_platform.lower() == "zos":
         return "zos-z"
     else:
         return f"{plat}-{bits}"
