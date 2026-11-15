@@ -7,8 +7,8 @@ require (
 	github.com/aquasecurity/go-pep440-version v0.0.1
 	github.com/flowchartsman/retry v1.2.0
 	github.com/go-resty/resty/v2 v2.17.2
-	github.com/gofrs/flock v0.13.1
-	github.com/klauspost/compress v1.20.3
+	github.com/gofrs/flock v0.13.2
+	github.com/klauspost/compress v1.20.4
 	github.com/sirupsen/logrus v1.10.2
 	github.com/spf13/cobra v1.10.2
 )
