@@ -453,8 +453,17 @@ func extractTarFile(header *tar.Header, targetFileName string, tarReader *tar.Re
 	}
 	defer unlock()
 
+	if err := writeExecutable(tmpFileName, header, tarReader); err != nil {
+		return err
+	}
+	return os.Rename(tmpFileName, targetFileName)
+}
+
+// writeExecutable writes the current entry of tarReader to fileName and marks
+// it executable.
+func writeExecutable(fileName string, header *tar.Header, tarReader *tar.Reader) error {
 	fileInfo := header.FileInfo()
-	file, err := os.OpenFile(tmpFileName, os.O_RDWR|os.O_CREATE|os.O_TRUNC, fileInfo.Mode().Perm())
+	file, err := os.OpenFile(fileName, os.O_RDWR|os.O_CREATE|os.O_TRUNC, fileInfo.Mode().Perm())
 	if err != nil {
 		return err
 	}
@@ -469,12 +478,9 @@ func extractTarFile(header *tar.Header, targetFileName string, tarReader *tar.Re
 		return fmt.Errorf("unexpected bytes written: wrote %d, want %d", n, fileInfo.Size())
 	}
 
-	st, err := os.Stat(tmpFileName)
+	st, err := os.Stat(fileName)
 	if err != nil {
 		return fmt.Errorf("stat temp file: %w", err)
 	}
-	if err = os.Chmod(tmpFileName, st.Mode()|syscall.S_IXUSR); err != nil {
-		return err
-	}
-	return os.Rename(tmpFileName, targetFileName)
+	return os.Chmod(fileName, st.Mode()|syscall.S_IXUSR)
 }
