@@ -41,6 +41,7 @@ READ_TIMEOUT_SEC = 60
 RETRY_TIME_BUDGET_SEC = 70
 """Elapsed seconds allowed for scheduling retries; active downloads may finish."""
 
+# Keep this in step with micromambaSubdirs in src/golang/cmd/install.go.
 MICROMAMBA_SUBDIRS = frozenset(
     {
         "linux-64",
