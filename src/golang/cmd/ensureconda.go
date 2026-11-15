@@ -202,20 +202,34 @@ type ArchSpec struct {
 	arch string
 }
 
-func PlatformSubdir() string {
-	os_ := runtime.GOOS
-	arch := runtime.GOARCH
+func PlatformSubdir() (string, error) {
+	return platformSubdir(runtime.GOOS, runtime.GOARCH)
+}
 
+func platformSubdir(goos string, goarch string) (string, error) {
+	// Keep this in step with subdir_for and windows_subdir in
+	// src/python/ensureconda/resolve.py. GOARCH can't tell ARMv6 from ARMv7,
+	// and Go has no z/OS port, so those entries exist only there.
 	platformMap := map[ArchSpec]string{
 		{"darwin", "amd64"}:  "osx-64",
 		{"darwin", "arm64"}:  "osx-arm64",
+		{"linux", "386"}:     "linux-32",
 		{"linux", "amd64"}:   "linux-64",
 		{"linux", "arm64"}:   "linux-aarch64",
+		{"linux", "ppc64"}:   "linux-ppc64",
 		{"linux", "ppc64le"}: "linux-ppc64le",
+		{"linux", "riscv64"}: "linux-riscv64",
+		{"linux", "s390x"}:   "linux-s390x",
+		{"windows", "386"}:   "win-32",
 		{"windows", "amd64"}: "win-64",
+		{"windows", "arm64"}: "win-arm64",
 	}
 
-	return platformMap[ArchSpec{os_, arch}]
+	subdir, ok := platformMap[ArchSpec{goos, goarch}]
+	if !ok {
+		return "", fmt.Errorf("unsupported platform %s/%s: no conda subdir is known for it", goos, goarch)
+	}
+	return subdir, nil
 }
 
 // Execute executes the root command.

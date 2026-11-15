@@ -311,6 +311,7 @@ def get_channel_name() -> str:
 
 
 def install_conda_exe() -> Optional[Path]:
+    subdir = platform_subdir()
     # Create a lock file specific to conda_exe to prevent concurrent downloads
     lock_path = site_path() / "conda_exe_install.lock"
     dest_filename = f"conda_standalone{exe_suffix()}"
@@ -331,7 +332,7 @@ def install_conda_exe() -> Optional[Path]:
             # File is too old or has a weird timestamp, continue to download a new version
 
         channel = get_channel_name()
-        candidates = compute_candidates(channel, platform_subdir())
+        candidates = compute_candidates(channel, subdir)
         chosen = candidates[-1]
         url = "https:" + chosen.download_url
         path_to_written_executable = stream_conda_executable(url, chosen.sha256)
@@ -400,6 +401,7 @@ def compute_candidates(channel: str, subdir: str) -> List[AnacondaPkg]:
 
 def install_micromamba() -> Optional[Path]:
     """Install micromamba into the installation"""
+    subdir = platform_subdir()
     # Create a lock file specific to micromamba to prevent concurrent downloads
     lock_path = site_path() / "micromamba_install.lock"
     dest_filename = f"micromamba{exe_suffix()}"
@@ -420,7 +422,6 @@ def install_micromamba() -> Optional[Path]:
                 return target_path
             # File is too old or has a weird timestamp, continue to download a new version
 
-        subdir = platform_subdir()
         url = f"https://micro.mamba.pm/api/micromamba/{subdir}/latest"
         try:
             resp = request_url_with_retry(url)

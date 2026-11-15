@@ -7,7 +7,7 @@ import os
 import tarfile
 import time
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
+from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
 
 import filelock
 import pytest
@@ -16,6 +16,7 @@ from conda_package_streaming.create import conda_builder
 from urllib3.response import HTTPResponse
 
 from ensureconda import installer
+from ensureconda.resolve import UnsupportedPlatformError
 
 
 class FakeClock:
@@ -791,6 +792,27 @@ def test_download_does_not_retry_disk_errors(
         )
     assert attempts == 1
     assert not delays_sec
+
+
+@pytest.mark.parametrize(
+    "install", [installer.install_micromamba, installer.install_conda_exe]
+)
+def test_unsupported_platform_creates_nothing(
+    install: Callable[[], Optional[Path]],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unsupported() -> str:
+        raise UnsupportedPlatformError("Unsupported platform 'freebsd14' (amd64)")
+
+    data_dir = tmp_path / "ensure-conda"
+    monkeypatch.setattr(installer, "site_path", lambda: data_dir)
+    monkeypatch.setattr(installer, "platform_subdir", unsupported)
+
+    with pytest.raises(UnsupportedPlatformError):
+        install()
+
+    assert not data_dir.exists()
 
 
 def test_missing_executable(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
