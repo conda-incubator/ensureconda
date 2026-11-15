@@ -1,4 +1,5 @@
 import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -7,6 +8,7 @@ from packaging.version import InvalidVersion, Version
 
 from ensureconda import api, resolve
 from ensureconda.installer import NotPublishedError
+from ensureconda.resolve import UnsupportedPlatformError
 
 BROKEN_MAMBA = Path("broken", "mamba")
 WORKING_MICROMAMBA = Path("working", "micromamba")
@@ -139,3 +141,32 @@ def test_failed_micromamba_download_does_not_fall_back(
 
     with pytest.raises(requests.HTTPError):
         api.ensureconda()
+
+
+@pytest.fixture
+def unsupported_platform(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(sys, "platform", "freebsd14")
+    monkeypatch.setattr("ensureconda.installer.site_path", lambda: tmp_path)
+
+
+@pytest.mark.usefixtures("nothing_installed", "unsupported_platform")
+def test_unsupported_platform_still_finds_an_installed_conda(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conda = Path("opt", "conda", "bin", "conda")
+    monkeypatch.setattr(api, "conda_executables", lambda: iter([conda]))
+
+    assert api.ensureconda() == conda
+
+
+@pytest.mark.usefixtures("nothing_installed", "unsupported_platform")
+def test_unsupported_platform_with_nothing_installed() -> None:
+    with pytest.raises(
+        UnsupportedPlatformError, match="Unsupported platform 'freebsd14'"
+    ):
+        api.ensureconda()
+
+
+@pytest.mark.usefixtures("nothing_installed", "unsupported_platform")
+def test_unsupported_platform_is_no_error_when_nothing_would_be_installed() -> None:
+    assert api.ensureconda(micromamba=False, conda_exe=False) is None
