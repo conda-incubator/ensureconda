@@ -99,13 +99,20 @@ func sitePath() string {
 	return appdirs.UserDataDir("ensure-conda", "", "", false)
 }
 
+// micromambaIsUsable reports whether executable is a micromamba that can be
+// used: it must run and report at least the minimum version.
+func micromambaIsUsable(executable string) (bool, error) {
+	minMambaVersion, _ := pep440.Parse(DefaultMinMambaVersion)
+	return executableHasMinVersion(minMambaVersion, "")(executable)
+}
+
 func EnsureConda(mamba bool, micromamba bool, conda bool, condaStandalone bool, noInstall bool) (string, error) {
 	var executable string
 	dataDir := sitePath()
 	minMambaVersion, _ := pep440.Parse(DefaultMinMambaVersion)
 	minCondaVersion, _ := pep440.Parse(DefaultMinCondaVersion)
 
-	microMambaVersionCheck := executableHasMinVersion(minMambaVersion, "")
+	microMambaVersionCheck := micromambaIsUsable
 	condaVersionCheck := executableHasMinVersion(minCondaVersion, "conda")
 	mambaVersionCheck := func(executable string) (bool, error) {
 		log.WithFields(log.Fields{
