@@ -196,9 +196,10 @@ type ArchSpec struct {
 }
 
 func PlatformSubdir() string {
-	os_ := runtime.GOOS
-	arch := runtime.GOARCH
+	return platformSubdir(runtime.GOOS, runtime.GOARCH)
+}
 
+func platformSubdir(goos string, goarch string) string {
 	platformMap := map[ArchSpec]string{
 		{"darwin", "amd64"}:  "osx-64",
 		{"darwin", "arm64"}:  "osx-arm64",
@@ -208,7 +209,7 @@ func PlatformSubdir() string {
 		{"windows", "amd64"}: "win-64",
 	}
 
-	return platformMap[ArchSpec{os_, arch}]
+	return platformMap[ArchSpec{goos, goarch}]
 }
 
 // Execute executes the root command.
