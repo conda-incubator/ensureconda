@@ -5,6 +5,7 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/bzip2"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -442,17 +443,22 @@ func extractTarFiles(tarReader *tar.Reader, fileNameMap map[string]string) (stri
 // holding a lock, so that concurrent writers don't interfere. The temporary
 // file is removed if anything fails.
 func extractTarFile(header *tar.Header, targetFileName string, tarReader *tar.Reader) error {
-	tmpFileName := targetFileName + ".tmp"
+	// A name of its own, as in the Python implementation.
+	tmpFileName := fmt.Sprintf("%s.%s.tmp", targetFileName, rand.Text())
 	log.WithFields(log.Fields{
 		"srcPath": header.Name,
 		"dstPath": tmpFileName,
 	}).Debug("extracting from tarball")
 
-	unlock, err := lockFile(tmpFileName+".lock", "writing "+filepath.Base(targetFileName))
+	unlock, err := lockFile(targetFileName+".tmp.lock", "writing "+filepath.Base(targetFileName))
 	if err != nil {
 		return err
 	}
 	defer unlock()
+
+	// Every extraction writes its temporary file while holding this lock, so
+	// one that is here now was left behind by a run that was interrupted.
+	removeTemporaryFiles(targetFileName)
 
 	err = writeExecutable(tmpFileName, header, tarReader)
 	if err == nil {
@@ -463,6 +469,19 @@ func extractTarFile(header *tar.Header, targetFileName string, tarReader *tar.Re
 		_ = os.Remove(tmpFileName)
 	}
 	return err
+}
+
+// removeTemporaryFiles removes the temporary files of extractions to
+// targetFileName. It leaves "<target>.tmp" alone, the temporary file of older
+// releases.
+func removeTemporaryFiles(targetFileName string) {
+	dir, name := filepath.Split(targetFileName)
+	entries, _ := os.ReadDir(dir)
+	for _, entry := range entries {
+		if isTemporary, _ := filepath.Match(name+".*.tmp", entry.Name()); isTemporary {
+			_ = os.Remove(filepath.Join(dir, entry.Name()))
+		}
+	}
 }
 
 // writeExecutable writes the current entry of tarReader to fileName and marks
