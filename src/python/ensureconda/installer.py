@@ -13,7 +13,7 @@ from datetime import timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from tempfile import TemporaryFile
-from typing import IO, Any, Dict, Iterator, List, NamedTuple, Optional, Union
+from typing import IO, Any, Dict, Generator, List, NamedTuple, Optional, Union
 from urllib.parse import urlparse
 
 import filelock
@@ -213,7 +213,9 @@ def write_executable_from_file_object(fo: IO[bytes], dest_filename: str) -> Path
 
 
 @contextlib.contextmanager
-def lock_with_feedback(lock_path: Union[str, Path], lock_name: str) -> Iterator[None]:
+def lock_with_feedback(
+    lock_path: Union[str, Path], lock_name: str
+) -> Generator[None, None, None]:
     """Context manager to acquire a lock with user feedback when we need to wait.
 
     Args:
@@ -453,7 +455,7 @@ def exe_suffix() -> str:
 
 
 @contextlib.contextmanager
-def new_executable(target_filename: "Path") -> Iterator[IO[bytes]]:
+def new_executable(target_filename: "Path") -> Generator[IO[bytes], None, None]:
     """Create a new executable that can be written to.
 
     Care is take to both prevent concurrent writes as well as guarding against
