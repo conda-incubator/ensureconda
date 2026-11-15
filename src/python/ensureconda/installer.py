@@ -224,14 +224,14 @@ def lock_with_feedback(
         lock_name: A descriptive name for the lock to show in waiting messages
     """
     lock = filelock.FileLock(str(lock_path))
-    lock_start = time.time()
+    lock_start = time.monotonic()
 
     while True:
         try:
             # Try to acquire with timeout matching notification interval
             lock.acquire(timeout=LOCK_NOTIFICATION_INTERVAL_SEC)
         except filelock.Timeout:
-            total_wait_time = time.time() - lock_start
+            total_wait_time = time.monotonic() - lock_start
             print(
                 f"Waiting for lock for {lock_name} to be released by another process... "
                 f"({total_wait_time:.1f}s)",
@@ -242,7 +242,7 @@ def lock_with_feedback(
 
     try:
         # Success! Now report total wait time if we had to wait
-        total_wait_time = time.time() - lock_start
+        total_wait_time = time.monotonic() - lock_start
         if total_wait_time > 0.1:
             print(
                 f"Lock for {lock_name} acquired after waiting {total_wait_time:.1f} seconds",

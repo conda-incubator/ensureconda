@@ -8,7 +8,7 @@ import tarfile
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterator, List, Optional, Tuple, Union
-from unittest.mock import Mock
+from unittest.mock import DEFAULT, Mock
 
 import filelock
 import pytest
@@ -63,6 +63,38 @@ def test_lock_with_feedback_preserves_body_timeout(
     assert not lock.is_locked
     with other_lock.acquire(timeout=0):
         pass
+
+
+def test_lock_with_feedback_retries_acquisition_timeouts(
+    tmp_path: Path,
+    retry_clock: FakeClock,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    lock_path = tmp_path / "outer.lock"
+    lock = filelock.FileLock(str(lock_path))
+    retry_clock.now_sec = 100.0
+
+    def wait_before_acquiring(timeout: float) -> object:
+        if acquire.call_count <= 2:
+            retry_clock.sleep(timeout)
+            raise filelock.Timeout(str(lock_path))
+        return DEFAULT
+
+    acquire = Mock(wraps=lock.acquire, side_effect=wait_before_acquiring)
+    monkeypatch.setattr(lock, "acquire", acquire)
+    monkeypatch.setattr(filelock, "FileLock", lambda *args, **kwargs: lock)
+
+    with installer.lock_with_feedback(lock_path, "outer lock"):
+        assert lock.is_locked
+        assert acquire.call_count == 3
+
+    assert capsys.readouterr().err.splitlines() == [
+        "Waiting for lock for outer lock to be released by another process... (5.0s)",
+        "Waiting for lock for outer lock to be released by another process... (10.0s)",
+        "Lock for outer lock acquired after waiting 10.0 seconds",
+    ]
+    assert not lock.is_locked
 
 
 def test_copy_executable_with_bounded_reads(
