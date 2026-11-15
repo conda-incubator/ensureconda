@@ -77,3 +77,12 @@ def test_subdir_for_unsupported_platform(sys_platform: str) -> None:
         UnsupportedPlatformError, match=f"Unsupported platform '{sys_platform}'"
     ):
         subdir_for(sys_platform, "x86_64", 64)
+
+
+@pytest.mark.parametrize(
+    "sys_platform, machine",
+    [("linux", "arm64"), ("darwin", "aarch64")],
+)
+def test_subdir_for_unsupported_combination(sys_platform: str, machine: str) -> None:
+    with pytest.raises(UnsupportedPlatformError, match="Unsupported platform"):
+        subdir_for(sys_platform, machine, 64)

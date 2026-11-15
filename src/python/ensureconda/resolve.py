@@ -129,11 +129,12 @@ def subdir_for(sys_platform: str, machine: str, bits: int) -> str:
         "linux": "linux",
         "darwin": "osx",
     }
-    non_x86_machines = {
-        "aarch64",  # for linux
-        "arm64",  # for osx
-        "ppc64",
-        "ppc64le",
+    # Keep this in step with platformMap in src/golang/cmd/ensureconda.go.
+    non_x86_subdirs = {
+        ("linux", "aarch64"): "linux-aarch64",
+        ("linux", "ppc64"): "linux-ppc64",
+        ("linux", "ppc64le"): "linux-ppc64le",
+        ("osx", "arm64"): "osx-arm64",
     }
     _arch_names = {
         32: "x86",
@@ -145,9 +146,10 @@ def subdir_for(sys_platform: str, machine: str, bits: int) -> str:
     plat = _platform_map.get(sys_platform)
     if plat is not None:
         name = machine.lower()
-        if name in non_x86_machines:
-            return f"{plat}-{name}"
-        else:
+        subdir = non_x86_subdirs.get((plat, name))
+        if subdir is not None:
+            return subdir
+        if name not in {non_x86 for _, non_x86 in non_x86_subdirs}:
             return f"{plat}-{bits}"
     raise UnsupportedPlatformError(
         f"Unsupported platform {sys_platform!r} ({machine}): "
