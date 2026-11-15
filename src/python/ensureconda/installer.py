@@ -230,21 +230,6 @@ def lock_with_feedback(
         try:
             # Try to acquire with timeout matching notification interval
             lock.acquire(timeout=LOCK_NOTIFICATION_INTERVAL_SEC)
-            try:
-                # Success! Now report total wait time if we had to wait
-                total_wait_time = time.time() - lock_start
-                if total_wait_time > 0.1:
-                    print(
-                        f"Lock for {lock_name} acquired after waiting {total_wait_time:.1f} seconds",
-                        file=sys.stderr,
-                    )
-                # Yield control back to the caller
-                yield
-            finally:
-                # Always release the lock
-                lock.release()
-            # Exit the loop after successful execution
-            break
         except filelock.Timeout:
             total_wait_time = time.time() - lock_start
             print(
@@ -252,6 +237,22 @@ def lock_with_feedback(
                 f"({total_wait_time:.1f}s)",
                 file=sys.stderr,
             )
+        else:
+            break
+
+    try:
+        # Success! Now report total wait time if we had to wait
+        total_wait_time = time.time() - lock_start
+        if total_wait_time > 0.1:
+            print(
+                f"Lock for {lock_name} acquired after waiting {total_wait_time:.1f} seconds",
+                file=sys.stderr,
+            )
+        # Yield control back to the caller
+        yield
+    finally:
+        # Always release the lock
+        lock.release()
 
 
 def verify_sha256(fileobj: IO[bytes], expected: str, url: str) -> None:
