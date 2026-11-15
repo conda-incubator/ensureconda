@@ -340,20 +340,26 @@ func installMicromamba(url string) (string, error) {
 
 // lockInstall takes the named download lock in the site path, so that
 // concurrent processes download each executable only once. The lock names match
-// the Python implementation, so the two coordinate.
+// the Python implementation, so the two coordinate. Like that implementation,
+// it reports only when it has to wait for another process.
 func lockInstall(lockName string) (func(), error) {
 	// Ensure site path exists before locking
 	_ = os.MkdirAll(sitePath(), 0700)
 
 	lockPath := filepath.Join(sitePath(), lockName)
 	fileLock := flock.New(lockPath)
-
-	// Block until we acquire the lock (mimics Python's lock_with_feedback behavior)
-	log.WithFields(log.Fields{"lockPath": lockPath}).Info("acquiring conda download lock")
-	if err := fileLock.Lock(); err != nil {
-		return nil, fmt.Errorf("acquiring conda download lock: %w", err)
+	locked, err := fileLock.TryLock()
+	if err != nil {
+		return nil, fmt.Errorf("locking %s: %w", lockPath, err)
 	}
-	log.WithFields(log.Fields{"lockPath": lockPath}).Info("acquired conda download lock")
+	if !locked {
+		log.WithField("lockPath", lockPath).Info("waiting for another process to finish downloading")
+		start := time.Now()
+		if err := fileLock.Lock(); err != nil {
+			return nil, fmt.Errorf("locking %s: %w", lockPath, err)
+		}
+		log.WithField("lockPath", lockPath).Infof("lock acquired after %s", time.Since(start).Round(100*time.Millisecond))
+	}
 	return func() { _ = fileLock.Unlock() }, nil
 }
 
