@@ -4,7 +4,12 @@ import sysconfig
 
 import pytest
 
-from ensureconda.resolve import platform_subdir, subdir_for, windows_subdir
+from ensureconda.resolve import (
+    UnsupportedPlatformError,
+    platform_subdir,
+    subdir_for,
+    windows_subdir,
+)
 
 
 @pytest.mark.parametrize(
@@ -61,3 +66,11 @@ def test_platform_subdir_goes_by_the_machine_off_windows(
     monkeypatch.setattr(sys, "platform", "linux")
     monkeypatch.setattr(platform, "machine", lambda: "aarch64")
     assert platform_subdir() == "linux-aarch64"
+
+
+@pytest.mark.parametrize("sys_platform", ["freebsd14", "cygwin", "aix"])
+def test_subdir_for_unsupported_platform(sys_platform: str) -> None:
+    with pytest.raises(
+        UnsupportedPlatformError, match=f"Unsupported platform '{sys_platform}'"
+    ):
+        subdir_for(sys_platform, "x86_64", 64)
