@@ -26,6 +26,10 @@ repos:
           - filelock
           - types-requests
           - click
+          - conda-package-streaming
+          - pytest
+          - types-appdirs
+          - types-docker
 
   # Also type-check on Python 3.8, the oldest version we support. mypy 1.14.1
   # is the last release that runs on it, and the other dependencies resolve to
@@ -48,6 +52,10 @@ repos:
           - filelock
           - types-requests
           - click
+          - conda-package-streaming
+          - pytest
+          - types-appdirs
+          - types-docker
 
   - repo: https://github.com/adrienverge/yamllint
     rev: v1.38.0
