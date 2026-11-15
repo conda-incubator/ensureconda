@@ -23,7 +23,7 @@ repos:
       - id: mypy
         additional_dependencies:
           - packaging
-          - types-filelock
+          - filelock
           - types-requests
           - click
 
@@ -45,7 +45,7 @@ repos:
         additional_dependencies:
           - mypy==1.14.1
           - packaging
-          - types-filelock
+          - filelock
           - types-requests
           - click
 

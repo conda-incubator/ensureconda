@@ -41,7 +41,6 @@ dev = [
     "pip",
     "prek",
     "pytest",
-    "types-filelock",
     "types-requests",
 ]
 
