@@ -25,6 +25,7 @@ from ensureconda.resolve import (
         ("linux", "riscv64", 64, "linux-riscv64"),
         ("linux", "armv6l", 32, "linux-armv6l"),
         ("linux", "armv7l", 32, "linux-armv7l"),
+        ("linux", "armv8l", 32, "linux-armv7l"),
         ("darwin", "x86_64", 64, "osx-64"),
         ("darwin", "", 64, "osx-64"),
         ("darwin", "arm64", 64, "osx-arm64"),
