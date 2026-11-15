@@ -21,6 +21,10 @@ from ensureconda.resolve import (
         ("linux", "aarch64", 64, "linux-aarch64"),
         ("linux", "ppc64", 64, "linux-ppc64"),
         ("linux", "ppc64le", 64, "linux-ppc64le"),
+        ("linux", "s390x", 64, "linux-s390x"),
+        ("linux", "riscv64", 64, "linux-riscv64"),
+        ("linux", "armv6l", 32, "linux-armv6l"),
+        ("linux", "armv7l", 32, "linux-armv7l"),
         ("darwin", "x86_64", 64, "osx-64"),
         ("darwin", "", 64, "osx-64"),
         ("darwin", "arm64", 64, "osx-arm64"),
@@ -81,7 +85,7 @@ def test_subdir_for_unsupported_platform(sys_platform: str) -> None:
 
 @pytest.mark.parametrize(
     "sys_platform, machine",
-    [("linux", "arm64"), ("darwin", "aarch64")],
+    [("linux", "arm64"), ("darwin", "aarch64"), ("darwin", "s390x")],
 )
 def test_subdir_for_unsupported_combination(sys_platform: str, machine: str) -> None:
     with pytest.raises(UnsupportedPlatformError, match="Unsupported platform"):

@@ -132,8 +132,12 @@ def subdir_for(sys_platform: str, machine: str, bits: int) -> str:
     # Keep this in step with platformMap in src/golang/cmd/ensureconda.go.
     non_x86_subdirs = {
         ("linux", "aarch64"): "linux-aarch64",
+        ("linux", "armv6l"): "linux-armv6l",
+        ("linux", "armv7l"): "linux-armv7l",
         ("linux", "ppc64"): "linux-ppc64",
         ("linux", "ppc64le"): "linux-ppc64le",
+        ("linux", "riscv64"): "linux-riscv64",
+        ("linux", "s390x"): "linux-s390x",
         ("osx", "arm64"): "osx-arm64",
     }
     _arch_names = {
