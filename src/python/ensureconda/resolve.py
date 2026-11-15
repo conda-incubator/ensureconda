@@ -144,8 +144,9 @@ def subdir_for(sys_platform: str, machine: str, bits: int) -> str:
         return "zos-z"
     plat = _platform_map.get(sys_platform)
     if plat is not None:
-        if machine in non_x86_machines:
-            return f"{plat}-{machine}"
+        name = machine.lower()
+        if name in non_x86_machines:
+            return f"{plat}-{name}"
         else:
             return f"{plat}-{bits}"
     raise UnsupportedPlatformError(
