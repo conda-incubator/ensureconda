@@ -16,7 +16,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/go-resty/resty/v2"
 	"github.com/gofrs/flock"
 	log "github.com/sirupsen/logrus"
 )
@@ -439,12 +438,12 @@ func refuseDownloads(t *testing.T) *atomic.Int32 {
 	t.Helper()
 	useRetryClock(t)
 	var requests atomic.Int32
-	client := resty.New().SetTransport(roundTripper(func(r *http.Request) (*http.Response, error) {
+	client := &http.Client{Transport: roundTripper(func(r *http.Request) (*http.Response, error) {
 		requests.Add(1)
 		return &http.Response{StatusCode: http.StatusNotFound, Status: "404 Not Found", Body: http.NoBody, Request: r}, nil
-	}))
+	})}
 	previous := httpClient
-	httpClient = func() *resty.Client { return client }
+	httpClient = func() *http.Client { return client }
 	t.Cleanup(func() { httpClient = previous })
 	return &requests
 }

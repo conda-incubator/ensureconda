@@ -210,7 +210,7 @@ func computeCandidates(channel string, subdir string) ([]AnacondaPkg, error) {
 		return nil, fmt.Errorf("GET candidates: %w", err)
 	}
 	var data []AnacondaPkg
-	if err := json.Unmarshal(resp.Body(), &data); err != nil {
+	if err := json.Unmarshal(resp.body, &data); err != nil {
 		return nil, fmt.Errorf("decoding candidates from %s: %w", url, err)
 	}
 
@@ -269,10 +269,10 @@ func downloadAndUnpackArchive(url string, expectedSha256 string, fileNameMap map
 	if err != nil {
 		return "", err
 	}
-	archive := resp.Body()
+	archive := resp.body
 	if expectedSha256 != "" {
 		if err := verifySha256(archive, expectedSha256); err != nil {
-			return "", fmt.Errorf("%s (HTTP %s): %w", url, resp.Status(), err)
+			return "", fmt.Errorf("%s (HTTP %s): %w", url, resp.status, err)
 		}
 	}
 	if archiveType == TarBz2Archive {

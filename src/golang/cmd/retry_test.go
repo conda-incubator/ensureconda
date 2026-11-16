@@ -99,7 +99,7 @@ func TestRequestRetriesHTTPFailures(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			body := response.Body()
+			body := response.body
 			if string(body) != "complete response" || attempts.Load() != 2 || !slices.Equal(clock.delays, []time.Duration{3 * time.Second}) {
 				t.Errorf("body %q, attempts %d, delays %v", body, attempts.Load(), clock.delays)
 			}
@@ -143,8 +143,8 @@ func TestRequestPreservesStatusWithIncompleteErrorBody(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if string(response.Body()) != "complete" || attempts.Load() != 2 || !slices.Equal(clock.delays, []time.Duration{3 * time.Second}) {
-					t.Errorf("body %q, attempts %d, delays %v; want a successful retry after Retry-After", response.Body(), attempts.Load(), clock.delays)
+				if string(response.body) != "complete" || attempts.Load() != 2 || !slices.Equal(clock.delays, []time.Duration{3 * time.Second}) {
+					t.Errorf("body %q, attempts %d, delays %v; want a successful retry after Retry-After", response.body, attempts.Load(), clock.delays)
 				}
 			})
 		}
@@ -218,7 +218,7 @@ func TestRequestRetriesInterruptedBodies(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			body := response.Body()
+			body := response.body
 			if string(body) != "complete" || attempts.Load() != 2 || !slices.Equal(clock.delays, []time.Duration{time.Second}) {
 				t.Errorf("body %q, attempts %d, delays %v", body, attempts.Load(), clock.delays)
 			}
@@ -249,7 +249,7 @@ func TestRequestCanFinishAfterRetryDeadline(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			body := response.Body()
+			body := response.body
 			if string(body) != "slow download" || retryNow().Sub(start) <= retryTimeBudget {
 				t.Errorf("body %q, elapsed %v", body, retryNow().Sub(start))
 			}
