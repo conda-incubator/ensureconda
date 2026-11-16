@@ -1,15 +1,20 @@
 package cmd
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"sync"
 	"time"
 
 	"github.com/go-resty/resty/v2"
 )
+
+// Limit eager allocation from Content-Length; larger bodies can still grow.
+const maxPreallocatedBody = 128 << 20
 
 // Timeouts matching the Python implementation. readTimeout limits inactivity,
 // not the total download time, so slow downloads that keep making progress
@@ -72,9 +77,35 @@ func (e *httpStatusError) Error() string {
 }
 
 // checkStatus returns an error unless the response has a 2xx status.
-func checkStatus(resp *resty.Response, url string) error {
+func checkStatus(resp *resty.Response, rawURL string) error {
 	if !resp.IsSuccess() {
-		return &httpStatusError{url: url, statusCode: resp.StatusCode(), status: resp.Status()}
+		return &httpStatusError{url: rawURL, statusCode: resp.StatusCode(), status: resp.Status()}
 	}
 	return nil
+}
+
+// requestURL checks the status before reading the body, so incomplete error
+// bodies cannot hide a permanent HTTP error.
+func requestURL(rawURL string) (*resty.Response, error) {
+	resp, err := httpClient().R().SetDoNotParseResponse(true).Get(rawURL)
+	if resp != nil && resp.RawBody() != nil {
+		defer resp.RawBody().Close()
+	}
+	if err != nil {
+		return resp, err
+	}
+	if err := checkStatus(resp, rawURL); err != nil {
+		return resp, err
+	}
+	var body bytes.Buffer
+	if length := resp.RawResponse.ContentLength; length > 0 && length <= maxPreallocatedBody {
+		// ReadFrom needs MinRead bytes of spare capacity for its final read.
+		body.Grow(int(length) + bytes.MinRead)
+	}
+	_, err = body.ReadFrom(resp.RawBody())
+	resp.SetBody(body.Bytes())
+	if err != nil {
+		err = &url.Error{Op: "Get", URL: rawURL, Err: err}
+	}
+	return resp, err
 }
