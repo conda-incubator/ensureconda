@@ -15,7 +15,7 @@ import (
 
 type versionCheck func(executable string) (*pep440.Version, error)
 
-func executableWithMinVersion(minVersion pep440.Version, prefixes ...string) versionCheck {
+func executableWithMinVersion(minVersion pep440.Version, reportRejection bool, prefixes ...string) versionCheck {
 	return func(executable string) (*pep440.Version, error) {
 		stdout, err := exec.Command(executable, "--version").Output()
 		entry := log.WithFields(log.Fields{

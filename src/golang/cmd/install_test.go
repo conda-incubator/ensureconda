@@ -90,7 +90,7 @@ func TestInstallCondaStandalone(t *testing.T) {
 			}
 
 			exeVersion, _ := pep440.Parse("4.8.0")
-			version, err := executableWithMinVersion(exeVersion, "conda")(got)
+			version, err := executableWithMinVersion(exeVersion, false, "conda")(got)
 			if (err != nil) != tt.wantErr {
 				t.Errorf("InstallCondaStandalone() error = %v", err)
 			}

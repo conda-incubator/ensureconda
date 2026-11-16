@@ -121,7 +121,7 @@ func TestEnsureCondaMetadata(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			got, err := ensureCondaWithMetadata(tt.flavor == "mamba", tt.flavor == "micromamba", tt.flavor == "conda", tt.flavor == "conda_standalone", true)
+			got, err := ensureCondaWithMetadata(tt.flavor == "mamba", tt.flavor == "micromamba", tt.flavor == "conda", tt.flavor == "conda_standalone", true, false)
 			want := condaExecutable{Path: path, Flavor: tt.flavor, Version: tt.version}
 			if tt.version == "" {
 				if err != nil || got != nil {
@@ -192,7 +192,7 @@ func TestEnsureCondaInstalledMetadata(t *testing.T) {
 			httpClient = func() *http.Client { return client }
 			t.Cleanup(func() { httpClient = previous })
 
-			got, err := ensureCondaWithMetadata(false, tt.flavor == "micromamba", false, tt.flavor == "conda_standalone", false)
+			got, err := ensureCondaWithMetadata(false, tt.flavor == "micromamba", false, tt.flavor == "conda_standalone", false, false)
 			want := condaExecutable{Path: targetExeFilename(tt.flavor), Flavor: tt.flavor, Version: tt.version}
 			if err != nil || got == nil || *got != want {
 				t.Fatalf("ensureCondaWithMetadata() = %v, %v; want %v", got, err, want)
@@ -223,7 +223,7 @@ func TestResolveExecutableWithVersionSkipsRejectedCandidates(t *testing.T) {
 			}
 			dir := t.TempDir()
 			t.Setenv("PATH", dir)
-			check := executableWithMinVersion(pep440.MustParse(DefaultMinMambaVersion), "")
+			check := executableWithMinVersion(pep440.MustParse(DefaultMinMambaVersion), false, "")
 			if got, err := resolveExecutableWithVersion("micromamba", sitePath(), check); got != nil || err == nil {
 				t.Fatalf("rejected candidate returned %v, %v", got, err)
 			}

@@ -69,7 +69,7 @@ var (
 				log.SetLevel(log.InfoLevel)
 			}
 
-			executable, err := ensureCondaWithMetadata(mamba, micromamba, conda, condaExe, true)
+			executable, err := ensureCondaWithMetadata(mamba, micromamba, conda, condaExe, true, false)
 			if err != nil {
 				panic(err)
 			}
@@ -83,7 +83,7 @@ var (
 			}
 			if !noInstall {
 				log.Debugf("Attempting to install")
-				executable, err = ensureCondaWithMetadata(mamba, micromamba, conda, condaExe, noInstall)
+				executable, err = ensureCondaWithMetadata(mamba, micromamba, conda, condaExe, noInstall, false)
 				if err != nil {
 					er(err)
 				}
@@ -115,30 +115,40 @@ func sitePath() string {
 // usableMicromambaVersion returns the version if executable runs and reports
 // at least the minimum micromamba version, or nil otherwise.
 func usableMicromambaVersion(executable string) (*pep440.Version, error) {
+	return micromambaCheck(false)(executable)
+}
+
+func micromambaCheck(reportRejection bool) versionCheck {
 	minMambaVersion, _ := pep440.Parse(DefaultMinMambaVersion)
-	return executableWithMinVersion(minMambaVersion, "")(executable)
+	return executableWithMinVersion(minMambaVersion, reportRejection, "")
 }
 
 // usableCondaVersion applies the conda minimum to both conda and conda-standalone.
 func usableCondaVersion(executable string) (*pep440.Version, error) {
+	return condaCheck(false)(executable)
+}
+
+func condaCheck(reportRejection bool) versionCheck {
 	minCondaVersion, _ := pep440.Parse(DefaultMinCondaVersion)
-	return executableWithMinVersion(minCondaVersion, "conda")(executable)
+	return executableWithMinVersion(minCondaVersion, reportRejection, "conda")
 }
 
 func EnsureConda(mamba bool, micromamba bool, conda bool, condaStandalone bool, noInstall bool) (string, error) {
-	result, err := ensureCondaWithMetadata(mamba, micromamba, conda, condaStandalone, noInstall)
+	result, err := ensureCondaWithMetadata(mamba, micromamba, conda, condaStandalone, noInstall, false)
 	if result == nil {
 		return "", err
 	}
 	return result.Path, err
 }
 
-func ensureCondaWithMetadata(mamba, micromamba, conda, condaStandalone, noInstall bool) (*condaExecutable, error) {
+func ensureCondaWithMetadata(mamba, micromamba, conda, condaStandalone, noInstall, forceInstall bool) (*condaExecutable, error) {
 	var executable *condaExecutable
 	dataDir := sitePath()
 	minMambaVersion, _ := pep440.Parse(DefaultMinMambaVersion)
 
-	mambaVersionCheck := executableWithMinVersion(minMambaVersion, "mamba", "")
+	microMambaVersionCheck := micromambaCheck(forceInstall)
+	condaVersionCheck := condaCheck(forceInstall)
+	mambaVersionCheck := executableWithMinVersion(minMambaVersion, false, "mamba", "")
 
 	if mamba {
 		log.Debug("Checking for mamba")
@@ -154,7 +164,7 @@ func ensureCondaWithMetadata(mamba, micromamba, conda, condaStandalone, noInstal
 			return executable, nil
 		}
 		if !noInstall {
-			exe, err := InstallMicromamba()
+			exe, err := installMicromambaForPlatform(forceInstall)
 			var remaining []string
 			if conda {
 				remaining = append(remaining, "conda")
@@ -167,7 +177,7 @@ func ensureCondaWithMetadata(mamba, micromamba, conda, condaStandalone, noInstal
 				log.Warnf("%v; trying %s instead", err, strings.Join(remaining, " or "))
 			} else if err != nil {
 				return nil, err
-			} else if version, _ := usableMicromambaVersion(exe); version != nil {
+			} else if version, _ := microMambaVersionCheck(exe); version != nil {
 				return newCondaExecutable(exe, "micromamba", *version), nil
 			}
 		}
@@ -187,12 +197,12 @@ func ensureCondaWithMetadata(mamba, micromamba, conda, condaStandalone, noInstal
 			return executable, nil
 		}
 		if !noInstall {
-			exe, err := InstallCondaStandalone()
+			exe, err := installCondaStandalone(forceInstall)
 			if err != nil {
 				return nil, err
 			}
 
-			if version, _ := usableCondaVersion(exe); version != nil {
+			if version, _ := condaVersionCheck(exe); version != nil {
 				return newCondaExecutable(exe, "conda_standalone", *version), nil
 			}
 		}

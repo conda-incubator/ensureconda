@@ -402,7 +402,7 @@ func TestInstallersHoldDownloadLock(t *testing.T) {
 		install  func(serverURL string) (string, error)
 	}{
 		{"micromamba", "micromamba_install.lock", func(serverURL string) (string, error) {
-			return installMicromamba(serverURL + "/latest")
+			return installMicromamba(serverURL+"/latest", false)
 		}},
 		{"conda-standalone", "conda_exe_install.lock", func(string) (string, error) {
 			return InstallCondaStandalone()
@@ -449,7 +449,7 @@ func TestInstallersReuseUsableInstall(t *testing.T) {
 		install func(serverURL string) (string, error)
 	}{
 		{"micromamba", "micromamba", "2.0.0", func(serverURL string) (string, error) {
-			return installMicromamba(serverURL + "/latest")
+			return installMicromamba(serverURL+"/latest", false)
 		}},
 		{"conda-standalone", "conda_standalone", "conda 25.1.1", func(string) (string, error) {
 			return InstallCondaStandalone()
