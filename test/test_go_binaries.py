@@ -51,14 +51,22 @@ def isolated_env(tmp_path: pathlib.Path) -> Dict[str, str]:
     ],
 )
 def test_install(
-    golang_exe: Optional[str], isolated_env: Dict[str, str], flags: List[str]
+    golang_exe: Optional[str],
+    isolated_env: Dict[str, str],
+    tmp_path: pathlib.Path,
+    platform: str,
+    flags: List[str],
 ) -> None:
     if golang_exe is None:
         raise pytest.skip("environment variable not set")
     args = [golang_exe, "--verbosity=3"]
     args.extend(flags)
     print(args)
-    result = subprocess.check_output(args, encoding="utf8", env=isolated_env)
+    # Hide PATH so that the binary must install instead of finding one there.
+    env = {**isolated_env, "PATH": ""}
+    result = subprocess.check_output(args, encoding="utf8", env=env)
+    if platform == "linux":
+        assert pathlib.Path(result).parent == tmp_path / "ensure-conda"
     subprocess.check_call([result, "--help"])
 
 
