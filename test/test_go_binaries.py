@@ -2,6 +2,7 @@ import json
 import os
 import pathlib
 import subprocess
+import sys
 from test.helpers import run_container_test
 from typing import Dict, List, Optional
 
@@ -69,6 +70,100 @@ def test_install(
     if platform == "linux":
         assert pathlib.Path(result).parent == tmp_path / "ensure-conda"
     subprocess.check_call([result, "--help"])
+
+
+@pytest.mark.parametrize(
+    "flavor, output, version",
+    [
+        ("mamba", "mamba 1.5.12\nconda 24.11.3\n", "1.5.12"),
+        ("mamba", "2.9.0\n", "2.9.0"),
+        ("micromamba", "2.9.0\n", "2.9.0"),
+        ("conda", "conda 25.1.0\n", "25.1.0"),
+        ("conda_standalone", "conda 25.1.0\n", "25.1.0"),
+        ("micromamba", "v02.009.00\n", "2.9.0"),
+        ("micromamba", "01!02.0RC01.post02.dev03\n", "1!2.0rc1.post2.dev3"),
+        ("micromamba", "2.9alpha\n", "2.9a0"),
+        ("micromamba", "2.9PREVIEW02\n", "2.9rc2"),
+        ("micromamba", "2.9-rev\n", "2.9.post0"),
+        ("micromamba", "2.9-03\n", "2.9.post3"),
+        ("micromamba", "2.9DEV\n", "2.9.dev0"),
+        ("micromamba", "2.9+Ubuntu_007-000.01abc\n", "2.9+ubuntu.7.0.01abc"),
+        ("mamba", "mamba 0.5.0\nconda 4.9.0\n", None),
+        ("mamba", "mamba unknown\nconda 25.1.0\n", None),
+        ("mamba", "conda 25.1.0\nmamba 1.5.12\n", "1.5.12"),
+        ("micromamba", "0.1.0\n2.9.0\n", None),
+        ("micromamba", "warning: something\n2.9.0\n", None),
+        ("conda", "conda 4.0.0\nconda 25.1.0\n", None),
+        ("conda", "conda unknown\nconda 25.1.0\n", None),
+        ("micromamba", "2.9.0 \n", "2.9.0"),
+        ("micromamba", "micromamba\t2.9.0\n", "2.9.0"),
+        ("conda", "\n \tconda 25.1.0\t \r\n", "25.1.0"),
+        ("conda", "warning\rconda 25.1.0\r", "25.1.0"),
+        ("conda", "\u2003conda\u00a025.1.0\u2003", "25.1.0"),
+        ("conda", "warning\u2028conda 25.1.0", "25.1.0"),
+        ("conda", "\x1fconda\x1f25.1.0\x1f", "25.1.0"),
+        ("micromamba", "\n \t", None),
+    ],
+)
+@pytest.mark.parametrize("as_json", [False, True], ids=["plain", "json"])
+def test_output_matches_python(
+    golang_exe: Optional[str],
+    isolated_env: Dict[str, str],
+    tmp_path: pathlib.Path,
+    platform: str,
+    flavor: str,
+    output: str,
+    version: Optional[str],
+    as_json: bool,
+) -> None:
+    if golang_exe is None:
+        pytest.skip("environment variable not set")
+    if platform != "linux":
+        pytest.skip("only Linux supports isolating the Go data directory via XDG")
+    data = tmp_path / "ensure-conda"
+    data.mkdir()
+    executable = data / flavor
+    executable.write_text('#!/bin/sh\nprintf "%s" "$TEST_VERSION_OUTPUT"\n')
+    executable.chmod(0o755)
+    flags = ["--no-install"]
+    if as_json:
+        flags.append("--json")
+    for name in ["mamba", "micromamba", "conda", "conda_standalone"]:
+        if name != flavor:
+            flags.append(
+                "--no-" + ("conda-exe" if name == "conda_standalone" else name)
+            )
+    env = {**isolated_env, "PATH": "", "CONDA_EXE": "", "TEST_VERSION_OUTPUT": output}
+    go_result = subprocess.run(
+        [golang_exe, *flags], capture_output=True, encoding="utf8", env=env
+    )
+    python_result = subprocess.run(
+        [sys.executable, "-m", "ensureconda", *flags],
+        capture_output=True,
+        encoding="utf8",
+        env=env,
+    )
+    assert (
+        go_result.returncode
+        == python_result.returncode
+        == (1 if version is None else 0)
+    )
+    if version is None:
+        assert go_result.stdout == python_result.stdout == ""
+        return
+    if not as_json:
+        assert go_result.stdout == str(executable)
+        assert python_result.stdout == str(executable) + "\n"
+        return
+    assert (
+        json.loads(go_result.stdout)
+        == json.loads(python_result.stdout)
+        == {
+            "path": str(executable),
+            "flavor": flavor,
+            "version": version,
+        }
+    )
 
 
 @pytest.mark.parametrize("as_json", [False, True], ids=["plain", "json"])
