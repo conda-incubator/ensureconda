@@ -4,7 +4,19 @@ import subprocess
 import sys
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Dict, Literal, NamedTuple, Optional, Tuple
+from typing import (
+    TYPE_CHECKING,
+    Callable,
+    Dict,
+    Iterator,
+    List,
+    Literal,
+    NamedTuple,
+    Optional,
+    Sequence,
+    Tuple,
+    Union,
+)
 
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.specifiers import SpecifierSet
@@ -72,6 +84,9 @@ def determine_conda_version(exe: "StrPath") -> Version:
 
 
 Flavor = Literal["mamba", "micromamba", "conda", "conda_standalone"]
+InstallPolicy = Literal["never", "fallback", "per-target"]
+# Version is an old-API minimum; SpecifierSet is a new-API constraint.
+_VersionConstraint = Optional[Union[Version, SpecifierSet]]
 
 
 class CondaExecutable(NamedTuple):
@@ -96,6 +111,7 @@ class CondaExecutable(NamedTuple):
 
 _FLAVORS: Tuple[Flavor, ...] = ("mamba", "micromamba", "conda", "conda_standalone")
 _TARGET_FLAVORS = {canonicalize_name(flavor): flavor for flavor in _FLAVORS}
+_INSTALL_POLICIES: Tuple[InstallPolicy, ...] = ("never", "fallback", "per-target")
 
 
 def _probe_version(executable: "StrPath", flavor: Flavor) -> Optional[Version]:
@@ -308,6 +324,167 @@ def _parse_target(target: str) -> Tuple[Flavor, Optional[SpecifierSet]]:
     if requirement.extras or requirement.marker is not None or requirement.url:
         raise ValueError(f"Invalid target {target!r}")
     return flavor, requirement.specifier or None
+
+
+def ensure(
+    targets: Sequence[str] = _FLAVORS,
+    *,
+    install: InstallPolicy = "fallback",
+    probe_version: bool = True,
+) -> Optional[CondaExecutable]:
+    """Find or install an executable matching an ordered sequence of targets.
+
+    Each target names mamba, micromamba, conda, or conda_standalone, optionally
+    followed by version constraints such as ">=2,<3".
+
+    install selects when installation is attempted. Only micromamba and
+    conda_standalone can be installed.
+
+    - "fallback", the default: search all targets for installed matches, then
+      attempt installation, using target order in each pass.
+    - "per-target": search and attempt installation for each target before
+      moving on to the next.
+    - "never": search only.
+
+    Return the path, flavor, and version, or None if no compatible executable
+    is found. If --version cannot start or exits unsuccessfully, report the
+    failure on stderr and skip the candidate, including after installation.
+    Successful commands with unparseable or undecodable output can satisfy
+    unconstrained targets, with version=None.
+
+    With probe_version=False, run --version only when a target has constraints;
+    otherwise the version is None and the executable is not checked by running
+    it. Unknown versions cannot satisfy a constraint.
+    Installation fetches the latest available build; constraints filter the
+    result and do not select an older release to download.
+
+    If ensureconda cannot determine which build to download for this Python
+    environment, search existing executables only. They may still work without
+    a download mapping. Raise UnsupportedPlatformError instead of returning
+    None if installation would otherwise have been attempted.
+
+    An empty target sequence returns None. Invalid targets and unknown install
+    values raise ValueError before any search or installation.
+    """
+    if install not in _INSTALL_POLICIES:
+        expected = ", ".join(repr(policy) for policy in _INSTALL_POLICIES)
+        raise ValueError(
+            f"Unknown install value {install!r}; expected one of {expected}"
+        )
+    if isinstance(targets, str):
+        raise TypeError("targets must be a sequence of strings, not a single string")
+    parsed = [_parse_target(target) for target in targets]
+    return _ensure(parsed, install=install, probe_version=probe_version)
+
+
+def _ensure(
+    parsed: Sequence[Tuple[Flavor, _VersionConstraint]],
+    *,
+    install: InstallPolicy,
+    probe_version: bool,
+) -> Optional[CondaExecutable]:
+    """Resolve typed targets shared by the old and new public APIs."""
+    finders: Dict[Flavor, Callable[[], Iterator[Path]]] = {
+        "mamba": mamba_executables,
+        "micromamba": micromamba_executables,
+        "conda": conda_executables,
+        "conda_standalone": conda_standalone_executables,
+    }
+    installers: Dict[Flavor, Callable[[], Optional[Path]]] = {
+        "micromamba": install_micromamba,
+        "conda_standalone": install_conda_exe,
+    }
+
+    def compatible(
+        path: Path, flavor: Flavor, constraint: _VersionConstraint
+    ) -> Optional[CondaExecutable]:
+        version = None
+        if constraint is not None or probe_version:
+            try:
+                version = _probe_version(path, flavor)
+            except (
+                subprocess.CalledProcessError,
+                OSError,
+                InvalidVersion,
+                UnicodeDecodeError,
+            ) as error:
+                # Unknown metadata is acceptable without a constraint, but a
+                # command that cannot run must never pass a requested probe.
+                if constraint is not None or isinstance(
+                    error, (subprocess.CalledProcessError, OSError)
+                ):
+                    reason = (
+                        f"`--version` exited with status {error.returncode}"
+                        if isinstance(error, subprocess.CalledProcessError)
+                        else str(error)
+                    )
+                    print(
+                        f"Skipping {path}: could not determine its version ({reason})",
+                        file=sys.stderr,
+                    )
+                    return None
+        if isinstance(constraint, Version):
+            # Only the old API compares unknown output as version 0.0.0.
+            comparison_version = (
+                version if version is not None else _LEGACY_UNKNOWN_VERSION
+            )
+            if comparison_version < constraint:
+                return None
+        elif constraint is not None:
+            if version is None or not constraint.contains(version, prereleases=True):
+                return None
+        return CondaExecutable(path, flavor, version)
+
+    # A missing download mapping need not prevent using an installed tool.
+    unsupported_platform: Optional[UnsupportedPlatformError] = None
+    if install != "never" and any(flavor in installers for flavor, _ in parsed):
+        try:
+            platform_subdir()
+        except UnsupportedPlatformError as error:
+            unsupported_platform = error
+            install = "never"
+
+    # False denotes searching; True denotes installation. "per-target"
+    # interleaves the two, and "fallback" puts every search first.
+    steps: List[Tuple[Flavor, _VersionConstraint, bool]] = []
+    for flavor, constraint in parsed:
+        steps.append((flavor, constraint, False))
+        if install == "per-target" and flavor in installers:
+            steps.append((flavor, constraint, True))
+    if install == "fallback":
+        steps.extend(
+            (flavor, constraint, True)
+            for flavor, constraint in parsed
+            if flavor in installers
+        )
+
+    for index, (flavor, constraint, installing) in enumerate(steps):
+        if installing:
+            try:
+                installed_path = installers[flavor]()
+            except NotPublishedError as error:
+                remaining = dict.fromkeys(
+                    name.replace("_", "-") for name, _, _ in steps[index + 1 :]
+                )
+                if not remaining:
+                    raise
+                print(
+                    f"{error}; trying {' or '.join(remaining)} instead",
+                    file=sys.stderr,
+                )
+                continue
+            candidates = (
+                iter([installed_path]) if installed_path is not None else iter([])
+            )
+        else:
+            candidates = finders[flavor]()
+        for path in candidates:
+            result = compatible(path, flavor, constraint)
+            if result is not None:
+                return result
+    if unsupported_platform is not None:
+        raise unsupported_platform
+    return None
 
 
 def identify(executable: "StrPath") -> CondaExecutable:

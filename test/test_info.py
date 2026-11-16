@@ -6,7 +6,7 @@ from typing import Any, Dict, List, cast
 import pytest
 from packaging.version import InvalidVersion, Version
 
-from ensureconda import api
+from ensureconda import api, ensure
 from ensureconda.api import CondaExecutable, Flavor, ensureconda, identify
 
 MICROMAMBA = Path("data", "micromamba")
@@ -57,6 +57,33 @@ def only_micromamba(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.usefixtures("only_micromamba")
+def test_ensure_reports_flavor_and_version(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake_version_outputs(monkeypatch, {"micromamba": "2.9.0\n"})
+
+    info = ensure(install="never")
+
+    assert info == CondaExecutable(MICROMAMBA, "micromamba", Version("2.9.0"))
+    assert info.to_json() == {
+        "path": str(MICROMAMBA),
+        "flavor": "micromamba",
+        "version": "2.9.0",
+    }
+
+
+@pytest.mark.usefixtures("only_micromamba")
+@pytest.mark.parametrize("output", ["garbage", ""])
+def test_ensure_reports_unknown_version(
+    output: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    fake_version_outputs(monkeypatch, {"micromamba": output})
+
+    assert ensure(install="never") == CondaExecutable(MICROMAMBA, "micromamba", None)
+    assert capsys.readouterr().err == ""
+
+
+@pytest.mark.usefixtures("only_micromamba")
 def test_ensureconda_still_runs_no_version_check_by_default(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -64,6 +91,18 @@ def test_ensureconda_still_runs_no_version_check_by_default(
 
     assert ensureconda(no_install=True) == MICROMAMBA
     assert calls == []
+
+
+@pytest.mark.usefixtures("only_micromamba")
+def test_ensure_reuses_the_target_version_check(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls = fake_version_outputs(monkeypatch, {"micromamba": "2.9.0\n"})
+
+    info = ensure(["micromamba>=1.0"], install="never")
+
+    assert info == CondaExecutable(MICROMAMBA, "micromamba", Version("2.9.0"))
+    assert calls == ["micromamba"]
 
 
 @pytest.mark.parametrize(
