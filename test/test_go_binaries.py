@@ -85,6 +85,25 @@ def test_find_installed_micromamba(
         assert pathlib.Path(installed).parent == tmp_path / "ensure-conda"
 
 
+def test_reports_nothing_found(
+    golang_exe: Optional[str], isolated_env: Dict[str, str]
+) -> None:
+    if golang_exe is None:
+        raise pytest.skip("environment variable not set")
+    # Outside Linux the data directory isn't isolated and may hold micromamba
+    # or conda-standalone from an earlier test, so leave both out.
+    flags = ["--no-micromamba", "--no-conda-exe", "--no-install"]
+    result = subprocess.run(
+        [golang_exe, *flags],
+        env={**isolated_env, "PATH": ""},
+        capture_output=True,
+        encoding="utf8",
+    )
+    assert result.returncode == 1
+    assert result.stdout == ""
+    assert "Could not find compatible executable" in result.stderr
+
+
 @pytest.fixture(scope="session")
 def ensureconda_go_container(
     can_i_docker: bool, docker_client: Optional[docker.client.DockerClient]
