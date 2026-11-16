@@ -1,5 +1,6 @@
 import sys
 import time
+from functools import partial
 from typing import Any, Optional, Union
 
 import click
@@ -76,34 +77,26 @@ def ensureconda_cli(
     min_conda_version: Optional[Version],
     min_mamba_version: Optional[Version],
 ) -> None:
-    # We run the loop twice, once to find all the eligible condas without installation
-    # and once if you haven't found anything after installation
-    exe = ensureconda(
-        mamba=mamba,
-        micromamba=micromamba,
-        conda=conda,
-        conda_exe=conda_exe,
-        no_install=True,
-        min_mamba_version=min_mamba_version,
-        min_conda_version=min_conda_version,
-    )
-    if not exe and not no_install:
-        try:
-            exe = ensureconda(
-                mamba=mamba,
-                micromamba=micromamba,
-                conda=conda,
-                conda_exe=conda_exe,
-                no_install=False,
-                min_mamba_version=min_mamba_version,
-                min_conda_version=min_conda_version,
-            )
-        except requests.RequestException as error:
-            # Each attempt has already been reported on stderr, so end with
-            # one line instead of a traceback.
-            raise click.ClickException(f"download failed: {error}")
-        except (NotPublishedError, UnsupportedPlatformError) as error:
-            raise click.ClickException(str(error))
+    try:
+        find = partial(
+            ensureconda,
+            mamba=mamba,
+            micromamba=micromamba,
+            conda=conda,
+            conda_exe=conda_exe,
+            min_mamba_version=min_mamba_version,
+            min_conda_version=min_conda_version,
+        )
+        # Preserve the CLI's preference for installed executables.
+        exe = find(no_install=True)
+        if not exe and not no_install:
+            exe = find(no_install=False)
+    except requests.RequestException as error:
+        # Each attempt has already been reported on stderr, so end with
+        # one line instead of a traceback.
+        raise click.ClickException(f"download failed: {error}")
+    except (NotPublishedError, UnsupportedPlatformError) as error:
+        raise click.ClickException(str(error))
     if exe:
         print("Found compatible executable", file=sys.stderr, flush=True)
         # silly thing to force correct output order
