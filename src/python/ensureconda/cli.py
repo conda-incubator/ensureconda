@@ -1,12 +1,15 @@
+import json
 import sys
 import time
+from functools import partial
+from pathlib import Path
 from typing import Any, Optional, Union
 
 import click
 import requests
 from packaging.version import InvalidVersion, Version
 
-from ensureconda.api import ensureconda
+from ensureconda.api import CondaExecutable, _ensure, _legacy_targets, ensureconda
 from ensureconda.installer import NotPublishedError
 from ensureconda.resolve import UnsupportedPlatformError
 
@@ -67,6 +70,12 @@ class VersionNumber(click.ParamType):  # type: ignore[type-arg, unused-ignore]
     type=VersionNumber(),
     help=f"minimum version of mamba/micromamba to accept (defaults to {_DEFAULT_MIN_MAMBA})",
 )
+@click.option(
+    "--json",
+    "as_json",
+    is_flag=True,
+    help="print the executable's path, flavor and version as JSON",
+)
 def ensureconda_cli(
     mamba: bool,
     micromamba: bool,
@@ -75,40 +84,57 @@ def ensureconda_cli(
     no_install: bool,
     min_conda_version: Optional[Version],
     min_mamba_version: Optional[Version],
+    as_json: bool,
 ) -> None:
-    # We run the loop twice, once to find all the eligible condas without installation
-    # and once if you haven't found anything after installation
-    exe = ensureconda(
-        mamba=mamba,
-        micromamba=micromamba,
-        conda=conda,
-        conda_exe=conda_exe,
-        no_install=True,
-        min_mamba_version=min_mamba_version,
-        min_conda_version=min_conda_version,
-    )
-    if not exe and not no_install:
-        try:
-            exe = ensureconda(
+    exe: Union[CondaExecutable, Path, None]
+    try:
+        if as_json:
+            # These flags use old-API minimums, even with JSON output.
+            targets = _legacy_targets(
                 mamba=mamba,
                 micromamba=micromamba,
                 conda=conda,
                 conda_exe=conda_exe,
-                no_install=False,
+                min_conda_version=min_conda_version,
+                min_mamba_version=min_mamba_version,
+            )
+            exe = _ensure(
+                targets,
+                install="never" if no_install else "fallback",
+                probe_version=True,
+            )
+        else:
+            find = partial(
+                ensureconda,
+                mamba=mamba,
+                micromamba=micromamba,
+                conda=conda,
+                conda_exe=conda_exe,
                 min_mamba_version=min_mamba_version,
                 min_conda_version=min_conda_version,
             )
-        except requests.RequestException as error:
-            # Each attempt has already been reported on stderr, so end with
-            # one line instead of a traceback.
-            raise click.ClickException(f"download failed: {error}")
-        except (NotPublishedError, UnsupportedPlatformError) as error:
-            raise click.ClickException(str(error))
+            # Preserve the CLI's preference for installed executables.
+            exe = find(no_install=True)
+            if not exe and not no_install:
+                exe = find(no_install=False)
+    except requests.RequestException as error:
+        # Each attempt has already been reported on stderr, so end with
+        # one line instead of a traceback.
+        detail = str(error)
+        reason = type(error).__name__
+        if detail:
+            reason += f": {detail}"
+        raise click.ClickException(f"download failed: {reason}")
+    except (NotPublishedError, UnsupportedPlatformError) as error:
+        raise click.ClickException(str(error))
     if exe:
         print("Found compatible executable", file=sys.stderr, flush=True)
         # silly thing to force correct output order
         time.sleep(0.01)
-        print(str(exe), flush=True)
+        if isinstance(exe, CondaExecutable):
+            print(json.dumps(exe.to_json()), flush=True)
+        else:
+            print(str(exe), flush=True)
         sys.exit(0)
     else:
         print("Could not find compatible executable", file=sys.stderr)

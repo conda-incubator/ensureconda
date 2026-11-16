@@ -1,15 +1,45 @@
 import platform
 import sys
 import sysconfig
+from pathlib import Path
+from test.test_info import executable_file
 
 import pytest
 
+from ensureconda import api, resolve
 from ensureconda.resolve import (
     UnsupportedPlatformError,
     platform_subdir,
     subdir_for,
     windows_subdir,
 )
+
+
+@pytest.mark.parametrize("location", ["data", "bin"])
+def test_standalone_discovery_keeps_the_old_filename(
+    location: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    suffix = ".exe" if sys.platform == "win32" else ""
+    executable_file(tmp_path / location / f"conda-standalone{suffix}")
+    monkeypatch.setenv("PATH", str(tmp_path / "bin"))
+    monkeypatch.setattr(resolve, "site_path", lambda: tmp_path / "data")
+
+    assert list(resolve.conda_standalone_executables()) == []
+    assert (
+        api.ensureconda(mamba=False, micromamba=False, conda=False, no_install=True)
+        is None
+    )
+
+    other_location = "bin" if location == "data" else "data"
+    canonical = executable_file(tmp_path / other_location / f"conda_standalone{suffix}")
+    assert list(resolve.conda_standalone_executables()) == [canonical]
+    assert (
+        api.ensureconda(mamba=False, micromamba=False, conda=False, no_install=True)
+        == canonical
+    )
+    assert api.ensure(
+        ["conda-standalone"], install="never", probe_version=False
+    ) == api.CondaExecutable(canonical, "conda_standalone", None)
 
 
 @pytest.mark.parametrize(
