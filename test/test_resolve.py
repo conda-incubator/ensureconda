@@ -87,6 +87,18 @@ def test_windows_subdir(sysconfig_platform: str, bits: int, expected: str) -> No
     assert windows_subdir(sysconfig_platform, bits) == expected
 
 
+# 32-bit ARM builds of CPython, and of MSYS2's Python before and from 3.12
+@pytest.mark.parametrize(
+    "sysconfig_platform", ["win-arm32", "mingw_armv7", "mingw_armv7_ucrt_llvm"]
+)
+def test_windows_subdir_unsupported(sysconfig_platform: str) -> None:
+    with pytest.raises(
+        UnsupportedPlatformError,
+        match=f"Unsupported platform 'win32' \\({sysconfig_platform}\\)",
+    ):
+        windows_subdir(sysconfig_platform, 32)
+
+
 def test_platform_subdir_goes_by_the_python_build_on_windows(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
