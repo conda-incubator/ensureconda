@@ -150,8 +150,9 @@ By default, `ensure()` runs `--version` on each candidate it considers:
   failure on stderr and skips the candidate. It continues with other candidates,
   later targets, and installation according to the selected search order.
 
-This check also applies to candidates returned by an installer. It does not
-force replacement of a cached executable that the installer considers fresh.
+This check also applies to candidates returned by an installer. An installer
+reuses an executable already in ensureconda's data directory only if it passes
+the same check, and otherwise downloads a new one.
 Set `probe_version=False` to run `--version` only when a target's constraints
 require it. For an unconstrained target, this also disables checking that the
 executable runs, and the returned version is `None`.

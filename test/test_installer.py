@@ -308,6 +308,48 @@ def test_micromamba_is_extracted_while_holding_the_download_lock(
     assert executable == tmp_path / ("micromamba" + installer.exe_suffix())
 
 
+@pytest.mark.parametrize(
+    "install, name",
+    [
+        (installer.install_micromamba, "micromamba"),
+        (installer.install_conda_exe, "conda_standalone"),
+    ],
+    ids=["micromamba", "conda-standalone"],
+)
+@pytest.mark.parametrize("usable", [True, False], ids=["usable", "unusable"])
+def test_install_reuses_an_executable_only_if_it_is_usable(
+    install: Callable[[Callable[[Path], bool]], Optional[Path]],
+    name: str,
+    usable: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    existing = tmp_path / (name + installer.exe_suffix())
+    existing.write_bytes(b"existing executable")
+    checked: List[Path] = []
+    urls: List[str] = []
+
+    def is_usable(path: Path) -> bool:
+        checked.append(path)
+        return usable
+
+    def request(url: str, **kwargs: Any) -> requests.Response:
+        urls.append(url)
+        raise requests.ConnectionError("Downloads are refused")
+
+    monkeypatch.setattr(installer, "site_path", lambda: tmp_path)
+    monkeypatch.setattr(installer, "request_url_with_retry", request)
+
+    if usable:
+        assert install(is_usable) == existing
+        assert urls == []
+    else:
+        with pytest.raises(requests.ConnectionError):
+            install(is_usable)
+        assert len(urls) == 1
+    assert checked == [existing]
+
+
 @pytest.mark.parametrize("failure", ["http", "interrupted", "timeout"])
 def test_download_failure_preserves_existing_executable(
     failure: str,

@@ -13,7 +13,17 @@ from datetime import timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from tempfile import TemporaryFile
-from typing import IO, Any, Dict, Generator, List, NamedTuple, Optional, Union
+from typing import (
+    IO,
+    Any,
+    Callable,
+    Dict,
+    Generator,
+    List,
+    NamedTuple,
+    Optional,
+    Union,
+)
 from urllib.parse import urlparse
 
 import filelock
@@ -312,7 +322,14 @@ def get_channel_name() -> str:
     return channel
 
 
-def install_conda_exe() -> Optional[Path]:
+def install_conda_exe(
+    is_usable: Callable[[Path], bool] = lambda path: True,
+) -> Optional[Path]:
+    """Install conda-standalone into the installation
+
+    Reuse one that is already there if it is less than a day old and passes
+    is_usable.
+    """
     subdir = platform_subdir()
     # Create a lock file specific to conda_exe to prevent concurrent downloads
     lock_path = site_path() / "conda_exe_install.lock"
@@ -329,6 +346,7 @@ def install_conda_exe() -> Optional[Path]:
             if (
                 file_age < REDOWNLOAD_WHEN_OLDER_THAN_SEC
                 and file_age > NEGATIVE_AGE_TOLERANCE_SEC
+                and is_usable(target_path)
             ):
                 return target_path
             # File is too old or has a weird timestamp, continue to download a new version
@@ -401,8 +419,14 @@ def compute_candidates(channel: str, subdir: str) -> List[AnacondaPkg]:
     return candidates
 
 
-def install_micromamba() -> Optional[Path]:
-    """Install micromamba into the installation"""
+def install_micromamba(
+    is_usable: Callable[[Path], bool] = lambda path: True,
+) -> Optional[Path]:
+    """Install micromamba into the installation
+
+    Reuse one that is already there if it is less than a day old and passes
+    is_usable.
+    """
     subdir = platform_subdir()
     # Create a lock file specific to micromamba to prevent concurrent downloads
     lock_path = site_path() / "micromamba_install.lock"
@@ -420,6 +444,7 @@ def install_micromamba() -> Optional[Path]:
             if (
                 file_age < REDOWNLOAD_WHEN_OLDER_THAN_SEC
                 and file_age > NEGATIVE_AGE_TOLERANCE_SEC
+                and is_usable(target_path)
             ):
                 return target_path
             # File is too old or has a weird timestamp, continue to download a new version

@@ -31,6 +31,7 @@ from ensureconda.resolve import (
     UnsupportedPlatformError,
     conda_executables,
     conda_standalone_executables,
+    is_exe,
     mamba_executables,
     micromamba_executables,
     platform_subdir,
@@ -318,13 +319,17 @@ def _ensure(
         "conda": conda_executables,
         "conda_standalone": conda_standalone_executables,
     }
-    installers: Dict[Flavor, Callable[[], Optional[Path]]] = {
+    installers: Dict[Flavor, Callable[[Callable[[Path], bool]], Optional[Path]]] = {
         "micromamba": install_micromamba,
         "conda_standalone": install_conda_exe,
     }
 
     def compatible(
-        path: Path, flavor: Flavor, constraint: _VersionConstraint
+        path: Path,
+        flavor: Flavor,
+        constraint: _VersionConstraint,
+        *,
+        quiet: bool = False,
     ) -> Optional[CondaExecutable]:
         version = None
         if constraint is not None or probe_version:
@@ -346,10 +351,11 @@ def _ensure(
                         if isinstance(error, subprocess.CalledProcessError)
                         else str(error)
                     )
-                    print(
-                        f"Skipping {path}: could not determine its version ({reason})",
-                        file=sys.stderr,
-                    )
+                    if not quiet:
+                        print(
+                            f"Skipping {path}: could not determine its version ({reason})",
+                            file=sys.stderr,
+                        )
                     return None
         if isinstance(constraint, Version):
             # Only the old API compares unknown output as version 0.0.0.
@@ -362,6 +368,15 @@ def _ensure(
             if version is None or not constraint.contains(version, prereleases=True):
                 return None
         return CondaExecutable(path, flavor, version)
+
+    def usable(
+        flavor: Flavor, constraint: _VersionConstraint
+    ) -> Callable[[Path], bool]:
+        """Return the check that the search applies to a candidate for a target."""
+        return lambda path: (
+            is_exe(path)
+            and compatible(path, flavor, constraint, quiet=True) is not None
+        )
 
     # A missing download mapping need not prevent using an installed tool.
     unsupported_platform: Optional[UnsupportedPlatformError] = None
@@ -389,7 +404,7 @@ def _ensure(
     for index, (flavor, constraint, installing) in enumerate(steps):
         if installing:
             try:
-                installed_path = installers[flavor]()
+                installed_path = installers[flavor](usable(flavor, constraint))
             except NotPublishedError as error:
                 remaining = dict.fromkeys(
                     name.replace("_", "-") for name, _, _ in steps[index + 1 :]
