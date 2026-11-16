@@ -457,6 +457,13 @@ func extractTarFile(header *tar.Header, targetFileName string, tarReader *tar.Re
 	err = writeExecutable(tmpFileName, header, tarReader)
 	if err == nil {
 		err = os.Rename(tmpFileName, targetFileName)
+		if err != nil {
+			hint := ""
+			if runtime.GOOS == "windows" {
+				hint = "; it may be in use; close processes using it and retry"
+			}
+			err = fmt.Errorf("could not replace executable %s: %w%s", targetFileName, err, hint)
+		}
 	}
 	if err != nil {
 		// Don't leave a partial executable behind.

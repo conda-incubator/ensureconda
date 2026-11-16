@@ -3,6 +3,7 @@ package cmd
 import (
 	"archive/tar"
 	"bytes"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -111,6 +112,37 @@ func TestExtractTarFilesRemovesTemporaryFileOnError(t *testing.T) {
 	// Neither the executable nor its temporary file, whatever that was called.
 	if names, want := fileNames(t, dir), []string{"tool.lock"}; !slices.Equal(names, want) {
 		t.Errorf("the directory holds %v after a failed extraction, want %v", names, want)
+	}
+}
+
+func TestExtractTarFilesReportsReplacementFailure(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "tool")
+	// A nonempty directory makes the final rename fail on every platform.
+	if err := os.Mkdir(target, 0700); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(target, "existing")
+	if err := os.WriteFile(marker, []byte("keep"), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := extractTarFiles(tarWith(t, "bin/tool", []byte("binary")), map[string]string{"bin/tool": target})
+	if err == nil || !strings.Contains(err.Error(), "could not replace executable "+target) {
+		t.Fatalf("replacement error = %v, want context naming the executable", err)
+	}
+	var cause *os.LinkError
+	if !errors.As(err, &cause) {
+		t.Errorf("replacement error %v lost the underlying rename error", err)
+	}
+	if runtime.GOOS == "windows" && !strings.Contains(err.Error(), "close processes using it and retry") {
+		t.Errorf("replacement error = %v, want an in-use hint on Windows", err)
+	}
+	if content, err := os.ReadFile(marker); err != nil || string(content) != "keep" {
+		t.Errorf("existing target changed: %q, %v", content, err)
+	}
+	if names, want := fileNames(t, dir), []string{"tool", "tool.lock"}; !slices.Equal(names, want) {
+		t.Errorf("directory holds %v after failed replacement, want %v", names, want)
 	}
 }
 
