@@ -5,10 +5,12 @@ build_arches = [
     ["linux", "amd64"],
     ["linux", "arm64"],
     ["linux", "ppc64le"],
+    ["linux", "riscv64"],
+    ["linux", "s390x"],
     ["darwin", "amd64"],
     ["darwin", "arm64"],
     ["windows", "amd64"],
-    # ["windows", "arm64"],
+    ["windows", "arm64"],
 ]
 for goos, goarch in build_arches:
     env = dict(os.environ)
