@@ -4,6 +4,7 @@ import io
 import os
 import shutil
 import stat
+import subprocess
 import sys
 import tarfile
 import time
@@ -13,7 +14,17 @@ from datetime import timezone
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from tempfile import TemporaryFile
-from typing import IO, Any, Dict, Generator, List, NamedTuple, Optional, Union
+from typing import (
+    IO,
+    Any,
+    Callable,
+    Dict,
+    Generator,
+    List,
+    NamedTuple,
+    Optional,
+    Union,
+)
 from urllib.parse import urlparse
 
 import filelock
@@ -22,12 +33,6 @@ from conda_package_streaming.package_streaming import stream_conda_component
 from packaging.version import InvalidVersion, Version
 
 from ensureconda.resolve import is_windows, platform_subdir, site_path
-
-REDOWNLOAD_WHEN_OLDER_THAN_SEC = 60 * 60 * 24
-"""Maximum executable age in seconds (one day) before redownloading."""
-
-NEGATIVE_AGE_TOLERANCE_SEC = -60
-"""Minimum valid executable age in seconds, allowing for clock skew."""
 
 LOCK_NOTIFICATION_INTERVAL_SEC = 5
 """Seconds between lock acquisition attempts and waiting notifications."""
@@ -312,7 +317,21 @@ def get_channel_name() -> str:
     return channel
 
 
-def install_conda_exe() -> Optional[Path]:
+def _runs(executable: Path) -> bool:
+    """Report whether `executable --version` succeeds."""
+    try:
+        subprocess.check_output([executable, "--version"], stderr=subprocess.DEVNULL)
+    except (subprocess.CalledProcessError, OSError):
+        return False
+    return True
+
+
+def install_conda_exe(is_usable: Callable[[Path], bool] = _runs) -> Optional[Path]:
+    """Install conda-standalone into the installation
+
+    Reuse one that is already there if it passes is_usable, by default if its
+    `--version` succeeds.
+    """
     subdir = platform_subdir()
     # Create a lock file specific to conda_exe to prevent concurrent downloads
     lock_path = site_path() / "conda_exe_install.lock"
@@ -323,15 +342,8 @@ def install_conda_exe() -> Optional[Path]:
     with lock_with_feedback(lock_path, "downloading conda"):
         # Check if the file already exists after acquiring the lock
         target_path = site_path() / dest_filename
-        if target_path.exists():
-            # Check if the file is fresh
-            file_age = time.time() - target_path.stat().st_mtime
-            if (
-                file_age < REDOWNLOAD_WHEN_OLDER_THAN_SEC
-                and file_age > NEGATIVE_AGE_TOLERANCE_SEC
-            ):
-                return target_path
-            # File is too old or has a weird timestamp, continue to download a new version
+        if target_path.exists() and is_usable(target_path):
+            return target_path
 
         channel = get_channel_name()
         candidates = compute_candidates(channel, subdir)
@@ -401,8 +413,12 @@ def compute_candidates(channel: str, subdir: str) -> List[AnacondaPkg]:
     return candidates
 
 
-def install_micromamba() -> Optional[Path]:
-    """Install micromamba into the installation"""
+def install_micromamba(is_usable: Callable[[Path], bool] = _runs) -> Optional[Path]:
+    """Install micromamba into the installation
+
+    Reuse one that is already there if it passes is_usable, by default if its
+    `--version` succeeds.
+    """
     subdir = platform_subdir()
     # Create a lock file specific to micromamba to prevent concurrent downloads
     lock_path = site_path() / "micromamba_install.lock"
@@ -413,16 +429,8 @@ def install_micromamba() -> Optional[Path]:
     with lock_with_feedback(lock_path, "downloading micromamba"):
         # Check if the file already exists after acquiring the lock
         target_path = site_path() / dest_filename
-        if target_path.exists():
-            # Check if the file is newer than 1 day
-            file_age = time.time() - target_path.stat().st_mtime
-            # Skip if file is not too old and not too far in the future
-            if (
-                file_age < REDOWNLOAD_WHEN_OLDER_THAN_SEC
-                and file_age > NEGATIVE_AGE_TOLERANCE_SEC
-            ):
-                return target_path
-            # File is too old or has a weird timestamp, continue to download a new version
+        if target_path.exists() and is_usable(target_path):
+            return target_path
 
         url = f"https://micro.mamba.pm/api/micromamba/{subdir}/latest"
         try:

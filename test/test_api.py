@@ -1,6 +1,8 @@
+import os
 import subprocess
 import sys
 from pathlib import Path
+from typing import List, Optional, Union
 
 import pytest
 import requests
@@ -61,6 +63,74 @@ def test_search_without_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) ->
     assert api.ensureconda(no_install=True) is None
 
 
+NO_EXECUTABLE_BIT = pytest.mark.skipif(
+    sys.platform == "win32", reason="Windows has no executable bit"
+)
+
+
+@pytest.mark.parametrize(
+    "version, mode, minimum",
+    [
+        (OSError(8, "Exec format error"), 0o755, Version("0.7.3")),
+        (Version("0.1.0"), 0o755, Version("0.7.3")),
+        pytest.param(
+            Version("2.0.0"), 0o644, Version("0.7.3"), marks=NO_EXECUTABLE_BIT
+        ),
+        pytest.param(Version("2.0.0"), 0o644, None, marks=NO_EXECUTABLE_BIT),
+    ],
+    ids=["does-not-run", "too-old", "not-executable", "not-executable-unprobed"],
+)
+def test_install_replaces_a_new_executable_that_the_search_rejected(
+    version: Union[Exception, Version],
+    mode: int,
+    minimum: Optional[Version],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    executable = tmp_path / ("micromamba.exe" if resolve.is_windows else "micromamba")
+    executable.write_bytes(b"micromamba")
+    executable.chmod(mode)
+    current = version
+    downloads: List[str] = []
+
+    def determine_version(exe: object) -> Version:
+        if isinstance(current, Exception):
+            raise current
+        return current
+
+    def download(url: str) -> requests.Response:
+        downloads.append(url)
+        response = requests.Response()
+        response._content = b"tarball"
+        return response
+
+    def extract(tarball: object, filename: str, dest_filename: str) -> Path:
+        nonlocal current
+        executable.write_bytes(b"new micromamba")
+        executable.chmod(0o755)
+        current = Version("2.0.0")
+        return executable
+
+    monkeypatch.delenv("PATH", raising=False)
+    monkeypatch.setattr(resolve, "site_path", lambda: tmp_path)
+    monkeypatch.setattr("ensureconda.installer.site_path", lambda: tmp_path)
+    monkeypatch.setattr("ensureconda.installer.request_url_with_retry", download)
+    monkeypatch.setattr("ensureconda.installer.extract_files_from_tar_bz2", extract)
+    monkeypatch.setattr(api, "determine_micromamba_version", determine_version)
+
+    result = api.ensureconda(
+        mamba=False, conda=False, conda_exe=False, min_mamba_version=minimum
+    )
+
+    assert result == executable
+    assert len(downloads) == 1
+    skipped = 1 if isinstance(version, Exception) else 0
+    # On Windows, the search spells the extension as in PATHEXT (".EXE").
+    err = os.path.normcase(capsys.readouterr().err)
+    assert err.count(os.path.normcase(f"Skipping {executable}")) == skipped
+
+
 @pytest.fixture
 def nothing_installed(monkeypatch: pytest.MonkeyPatch) -> None:
     for finder in [
@@ -75,7 +145,7 @@ def nothing_installed(monkeypatch: pytest.MonkeyPatch) -> None:
 def failing_micromamba_install(
     monkeypatch: pytest.MonkeyPatch, error: Exception
 ) -> None:
-    def install_micromamba() -> Path:
+    def install_micromamba(is_usable: object) -> Path:
         raise error
 
     monkeypatch.setattr(api, "install_micromamba", install_micromamba)
@@ -90,7 +160,7 @@ def test_unpublished_micromamba_falls_back_to_conda_standalone(
 ) -> None:
     conda_standalone = Path("data", "conda_standalone")
     failing_micromamba_install(monkeypatch, NotPublishedError(NOT_PUBLISHED))
-    monkeypatch.setattr(api, "install_conda_exe", lambda: conda_standalone)
+    monkeypatch.setattr(api, "install_conda_exe", lambda _: conda_standalone)
 
     assert api.ensureconda() == conda_standalone
     assert capsys.readouterr().err == (
@@ -137,7 +207,7 @@ def test_failed_micromamba_download_does_not_fall_back(
     failing_micromamba_install(
         monkeypatch, requests.HTTPError(f"{status} Error", response=response)
     )
-    monkeypatch.setattr(api, "install_conda_exe", lambda: Path("unused"))
+    monkeypatch.setattr(api, "install_conda_exe", lambda _: Path("unused"))
 
     with pytest.raises(requests.HTTPError):
         api.ensureconda()

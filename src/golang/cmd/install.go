@@ -108,12 +108,6 @@ const (
 	CondaArchive
 )
 
-// If the conda executable is older than this, it will be redownloaded
-const redownloadWhenOlder = 24 * time.Hour
-
-// If the age is below this negative tolerance, consider timestamp invalid and redownload
-const negativeAgeTolerance = -60 * time.Second
-
 func (a AnacondaPkgs) Len() int { return len(a) }
 func (a AnacondaPkgs) Less(i, j int) bool {
 	// By this point, InstallCondaStandalone has filtered out unparseable versions.
@@ -166,21 +160,15 @@ func InstallCondaStandalone() (string, error) {
 		return "", err
 	}
 
-	unlock, err := lockInstall("conda_exe_install.lock")
-	if err != nil {
-		return "", err
-	}
-	defer unlock()
-
-	// Check if already installed and fresh
 	target := targetExeFilename("conda_standalone")
-	if st, statErr := os.Stat(target); statErr == nil {
-		age := time.Since(st.ModTime())
-		if age < redownloadWhenOlder && age > negativeAgeTolerance {
-			return target, nil
-		}
-	}
+	return installUnlessUsable("conda_exe_install.lock", target, condaIsUsable, func() (string, error) {
+		return downloadCondaStandalone(channel, subdir, target)
+	})
+}
 
+// downloadCondaStandalone installs the latest conda-standalone for subdir from
+// channel as target.
+func downloadCondaStandalone(channel string, subdir string, target string) (string, error) {
 	// Download and install
 	candidates, err := computeCandidates(channel, subdir)
 	if err != nil {
@@ -328,28 +316,33 @@ func unpackConda(archive []byte, fileNameMap map[string]string) (string, error) 
 // installMicromamba downloads micromamba from url, unless a concurrent process
 // has just installed one that can be used.
 func installMicromamba(url string) (string, error) {
-	unlock, err := lockInstall("micromamba_install.lock")
+	target := targetExeFilename("micromamba")
+	return installUnlessUsable("micromamba_install.lock", target, micromambaIsUsable, func() (string, error) {
+		// micro.mamba.pm publishes no digest to verify against.
+		return downloadAndUnpackArchive(
+			url, "", map[string]string{
+				"Library/bin/micromamba.exe": target,
+				"bin/micromamba":             target,
+			})
+	})
+}
+
+// installUnlessUsable calls download while holding the named download lock,
+// unless target passes isUsable once the lock is held.
+func installUnlessUsable(lockName string, target string, isUsable func(string) (bool, error), download func() (string, error)) (string, error) {
+	unlock, err := lockInstall(lockName)
 	if err != nil {
 		return "", err
 	}
 	defer unlock()
 
 	// A concurrent process may have installed it while this one waited for the
-	// lock. Check it instead of trusting its age: any micromamba that was here
+	// lock. Check it instead of trusting its age: any executable that was here
 	// before has already been rejected, or this install wouldn't be running.
-	target := targetExeFilename("micromamba")
-	if usable, _ := micromambaIsUsable(target); usable {
+	if usable, _ := isUsable(target); usable {
 		return target, nil
 	}
-
-	// micro.mamba.pm publishes no digest to verify against.
-	installedExe, err := downloadAndUnpackArchive(
-		url, "", map[string]string{
-			"Library/bin/micromamba.exe": targetExeFilename("micromamba"),
-			"bin/micromamba":             targetExeFilename("micromamba"),
-		})
-
-	return installedExe, err
+	return download()
 }
 
 // lockInstall takes the named download lock in the site path, so that

@@ -5,6 +5,7 @@ from pathlib import Path
 from test.test_info import executable_file
 
 import pytest
+import requests
 from packaging.version import Version
 
 from ensureconda import CondaExecutable, ensure, installer, resolve
@@ -80,14 +81,22 @@ def test_broken_conda_exe_allows_path_candidate(
     assert f"Skipping {broken}" in capsys.readouterr().err
 
 
-def test_fresh_unrunnable_cache_is_rejected_after_installation(
-    isolated_tools: Path, capsys: pytest.CaptureFixture[str]
+def test_fresh_unrunnable_cache_is_replaced_by_installation(
+    isolated_tools: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
-    broken = executable_file(isolated_tools / "data" / "micromamba")
+    cached = executable_file(isolated_tools / "data" / "micromamba")
 
-    # The installer reuses this fresh file. Probing rejects it but does not
-    # change the installer's cache policy or trigger a replacement download.
-    assert ensure(["micromamba"]) is None
-    assert (isolated_tools / "data" / "micromamba_install.lock").exists()
-    assert broken.read_bytes() == b""
-    assert f"Skipping {broken}" in capsys.readouterr().err
+    def extract(tarball: object, filename: str, dest_filename: str) -> Path:
+        return program(cached, "#!/bin/sh\nprintf '2.9.0\\n'\n")
+
+    monkeypatch.setattr(
+        installer, "request_url_with_retry", lambda url: requests.Response()
+    )
+    monkeypatch.setattr(installer, "extract_files_from_tar_bz2", extract)
+
+    assert ensure(["micromamba"]) == CondaExecutable(
+        cached, "micromamba", Version("2.9.0")
+    )
+    assert capsys.readouterr().err.count(f"Skipping {cached}") == 1

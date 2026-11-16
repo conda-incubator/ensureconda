@@ -405,30 +405,48 @@ func TestInstallersHoldDownloadLock(t *testing.T) {
 	}
 }
 
-func TestInstallMicromambaReusesUsableInstall(t *testing.T) {
+func TestInstallersReuseUsableInstall(t *testing.T) {
 	useRetryClock(t)
 	if runtime.GOOS == "windows" {
-		t.Skip("the stand-in for micromamba is a shell script")
+		t.Skip("the stand-ins for micromamba and conda-standalone are shell scripts")
 	}
-	useSitePath(t)
-	var requests atomic.Int32
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		requests.Add(1)
-		http.NotFound(w, r)
-	}))
-	defer server.Close()
+	tests := []struct {
+		name    string
+		exeName string
+		version string
+		install func(serverURL string) (string, error)
+	}{
+		{"micromamba", "micromamba", "2.0.0", func(serverURL string) (string, error) {
+			return installMicromamba(serverURL + "/latest")
+		}},
+		{"conda-standalone", "conda_standalone", "conda 25.1.1", func(string) (string, error) {
+			return InstallCondaStandalone()
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			useSitePath(t)
+			var requests atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				http.NotFound(w, r)
+			}))
+			defer server.Close()
+			useAnacondaAPI(t, server)
 
-	// As if another process installed micromamba while this one waited.
-	target := targetExeFilename("micromamba")
-	if err := os.WriteFile(target, []byte("#!/bin/sh\necho 2.0.0\n"), 0755); err != nil {
-		t.Fatal(err)
-	}
-	got, err := installMicromamba(server.URL + "/latest")
-	if err != nil || got != target {
-		t.Fatalf("installMicromamba() = %v, %v; want %v", got, err, target)
-	}
-	if n := requests.Load(); n != 0 {
-		t.Errorf("made %d requests, want none for a usable install", n)
+			// As if another process installed it while this one waited.
+			target := targetExeFilename(tt.exeName)
+			if err := os.WriteFile(target, []byte("#!/bin/sh\necho "+tt.version+"\n"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			got, err := tt.install(server.URL)
+			if err != nil || got != target {
+				t.Fatalf("install = %v, %v; want %v", got, err, target)
+			}
+			if n := requests.Load(); n != 0 {
+				t.Errorf("made %d requests, want none for a usable install", n)
+			}
+		})
 	}
 }
 
@@ -452,38 +470,45 @@ type roundTripper func(*http.Request) (*http.Response, error)
 
 func (f roundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-func TestEnsureCondaReplacesUnusableMicromamba(t *testing.T) {
+func TestEnsureCondaReplacesUnusableInstall(t *testing.T) {
+	micromamba := func() (string, error) { return EnsureConda(false, true, false, false, false) }
+	condaStandalone := func() (string, error) { return EnsureConda(false, false, false, true, false) }
 	tests := []struct {
 		name     string
+		exeName  string
+		ensure   func() (string, error)
 		content  string
 		mode     os.FileMode
 		unixOnly bool
 	}{
-		{"corrupt", "not an executable", 0755, false},
-		{"older than the minimum version", "#!/bin/sh\necho 0.1.0\n", 0755, true},
-		{"not executable", "#!/bin/sh\necho 2.0.0\n", 0644, true},
+		{"micromamba/corrupt", "micromamba", micromamba, "not an executable", 0755, false},
+		{"micromamba/older than the minimum version", "micromamba", micromamba, "#!/bin/sh\necho 0.1.0\n", 0755, true},
+		{"micromamba/not executable", "micromamba", micromamba, "#!/bin/sh\necho 2.0.0\n", 0644, true},
+		{"conda-standalone/corrupt", "conda_standalone", condaStandalone, "not an executable", 0755, false},
+		{"conda-standalone/older than the minimum version", "conda_standalone", condaStandalone, "#!/bin/sh\necho conda 4.0.0\n", 0755, true},
+		{"conda-standalone/not executable", "conda_standalone", condaStandalone, "#!/bin/sh\necho conda 25.1.1\n", 0644, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if tt.unixOnly && runtime.GOOS == "windows" {
-				t.Skip("the stand-in for micromamba is a shell script")
+				t.Skip("the stand-in is a shell script")
 			}
 			useSitePath(t)
 			// Nothing to find elsewhere.
 			t.Setenv("PATH", "")
 			requests := refuseDownloads(t)
-			// Newly written, as a micromamba that was installed today.
-			if err := os.WriteFile(targetExeFilename("micromamba"), []byte(tt.content), tt.mode); err != nil {
+			// Newly written, as an executable that was installed today.
+			if err := os.WriteFile(targetExeFilename(tt.exeName), []byte(tt.content), tt.mode); err != nil {
 				t.Fatal(err)
 			}
 
-			_, err := EnsureConda(false, true, false, false, false)
+			_, err := tt.ensure()
 
 			if err == nil {
 				t.Error("EnsureConda() succeeded, want the refused download to fail")
 			}
 			if n := requests.Load(); n != 1 {
-				t.Errorf("made %d requests, want 1 to replace the micromamba", n)
+				t.Errorf("made %d requests, want 1 to replace the executable", n)
 			}
 		})
 	}
