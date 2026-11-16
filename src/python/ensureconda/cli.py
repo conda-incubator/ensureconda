@@ -94,7 +94,11 @@ def ensureconda_cli(
     except requests.RequestException as error:
         # Each attempt has already been reported on stderr, so end with
         # one line instead of a traceback.
-        raise click.ClickException(f"download failed: {error}")
+        detail = str(error)
+        reason = type(error).__name__
+        if detail:
+            reason += f": {detail}"
+        raise click.ClickException(f"download failed: {reason}")
     except (NotPublishedError, UnsupportedPlatformError) as error:
         raise click.ClickException(str(error))
     if exe:

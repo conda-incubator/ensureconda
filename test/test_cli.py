@@ -25,7 +25,11 @@ def test_invalid_version_is_a_usage_error(option: str) -> None:
     [
         (
             requests.ConnectionError("Connection refused"),
-            "Error: download failed: Connection refused\n",
+            "Error: download failed: ConnectionError: Connection refused\n",
+        ),
+        (
+            requests.ReadTimeout(),
+            "Error: download failed: ReadTimeout\n",
         ),
         (
             NotPublishedError("No conda-standalone package found for linux-s390x"),
@@ -36,7 +40,7 @@ def test_invalid_version_is_a_usage_error(option: str) -> None:
             "Error: Unsupported platform 'freebsd14' (amd64)\n",
         ),
     ],
-    ids=["download-failure", "not-published", "unsupported-platform"],
+    ids=["download-failure", "empty-timeout", "not-published", "unsupported-platform"],
 )
 def test_failed_installation_ends_with_one_line(
     error: Exception, expected_output: str, monkeypatch: pytest.MonkeyPatch
