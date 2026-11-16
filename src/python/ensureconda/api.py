@@ -13,6 +13,7 @@ from typing import (
     NamedTuple,
     Optional,
     Sequence,
+    Set,
     Tuple,
     Union,
 )
@@ -84,7 +85,7 @@ def determine_conda_version(exe: "StrPath") -> Version:
 
 
 Flavor = Literal["mamba", "micromamba", "conda", "conda_standalone"]
-InstallPolicy = Literal["never", "fallback", "per-target"]
+InstallPolicy = Literal["never", "fallback", "per-target", "force"]
 # Version is an old-API minimum; SpecifierSet is a new-API constraint.
 _VersionConstraint = Optional[Union[Version, SpecifierSet]]
 
@@ -111,7 +112,12 @@ class CondaExecutable(NamedTuple):
 
 _FLAVORS: Tuple[Flavor, ...] = ("mamba", "micromamba", "conda", "conda_standalone")
 _TARGET_FLAVORS = {canonicalize_name(flavor): flavor for flavor in _FLAVORS}
-_INSTALL_POLICIES: Tuple[InstallPolicy, ...] = ("never", "fallback", "per-target")
+_INSTALL_POLICIES: Tuple[InstallPolicy, ...] = (
+    "never",
+    "fallback",
+    "per-target",
+    "force",
+)
 
 
 def _probe_version(executable: "StrPath", flavor: Flavor) -> Optional[Version]:
@@ -274,6 +280,9 @@ def ensure(
     - "per-target": search and attempt installation for each target before
       moving on to the next.
     - "never": search only.
+    - "force": skip all existing executables and download installable tools in
+      target order. Bypass the cache under the download lock, refreshing each
+      tool at most once per call. Requires at least one installable target.
 
     Return the path, flavor, and version, or None if no compatible executable
     is found. If --version cannot start or exits unsuccessfully, report the
@@ -286,14 +295,19 @@ def ensure(
     it. Unknown versions cannot satisfy a constraint.
     Installation fetches the latest available build; constraints filter the
     result and do not select an older release to download.
+    Forced installation replaces the cached copy before checking the result.
+    Rejection by a version constraint or execution check does not restore the
+    previous copy, even if it was compatible.
 
     If ensureconda cannot determine which build to download for this Python
-    environment, search existing executables only. They may still work without
-    a download mapping. Raise UnsupportedPlatformError instead of returning
+    environment, search existing executables only (unless install="force").
+    They may still work without a download mapping. Raise
+    UnsupportedPlatformError instead of returning
     None if installation would otherwise have been attempted.
 
-    An empty target sequence returns None. Invalid targets and unknown install
-    values raise ValueError before any search or installation.
+    An empty target sequence returns None, except with install="force", which
+    requires an installable target. Invalid targets and unknown install values
+    raise ValueError before any search or installation.
     """
     if install not in _INSTALL_POLICIES:
         expected = ", ".join(repr(policy) for policy in _INSTALL_POLICIES)
@@ -323,6 +337,11 @@ def _ensure(
         "micromamba": install_micromamba,
         "conda_standalone": install_conda_exe,
     }
+    if install == "force":
+        if not any(flavor in installers for flavor, _ in parsed):
+            raise ValueError(
+                "force installation requires micromamba or conda_standalone"
+            )
 
     def compatible(
         path: Path,
@@ -384,15 +403,19 @@ def _ensure(
         try:
             platform_subdir()
         except UnsupportedPlatformError as error:
+            if install == "force":
+                raise
             unsupported_platform = error
             install = "never"
 
     # False denotes searching; True denotes installation. "per-target"
-    # interleaves the two, and "fallback" puts every search first.
+    # interleaves the two, "fallback" puts every search first, and "force"
+    # installs without searching.
     steps: List[Tuple[Flavor, _VersionConstraint, bool]] = []
     for flavor, constraint in parsed:
-        steps.append((flavor, constraint, False))
-        if install == "per-target" and flavor in installers:
+        if install != "force":
+            steps.append((flavor, constraint, False))
+        if install in ("per-target", "force") and flavor in installers:
             steps.append((flavor, constraint, True))
     if install == "fallback":
         steps.extend(
@@ -401,13 +424,30 @@ def _ensure(
             if flavor in installers
         )
 
+    refreshed: Dict[Flavor, Optional[Path]] = {}
+    unpublished: Set[Flavor] = set()
     for index, (flavor, constraint, installing) in enumerate(steps):
+        if flavor in unpublished:
+            continue
         if installing:
             try:
-                installed_path = installers[flavor](usable(flavor, constraint))
+                if install == "force" and flavor in refreshed:
+                    installed_path = refreshed[flavor]
+                else:
+                    installed_path = installers[flavor](
+                        (lambda _: False)
+                        if install == "force"
+                        else usable(flavor, constraint)
+                    )
+                    if install == "force":
+                        refreshed[flavor] = installed_path
             except NotPublishedError as error:
+                if install == "force":
+                    unpublished.add(flavor)
                 remaining = dict.fromkeys(
-                    name.replace("_", "-") for name, _, _ in steps[index + 1 :]
+                    name.replace("_", "-")
+                    for name, _, _ in steps[index + 1 :]
+                    if name not in unpublished
                 )
                 if not remaining:
                     raise

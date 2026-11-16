@@ -100,7 +100,7 @@ def test_fallback_is_the_default_install_value() -> None:
     assert inspect.signature(ensure).parameters["install"].default == "fallback"
 
 
-@pytest.mark.parametrize("install", ["force", "Never", "", True, False, None])
+@pytest.mark.parametrize("install", ["always", "Never", "", True, False, None])
 def test_unknown_install_values_are_rejected_before_searching(
     install: object, monkeypatch: pytest.MonkeyPatch
 ) -> None:
