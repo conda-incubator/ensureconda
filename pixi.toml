@@ -12,7 +12,7 @@ channels = ["conda-forge"]
 appdirs = "*"
 click = ">=5.1"
 filelock = "*"
-packaging = "*"
+packaging = ">=22"
 requests = ">=2"
 conda-package-streaming = ">=0.11.0"
 
