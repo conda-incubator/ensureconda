@@ -2,7 +2,6 @@ import errno
 import os
 import subprocess
 import sys
-from functools import partial
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -161,6 +160,28 @@ def _probe_flavor(executable: "StrPath") -> Optional[Flavor]:
     return None
 
 
+def _legacy_targets(
+    *,
+    mamba: bool,
+    micromamba: bool,
+    conda: bool,
+    conda_exe: bool,
+    min_conda_version: Optional[Version],
+    min_mamba_version: Optional[Version],
+) -> List[Tuple[Flavor, Optional[Version]]]:
+    """Translate the old API and CLI flags without stringifying minimums."""
+    targets: List[Tuple[Flavor, Optional[Version]]] = []
+    if mamba:
+        targets.append(("mamba", min_mamba_version))
+    if micromamba:
+        targets.append(("micromamba", min_mamba_version))
+    if conda:
+        targets.append(("conda", min_conda_version))
+    if conda_exe:
+        targets.append(("conda_standalone", min_conda_version))
+    return targets
+
+
 def ensureconda(
     *,
     mamba: bool = True,
@@ -171,121 +192,28 @@ def ensureconda(
     min_conda_version: Optional[Version] = None,
     min_mamba_version: Optional[Version] = None,
 ) -> Optional[Path]:
-    """Ensures that conda is installed
+    """Old API returning an executable path, or None.
 
-    Parameters
-    ----------
-    mamba:
-        Allow resolving mamba
-    micromamba:
-        Allow resolving micromamba.  Micromamba implements a subset of features of conda su
-        it may not be the correct choice in all cases.
-    conda:
-        Allow resolving conda.
-    conda_exe
-        Allow resolving conda-standalong
-    min_conda_version:
-        Minimum version of conda required
-    min_mamba_version:
-        Minimum version of mamba required
+    The booleans select targets in the legacy order: mamba, micromamba, conda,
+    conda_standalone. Search and attempt installation for each target before
+    moving on. Version probes run only when a minimum version is requested.
 
-    Returns the path to a conda executable.
+    For an ordered target sequence and executable metadata, use :func:`ensure`.
     """
-
-    def version_constraint_met(
-        executable: "StrPath",
-        min_version: Optional[Version],
-        version_fn: Callable[["StrPath"], Version],
-    ) -> bool:
-        if min_version is None:
-            return True
-        try:
-            version = version_fn(executable)
-        except subprocess.CalledProcessError as error:
-            reason = f"`--version` exited with status {error.returncode}"
-        except (OSError, InvalidVersion, UnicodeDecodeError) as error:
-            reason = str(error)
-        else:
-            return version >= min_version
-        # A broken candidate shouldn't prevent finding a working one.
-        print(
-            f"Skipping {executable}: could not determine its version ({reason})",
-            file=sys.stderr,
-        )
-        return False
-
-    conda_constraints_met = partial(
-        version_constraint_met,
-        min_version=min_conda_version,
-        version_fn=determine_conda_version,
+    targets = _legacy_targets(
+        mamba=mamba,
+        micromamba=micromamba,
+        conda=conda,
+        conda_exe=conda_exe,
+        min_conda_version=min_conda_version,
+        min_mamba_version=min_mamba_version,
     )
-    mamba_constraints_met = partial(
-        version_constraint_met,
-        min_version=min_mamba_version,
-        version_fn=determine_mamba_version,
+    result = _ensure(
+        targets,
+        install="never" if no_install else "per-target",
+        probe_version=False,
     )
-    micromamba_constraints_met = partial(
-        version_constraint_met,
-        min_version=min_mamba_version,
-        version_fn=determine_micromamba_version,
-    )
-
-    # Nothing can be installed on a platform without a conda subdir, so only
-    # search there, and raise if that finds nothing.
-    unsupported_platform: Optional[UnsupportedPlatformError] = None
-    if not no_install and (micromamba or conda_exe):
-        try:
-            platform_subdir()
-        except UnsupportedPlatformError as error:
-            unsupported_platform = error
-            no_install = True
-
-    if mamba:
-        for exe in mamba_executables():
-            if exe and mamba_constraints_met(exe):
-                return exe
-    if micromamba:
-        for exe in micromamba_executables():
-            if exe and micromamba_constraints_met(exe):
-                return exe
-        if not no_install:
-            try:
-                maybe_exe = install_micromamba()
-            except NotPublishedError as error:
-                # conda-standalone is published for platforms that micromamba
-                # isn't, for example linux-s390x in the anaconda channel.
-                remaining = [
-                    name
-                    for enabled, name in [
-                        (conda, "conda"),
-                        (conda_exe, "conda-standalone"),
-                    ]
-                    if enabled
-                ]
-                if not remaining:
-                    raise
-                print(
-                    f"{error}; trying {' or '.join(remaining)} instead",
-                    file=sys.stderr,
-                )
-                maybe_exe = None
-            if maybe_exe is not None and micromamba_constraints_met(maybe_exe):
-                return maybe_exe
-    if conda:
-        for exe in conda_executables():
-            if exe and conda_constraints_met(exe):
-                return exe
-    if conda_exe:
-        for exe in conda_standalone_executables():
-            if exe and conda_constraints_met(exe):
-                return exe
-        if not no_install:
-            maybe_exe = install_conda_exe()
-            if maybe_exe is not None and conda_constraints_met(maybe_exe):
-                return maybe_exe
-    if unsupported_platform is not None:
-        raise unsupported_platform
-    return None
+    return None if result is None else result.path
 
 
 def _parse_target(target: str) -> Tuple[Flavor, Optional[SpecifierSet]]:
