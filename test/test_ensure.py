@@ -1,12 +1,14 @@
 import inspect
+import subprocess
 from pathlib import Path
 from test.test_info import fake_version_outputs
 from typing import List
 
 import pytest
-from packaging.version import Version
+from packaging.version import InvalidVersion, Version
 
-from ensureconda import CondaExecutable, api, ensure
+from ensureconda import CondaExecutable, api, ensure, ensureconda
+from ensureconda.api import Flavor, InstallPolicy
 from ensureconda.resolve import UnsupportedPlatformError
 
 MICROMAMBA = Path("data", "micromamba")
@@ -94,6 +96,122 @@ def test_unknown_install_values_are_rejected_before_searching(
     assert calls == []
 
 
+@pytest.mark.parametrize("install", ["never", "fallback", "per-target"])
+@pytest.mark.parametrize("target", ["micromamba", "micromamba>=2"])
+def test_probe_version_false_still_checks_constraints(
+    install: InstallPolicy, target: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(api, "micromamba_executables", lambda: iter([MICROMAMBA]))
+    calls = fake_version_outputs(monkeypatch, {"micromamba": "2.9.0"})
+
+    result = ensure([target], install=install, probe_version=False)
+
+    constrained = ">=" in target
+    assert result == CondaExecutable(
+        MICROMAMBA, "micromamba", Version("2.9.0") if constrained else None
+    )
+    assert calls == (["micromamba"] if constrained else [])
+
+
+def test_unprobed_installation(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(api, "install_micromamba", lambda: MICROMAMBA)
+    calls = fake_version_outputs(monkeypatch, {})
+
+    assert ensure(["micromamba"], probe_version=False) == CondaExecutable(
+        MICROMAMBA, "micromamba", None
+    )
+    assert calls == []
+
+
+@pytest.mark.parametrize("installed", [False, True])
+@pytest.mark.parametrize(
+    "error, skip",
+    [
+        (subprocess.CalledProcessError(1, [str(MICROMAMBA), "--version"]), True),
+        (OSError(8, "Exec format error"), True),
+        (InvalidVersion("Invalid version: 'garbage'"), False),
+        (UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"), False),
+    ],
+    ids=["nonzero-exit", "exec-error", "invalid-version", "undecodable-output"],
+)
+def test_unconstrained_probe_errors(
+    installed: bool,
+    error: Exception,
+    skip: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    def broken_version(executable: object) -> Version:
+        raise error
+
+    monkeypatch.setattr(api, "determine_micromamba_version", broken_version)
+    if installed:
+        monkeypatch.setattr(api, "micromamba_executables", lambda: iter([MICROMAMBA]))
+    else:
+        monkeypatch.setattr(api, "install_micromamba", lambda: MICROMAMBA)
+
+    result = ensure(["micromamba"], install="never" if installed else "fallback")
+
+    assert result == (None if skip else CondaExecutable(MICROMAMBA, "micromamba", None))
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    if skip:
+        reason = (
+            "`--version` exited with status 1"
+            if isinstance(error, subprocess.CalledProcessError)
+            else str(error)
+        )
+        assert captured.err == (
+            f"Skipping {MICROMAMBA}: could not determine its version ({reason})\n"
+        )
+    else:
+        assert captured.err == ""
+
+
+def test_unconstrained_target_can_disable_execution_check(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(api, "micromamba_executables", lambda: iter([MICROMAMBA]))
+    calls = fake_version_outputs(monkeypatch, {})
+
+    assert ensure(["micromamba"], probe_version=False) == CondaExecutable(
+        MICROMAMBA, "micromamba", None
+    )
+    assert calls == []
+    assert capsys.readouterr().err == ""
+
+
+def test_failed_probe_reports_skip_before_installation(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def install() -> Path:
+        assert f"Skipping {CONDA}" in capsys.readouterr().err
+        return MICROMAMBA
+
+    monkeypatch.setattr(api, "conda_executables", lambda: iter([CONDA]))
+    monkeypatch.setattr(api, "install_micromamba", install)
+    calls = fake_version_outputs(monkeypatch, {"micromamba": "2.9.0"})
+
+    assert ensure(["conda", "micromamba"]) == CondaExecutable(
+        MICROMAMBA, "micromamba", Version("2.9.0")
+    )
+    assert calls == ["conda", "micromamba"]
+
+
+def test_failed_probe_allows_a_later_installer(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    monkeypatch.setattr(api, "install_micromamba", lambda: MICROMAMBA)
+    monkeypatch.setattr(api, "install_conda_exe", lambda: STANDALONE)
+    calls = fake_version_outputs(monkeypatch, {"conda_standalone": "conda 25.1.1"})
+
+    assert ensure(["micromamba", "conda_standalone"]) == CondaExecutable(
+        STANDALONE, "conda_standalone", Version("25.1.1")
+    )
+    assert calls == ["micromamba", "conda_standalone"]
+    assert f"Skipping {MICROMAMBA}" in capsys.readouterr().err
+
+
 def test_never_searches_later_targets_without_installing(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -103,6 +221,45 @@ def test_never_searches_later_targets_without_installing(
     result = ensure(["micromamba", "conda"], install="never")
 
     assert result is not None and result.path == CONDA
+
+
+@pytest.mark.parametrize("flavor", ["mamba", "micromamba", "conda", "conda_standalone"])
+@pytest.mark.parametrize("minimum", ["0", "1"])
+def test_zero_sentinel_is_only_used_for_old_api_minimums(
+    flavor: Flavor, minimum: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = Path("unknown")
+    monkeypatch.setattr(api, f"{flavor}_executables", lambda: iter([path]))
+    fake_version_outputs(monkeypatch, {path.name: ""})
+
+    assert ensure([f"{flavor}>=0"], install="never") is None
+    assert ensure([flavor], install="never") == CondaExecutable(path, flavor, None)
+    assert ensureconda(
+        mamba=flavor == "mamba",
+        micromamba=flavor == "micromamba",
+        conda=flavor == "conda",
+        conda_exe=flavor == "conda_standalone",
+        no_install=True,
+        min_mamba_version=Version(minimum),
+        min_conda_version=Version(minimum),
+    ) == (path if minimum == "0" else None)
+
+
+@pytest.mark.parametrize("installed", [False, True])
+@pytest.mark.parametrize("target", ["micromamba>=1", "micromamba>=1,<3"])
+def test_prereleases_satisfy_target_constraints(
+    installed: bool, target: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if installed:
+        monkeypatch.setattr(api, "micromamba_executables", lambda: iter([MICROMAMBA]))
+    else:
+        monkeypatch.setattr(api, "install_micromamba", lambda: MICROMAMBA)
+    fake_version_outputs(monkeypatch, {"micromamba": "2.0rc1"})
+
+    # Pin today's policy until the explicit prerelease-policy change in #123.
+    assert ensure([target]) == CondaExecutable(
+        MICROMAMBA, "micromamba", Version("2.0rc1")
+    )
 
 
 @pytest.mark.parametrize("targets", [[], ["conda"], ["mamba"]])
@@ -137,6 +294,33 @@ def test_canonicalized_target_finds_or_installs_the_same_flavor(
     assert result == CondaExecutable(STANDALONE, "conda_standalone", Version("25.1.1"))
 
 
+@pytest.mark.parametrize("output", ["1.9.0", "3.0.0", "2.5.0", "garbage", ""])
+def test_target_constraints_allow_a_later_installed_tool(
+    output: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(api, "micromamba_executables", lambda: iter([MICROMAMBA]))
+    monkeypatch.setattr(api, "conda_executables", lambda: iter([CONDA]))
+    calls = fake_version_outputs(
+        monkeypatch, {"micromamba": output, "conda": "conda 25.1.1"}
+    )
+
+    result = ensure(["micromamba>=2,<3,!=2.5.0", "conda>=24,<27"])
+
+    assert result == CondaExecutable(CONDA, "conda", Version("25.1.1"))
+    assert calls == ["micromamba", "conda"]
+
+
+def test_search_continues_within_a_target(monkeypatch: pytest.MonkeyPatch) -> None:
+    older, newer = Path("older"), Path("newer")
+    monkeypatch.setattr(api, "micromamba_executables", lambda: iter([older, newer]))
+    calls = fake_version_outputs(monkeypatch, {"older": "1.0", "newer": "2.9"})
+
+    assert ensure(["micromamba>=2"]) == CondaExecutable(
+        newer, "micromamba", Version("2.9")
+    )
+    assert calls == ["older", "newer"]
+
+
 @pytest.mark.parametrize(
     "targets, expected",
     [
@@ -168,6 +352,21 @@ def test_installation_follows_target_order(
     assert result is not None and result.path == expected
     assert installations == [expected]
     assert calls == [expected.name]
+
+
+def test_installed_download_must_satisfy_constraints(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(api, "install_micromamba", lambda: MICROMAMBA)
+    monkeypatch.setattr(api, "install_conda_exe", lambda: STANDALONE)
+    calls = fake_version_outputs(
+        monkeypatch, {"micromamba": "2.9.0", "conda_standalone": "conda 25.1.1"}
+    )
+
+    assert ensure(["micromamba<2", "conda_standalone>=24"]) == CondaExecutable(
+        STANDALONE, "conda_standalone", Version("25.1.1")
+    )
+    assert calls == ["micromamba", "conda_standalone"]
 
 
 @pytest.fixture
