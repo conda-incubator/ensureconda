@@ -19,8 +19,9 @@ $ pip install ensureconda
 
 ### Go based
 
-Additionally ensureconda is also available as a statically linked fully stand-alone
-golang binary.  This is a full reimplementation with the same cli as the python version
+ensureconda is also available as a statically linked Go binary. It finds or
+installs an executable and prints its path. JSON output and configurable
+minimum-version flags are currently available only in the Python CLI.
 
 These can be downloaded from [releases](https://github.com/conda-incubator/ensureconda/releases/latest)
 
@@ -65,7 +66,7 @@ Options:
   --help                          Show this message and exit.
 ```
 
-With `--json`, ensureconda prints the executable's path, flavor and version
+With `--json`, the Python CLI prints the executable's path, flavor and version
 instead of just its path:
 
 ```console
@@ -129,6 +130,10 @@ The result's flavor is `"mamba"`, `"micromamba"`, `"conda"`, or
 `"conda_standalone"`. Its version is `None` if `--version` doesn't report one.
 The version used to check a constraint is also returned as metadata. `ensure()`
 requires a known version to satisfy a constraint.
+
+ensureconda saves downloaded conda-standalone executables as `conda_standalone`
+(`conda_standalone.exe` on Windows), so that filename is used when searching
+for an existing standalone installation.
 
 By default, `ensure()` runs `--version` on each candidate it considers:
 
