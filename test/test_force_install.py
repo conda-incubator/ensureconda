@@ -1,6 +1,7 @@
 import hashlib
 import io
 import json
+import sys
 import tarfile
 from pathlib import Path
 from typing import IO, List, Optional
@@ -205,12 +206,14 @@ def test_force_standalone_rejects_archive_without_replacing_cache(
 @pytest.mark.usefixtures("no_discovery")
 def test_force_install_checks_version_constraints(
     monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
 ) -> None:
     install = Mock(return_value=Path("micromamba"))
     monkeypatch.setattr(api, "install_micromamba", install)
     monkeypatch.setattr(api, "_probe_version", lambda path, flavor: Version("1.0"))
     assert api.ensure(["micromamba>=2"], install="force", probe_version=False) is None
     install.assert_called_once()
+    assert capsys.readouterr().err == "Rejected micromamba 1.0: requires >=2\n"
 
 
 @pytest.mark.usefixtures("no_discovery")
@@ -254,7 +257,45 @@ def test_force_cli_keeps_version_minimums(
     if exit_code:
         assert isinstance(result.exception, SystemExit)
         assert "Could not find compatible executable" in result.output
+        required = minimum or ("0.7.3" if micro else "4.8.2")
+        assert f"Rejected {tool} {version}: requires >={required}" in result.output
     install.assert_called_once()
+
+
+@pytest.mark.usefixtures("no_discovery")
+@pytest.mark.parametrize("entry_point", ["api", "cli", "json-cli"])
+def test_force_reports_version_rejection_before_fallback(
+    entry_point: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(api, "install_micromamba", lambda _: Path("micromamba"))
+    monkeypatch.setattr(
+        api,
+        "_probe_version",
+        lambda path, flavor: Version("2.3.0" if flavor == "micromamba" else "25.1"),
+    )
+
+    def standalone(is_usable: object) -> Path:
+        print("Downloading conda-standalone", file=sys.stderr)
+        return Path("conda_standalone")
+
+    monkeypatch.setattr(api, "install_conda_exe", standalone)
+    if entry_point == "api":
+        result = api.ensure(["micromamba>=3", "conda_standalone"], install="force")
+        assert result is not None and result.path == Path("conda_standalone")
+        output = capsys.readouterr().err
+    else:
+        args = ["--force-install", "--min-mamba-version", "3"]
+        if entry_point == "json-cli":
+            args.append("--json")
+        cli_result = CliRunner().invoke(cli.ensureconda_cli, args)
+        assert cli_result.exit_code == 0, cli_result.output
+        output = cli_result.output
+        assert "conda_standalone" in output.splitlines()[-1]
+    rejected = "Rejected micromamba 2.3.0: requires >=3"
+    assert rejected in output
+    assert output.index(rejected) < output.index("Downloading conda-standalone")
 
 
 @pytest.mark.usefixtures("no_discovery")

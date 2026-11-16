@@ -343,6 +343,8 @@ def _ensure(
                 "force installation requires micromamba or conda_standalone"
             )
 
+    report_rejections = install == "force"
+
     def compatible(
         path: Path,
         flavor: Flavor,
@@ -376,16 +378,25 @@ def _ensure(
                             file=sys.stderr,
                         )
                     return None
+        requirement = None
         if isinstance(constraint, Version):
             # Only the old API compares unknown output as version 0.0.0.
             comparison_version = (
                 version if version is not None else _LEGACY_UNKNOWN_VERSION
             )
             if comparison_version < constraint:
-                return None
+                requirement = f">={constraint}"
         elif constraint is not None:
             if version is None or not constraint.contains(version, prereleases=True):
-                return None
+                requirement = str(constraint)
+        if requirement is not None:
+            if report_rejections and not quiet:
+                found_version = version if version is not None else "unknown version"
+                print(
+                    f"Rejected {path} {found_version}: requires {requirement}",
+                    file=sys.stderr,
+                )
+            return None
         return CondaExecutable(path, flavor, version)
 
     def usable(
