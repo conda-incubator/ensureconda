@@ -13,6 +13,7 @@ from typing import (
     NamedTuple,
     Optional,
     Sequence,
+    Set,
     Tuple,
     Union,
 )
@@ -401,18 +402,36 @@ def _ensure(
             if flavor in installers
         )
 
+    unpublished: Set[Flavor] = set()
+    exhausted: Optional[NotPublishedError] = None
     for index, (flavor, constraint, installing) in enumerate(steps):
         if installing:
+            if flavor in unpublished:
+                continue
             try:
                 installed_path = installers[flavor](usable(flavor, constraint))
             except NotPublishedError as error:
+                unpublished.add(flavor)
                 remaining = dict.fromkeys(
-                    name.replace("_", "-") for name, _, _ in steps[index + 1 :]
+                    name.replace("_", "-")
+                    for name, _, _ in steps[index + 1 :]
+                    if name not in unpublished
                 )
                 if not remaining:
-                    raise
+                    # A later target may still find an installed copy under a
+                    # different constraint, even though it cannot be downloaded.
+                    if not any(
+                        not installing for _, _, installing in steps[index + 1 :]
+                    ):
+                        raise
+                    exhausted = error
+                action = (
+                    f"trying {' or '.join(remaining)} instead"
+                    if remaining
+                    else "checking installed copies instead"
+                )
                 print(
-                    f"{error}; trying {' or '.join(remaining)} instead",
+                    f"{error}; {action}",
                     file=sys.stderr,
                 )
                 continue
@@ -427,6 +446,8 @@ def _ensure(
                 return result
     if unsupported_platform is not None:
         raise unsupported_platform
+    if exhausted is not None:
+        raise exhausted
     return None
 
 

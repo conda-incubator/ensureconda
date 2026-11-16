@@ -489,6 +489,72 @@ def test_last_unpublished_target_raises(monkeypatch: pytest.MonkeyPatch) -> None
         ensure(["micromamba"])
 
 
+@pytest.mark.parametrize("install", ["fallback", "per-target"])
+@pytest.mark.parametrize("flavor", ["micromamba", "conda_standalone"])
+def test_unpublished_tool_is_requested_once_per_call(
+    install: InstallPolicy,
+    flavor: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    requests = []
+
+    def unpublished(is_usable: object) -> Path:
+        requests.append(flavor)
+        raise NotPublishedError(f"{flavor} is not published")
+
+    other = "conda_standalone" if flavor == "micromamba" else "micromamba"
+    monkeypatch.setattr(
+        api,
+        "install_micromamba",
+        unpublished if flavor == "micromamba" else lambda _: MICROMAMBA,
+    )
+    monkeypatch.setattr(
+        api,
+        "install_conda_exe",
+        unpublished if flavor == "conda_standalone" else lambda _: STANDALONE,
+    )
+    fake_version_outputs(
+        monkeypatch, {"micromamba": "2.9", "conda_standalone": "conda 25"}
+    )
+    targets = [flavor, f"{other}>=99", f"{flavor}>=1"]
+
+    # A second invocation must try again: this is not persistent caching.
+    for count in [1, 2]:
+        assert ensure(targets, install=install) is None
+        assert requests == [flavor] * count
+        assert capsys.readouterr().err == (
+            f"{flavor} is not published; trying {other.replace('_', '-')} instead\n"
+        )
+
+
+@pytest.mark.parametrize("found", [False, True])
+def test_unpublished_tool_can_still_be_found_by_a_later_search(
+    found: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    requests = []
+
+    def unpublished(is_usable: object) -> Path:
+        requests.append("micromamba")
+        raise NotPublishedError("micromamba is not published")
+
+    monkeypatch.setattr(api, "install_micromamba", unpublished)
+    monkeypatch.setattr(
+        api, "micromamba_executables", lambda: iter([MICROMAMBA] if found else [])
+    )
+    fake_version_outputs(monkeypatch, {"micromamba": "2.0"})
+    targets = ["micromamba>=3", "micromamba>=1"]
+
+    if found:
+        assert ensure(targets, install="per-target") == CondaExecutable(
+            MICROMAMBA, "micromamba", Version("2.0")
+        )
+    else:
+        with pytest.raises(NotPublishedError, match="micromamba is not published"):
+            ensure(targets, install="per-target")
+    assert requests == ["micromamba"]
+
+
 @pytest.fixture
 def unsupported_platform(monkeypatch: pytest.MonkeyPatch) -> None:
     def no_subdir() -> str:
