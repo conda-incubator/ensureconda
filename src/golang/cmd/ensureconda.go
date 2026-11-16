@@ -121,36 +121,7 @@ func EnsureConda(mamba bool, micromamba bool, conda bool, condaStandalone bool, 
 
 	microMambaVersionCheck := micromambaIsUsable
 	condaVersionCheck := condaIsUsable
-	mambaVersionCheck := func(executable string) (bool, error) {
-		log.WithFields(log.Fields{
-			"executable":      executable,
-			"minMambaVersion": minMambaVersion.String(),
-		}).Debug("Starting verbose mamba version check")
-		log.Debug("Attempting v1 style version check (prefix 'mamba')")
-		v1Check, err := executableHasMinVersion(minMambaVersion, "mamba")(executable)
-		if err != nil {
-			log.WithError(err).Error("v1 style check encountered an error")
-			return false, fmt.Errorf("v1 style check failed: %w", err)
-		}
-		log.WithField("v1Result", v1Check).Debug("v1 style check result")
-		if v1Check {
-			log.Debug("v1 style check succeeded")
-			return true, nil
-		}
-		log.Debug("v1 style check did not succeed; attempting micromamba style check (empty prefix)")
-		v2Check, err := executableHasMinVersion(minMambaVersion, "")(executable)
-		if err != nil {
-			log.WithError(err).Error("micromamba style check encountered an error")
-			return false, fmt.Errorf("micromamba style check failed: %w", err)
-		}
-		log.WithField("v2Result", v2Check).Debug("micromamba style check result")
-		if v2Check {
-			log.Debug("micromamba style check succeeded")
-			return true, nil
-		}
-		log.Debug("Neither v1 nor micromamba style checks succeeded; returning false")
-		return false, nil
-	}
+	mambaVersionCheck := executableHasMinVersion(minMambaVersion, "mamba", "")
 
 	if mamba {
 		log.Debug("Checking for mamba")

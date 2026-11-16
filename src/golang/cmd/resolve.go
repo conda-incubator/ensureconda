@@ -9,34 +9,69 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"unicode"
+	"unicode/utf8"
 )
 
-func executableHasMinVersion(minVersion pep440.Version, prefix string) func(executable string) (bool, error) {
+func executableHasMinVersion(minVersion pep440.Version, prefixes ...string) func(string) (bool, error) {
 	return func(executable string) (bool, error) {
 		stdout, err := exec.Command(executable, "--version").Output()
-		log.WithFields(log.Fields{
+		entry := log.WithFields(log.Fields{
 			"executable":    executable,
 			"versionOutput": string(stdout),
 			"minVersion":    minVersion.String(),
-		}).Debug("Detecting executable version")
+		})
+		entry.Debug("Detecting executable version")
 		if err != nil {
+			entry.WithError(err).Debug("Skipping executable: could not determine its version")
 			return false, err
 		}
-		lines := strings.Split(strings.ReplaceAll(string(stdout), "\r\n", "\n"), "\n")
+		version, err := parseExecutableVersion(string(stdout), prefixes...)
+		if err != nil {
+			entry.WithError(err).Debug("Skipping executable: could not determine its version")
+			return false, err
+		}
+		if version == nil || version.LessThan(minVersion) {
+			entry.WithField("version", version).Debug("No acceptable executable version found")
+			return false, nil
+		}
+		return true, nil
+	}
+}
+
+// parseExecutableVersion follows Python's determine_*_version helpers: use the
+// first matching line, trying another prefix only when no line matched. In
+// particular, a rejected mamba v1 version must not fall back to conda's version.
+func parseExecutableVersion(output string, prefixes ...string) (*pep440.Version, error) {
+	if !utf8.ValidString(output) {
+		return nil, errors.New("version output is not valid UTF-8")
+	}
+	// Python's strip/split also consider these four control characters whitespace.
+	isSpace := func(r rune) bool { return unicode.IsSpace(r) || r >= '\x1c' && r <= '\x1f' }
+	lines := strings.FieldsFunc(strings.TrimFunc(output, isSpace), func(r rune) bool {
+		// Line boundaries recognized by Python's str.splitlines().
+		switch r {
+		case '\n', '\r', '\v', '\f', '\x1c', '\x1d', '\x1e', '\u0085', '\u2028', '\u2029':
+			return true
+		}
+		return false
+	})
+	for _, prefix := range prefixes {
 		for _, line := range lines {
 			if strings.HasPrefix(line, prefix) {
-				parts := strings.Split(line, " ")
-				v, err := pep440.Parse(parts[len(parts)-1])
+				parts := strings.FieldsFunc(line, isSpace)
+				if len(parts) == 0 {
+					return nil, nil
+				}
+				version, err := pep440.Parse(parts[len(parts)-1])
 				if err != nil {
-					continue
+					return nil, err
 				}
-				if !v.LessThan(minVersion) {
-					return true, nil
-				}
+				return &version, nil
 			}
 		}
-		return false, nil
 	}
+	return nil, nil
 }
 
 func ResolveExecutable(executableName string, dataDir string, versionPredicate func(path string) (bool, error)) (string, error) {
