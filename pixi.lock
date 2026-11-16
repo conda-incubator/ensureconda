@@ -8174,7 +8174,7 @@ packages:
   - click>=5.1
   - conda-package-streaming
   - filelock
-  - packaging
+  - packaging>=22
   - requests>=2
   - black ; extra == 'dev'
   - build ; extra == 'dev'
