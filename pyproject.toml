@@ -61,8 +61,6 @@ version-file = "src/python/ensureconda/_version.py"
 [tool.hatch.build.targets.sdist]
 exclude = [
   "/.github",
-  "/docs",
-  "/news",
   "/src/golang",
   "/test",
   "/go.mod",
