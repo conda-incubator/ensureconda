@@ -143,10 +143,6 @@ def subdir_for(sys_platform: str, machine: str, bits: int) -> str:
         ("osx", "arm64"): "osx-arm64",
     }
     x86_machines = {"x86_64", "amd64", "i386", "i486", "i586", "i686", "x86"}
-    _arch_names = {
-        32: "x86",
-        64: "x86_64",
-    }
 
     if sys_platform == "zos":
         return "zos-z"
