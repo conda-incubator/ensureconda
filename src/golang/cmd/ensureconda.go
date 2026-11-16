@@ -83,7 +83,7 @@ var (
 					os.Exit(0)
 				}
 			}
-			os.Exit(1)
+			er("Could not find compatible executable")
 		},
 	}
 )
