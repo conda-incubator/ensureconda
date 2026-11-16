@@ -322,7 +322,7 @@ func unpackConda(archive []byte, fileNameMap map[string]string) (string, error) 
 }
 
 // installMicromamba downloads micromamba from url, unless a concurrent process
-// has just installed one that can be used.
+// has just installed one that can be used. forceInstall always downloads again.
 func installMicromamba(url string, forceInstall bool) (string, error) {
 	target := targetExeFilename("micromamba")
 	return installUnlessUsable("micromamba_install.lock", target, forceInstall, usableMicromambaVersion, func() (string, error) {
@@ -336,7 +336,8 @@ func installMicromamba(url string, forceInstall bool) (string, error) {
 }
 
 // installUnlessUsable calls download while holding the named download lock,
-// unless target passes checkVersion once the lock is held.
+// unless target passes checkVersion once the lock is held. forceInstall skips that
+// check and always downloads again.
 func installUnlessUsable(lockName string, target string, forceInstall bool, checkVersion versionCheck, download func() (string, error)) (string, error) {
 	unlock, err := lockInstall(lockName)
 	if err != nil {
@@ -344,11 +345,12 @@ func installUnlessUsable(lockName string, target string, forceInstall bool, chec
 	}
 	defer unlock()
 
-	// A concurrent process may have installed it while this one waited for the
-	// lock. Check it instead of trusting its age: any executable that was here
-	// before has already been rejected, or this install wouldn't be running.
-	if version, _ := checkVersion(target); version != nil {
-		return target, nil
+	if !forceInstall {
+		// A concurrent process may have installed a usable executable while
+		// this one waited for the lock.
+		if version, _ := checkVersion(target); version != nil {
+			return target, nil
+		}
 	}
 	return download()
 }

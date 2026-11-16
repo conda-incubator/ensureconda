@@ -47,6 +47,14 @@ var (
 				panic(err)
 			}
 
+			forceInstall, err := cmd.Flags().GetBool("force-install")
+			if err != nil {
+				panic(err)
+			}
+			if err := validateForceInstall(micromamba, condaExe, noInstall, forceInstall); err != nil {
+				er(err)
+			}
+
 			asJSON, err := cmd.Flags().GetBool("json")
 			if err != nil {
 				panic(err)
@@ -69,9 +77,12 @@ var (
 				log.SetLevel(log.InfoLevel)
 			}
 
-			executable, err := ensureCondaWithMetadata(mamba, micromamba, conda, condaExe, true, false)
-			if err != nil {
-				panic(err)
+			var executable *condaExecutable
+			if !forceInstall {
+				executable, err = ensureCondaWithMetadata(mamba, micromamba, conda, condaExe, true, false)
+				if err != nil {
+					panic(err)
+				}
 			}
 
 			if executable != nil {
@@ -83,7 +94,7 @@ var (
 			}
 			if !noInstall {
 				log.Debugf("Attempting to install")
-				executable, err = ensureCondaWithMetadata(mamba, micromamba, conda, condaExe, noInstall, false)
+				executable, err = ensureCondaWithMetadata(mamba, micromamba, conda, condaExe, noInstall, forceInstall)
 				if err != nil {
 					er(err)
 				}
@@ -141,7 +152,20 @@ func EnsureConda(mamba bool, micromamba bool, conda bool, condaStandalone bool, 
 	return result.Path, err
 }
 
+func validateForceInstall(micromamba, condaStandalone, noInstall, forceInstall bool) error {
+	if forceInstall && noInstall {
+		return errors.New("--force-install cannot be combined with --no-install")
+	}
+	if forceInstall && !micromamba && !condaStandalone {
+		return errors.New("--force-install requires --micromamba or --conda-exe")
+	}
+	return nil
+}
+
 func ensureCondaWithMetadata(mamba, micromamba, conda, condaStandalone, noInstall, forceInstall bool) (*condaExecutable, error) {
+	if err := validateForceInstall(micromamba, condaStandalone, noInstall, forceInstall); err != nil {
+		return nil, err
+	}
 	var executable *condaExecutable
 	dataDir := sitePath()
 	minMambaVersion, _ := pep440.Parse(DefaultMinMambaVersion)
@@ -150,7 +174,7 @@ func ensureCondaWithMetadata(mamba, micromamba, conda, condaStandalone, noInstal
 	condaVersionCheck := condaCheck(forceInstall)
 	mambaVersionCheck := executableWithMinVersion(minMambaVersion, false, "mamba", "")
 
-	if mamba {
+	if mamba && !forceInstall {
 		log.Debug("Checking for mamba")
 		executable, _ = resolveExecutableWithVersion("mamba", dataDir, mambaVersionCheck)
 		if executable != nil {
@@ -158,15 +182,17 @@ func ensureCondaWithMetadata(mamba, micromamba, conda, condaStandalone, noInstal
 		}
 	}
 	if micromamba {
-		log.Debug("Checking for micromamba")
-		executable, _ = resolveExecutableWithVersion("micromamba", dataDir, usableMicromambaVersion)
-		if executable != nil {
-			return executable, nil
+		if !forceInstall {
+			log.Debug("Checking for micromamba")
+			executable, _ = resolveExecutableWithVersion("micromamba", dataDir, usableMicromambaVersion)
+			if executable != nil {
+				return executable, nil
+			}
 		}
 		if !noInstall {
 			exe, err := installMicromambaForPlatform(forceInstall)
 			var remaining []string
-			if conda {
+			if conda && !forceInstall {
 				remaining = append(remaining, "conda")
 			}
 			if condaStandalone {
@@ -182,7 +208,7 @@ func ensureCondaWithMetadata(mamba, micromamba, conda, condaStandalone, noInstal
 			}
 		}
 	}
-	if conda {
+	if conda && !forceInstall {
 		log.Debug("Checking for conda")
 		// TODO: check $CONDA_EXE
 		executable, _ = resolveExecutableWithVersion("conda", dataDir, usableCondaVersion)
@@ -191,10 +217,12 @@ func ensureCondaWithMetadata(mamba, micromamba, conda, condaStandalone, noInstal
 		}
 	}
 	if condaStandalone {
-		log.Debug("Checking for conda_standalone")
-		executable, _ = resolveExecutableWithVersion("conda_standalone", dataDir, usableCondaVersion)
-		if executable != nil {
-			return executable, nil
+		if !forceInstall {
+			log.Debug("Checking for conda_standalone")
+			executable, _ = resolveExecutableWithVersion("conda_standalone", dataDir, usableCondaVersion)
+			if executable != nil {
+				return executable, nil
+			}
 		}
 		if !noInstall {
 			exe, err := installCondaStandalone(forceInstall)
@@ -319,6 +347,7 @@ func init() {
 	rootCmd.PersistentFlags().Bool("no-conda-exe", false, "")
 
 	rootCmd.PersistentFlags().Bool("no-install", false, "Don't install stuff")
+	rootCmd.PersistentFlags().Bool("force-install", false, "Skip existing executables and download a fresh copy")
 	rootCmd.PersistentFlags().Bool("json", false, "Print the executable's path, flavor and version as JSON")
 
 	// TODO: implement logger + verbosity

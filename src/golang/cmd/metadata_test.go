@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -171,43 +172,52 @@ func TestEnsureCondaInstalledMetadata(t *testing.T) {
 		{"micromamba", "v02.009.00+LOCAL_007", "2.9.0+local.7"},
 		{"conda_standalone", "conda v025.01RC01+LOCAL_007", "25.1rc1+local.7"},
 	} {
-		t.Run(tt.flavor, func(t *testing.T) {
-			useSitePath(t)
-			t.Setenv("PATH", "")
-			t.Setenv("ENSURECONDA_CONDA_STANDALONE_CHANNEL", "conda-forge")
-			t.Setenv("TEST_VERSION_OUTPUT", tt.output)
-			calls := filepath.Join(t.TempDir(), "calls")
-			t.Setenv("TEST_VERSION_CALLS", calls)
-			downloads := 0
-			client := &http.Client{Transport: roundTripper(func(r *http.Request) (*http.Response, error) {
-				body := archive
-				if strings.HasSuffix(r.URL.Path, "/files") {
-					body = listing
-				} else {
-					downloads++
-				}
-				return &http.Response{StatusCode: 200, Status: "200 OK", Body: io.NopCloser(bytes.NewReader(body)), Request: r}, nil
-			})}
-			previous := httpClient
-			httpClient = func() *http.Client { return client }
-			t.Cleanup(func() { httpClient = previous })
+		for _, forceInstall := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/force=%t", tt.flavor, forceInstall), func(t *testing.T) {
+				useSitePath(t)
+				t.Setenv("PATH", "")
+				t.Setenv("ENSURECONDA_CONDA_STANDALONE_CHANNEL", "conda-forge")
+				t.Setenv("TEST_VERSION_OUTPUT", tt.output)
+				calls := filepath.Join(t.TempDir(), "calls")
+				t.Setenv("TEST_VERSION_CALLS", calls)
+				downloads := 0
+				client := &http.Client{Transport: roundTripper(func(r *http.Request) (*http.Response, error) {
+					body := archive
+					if strings.HasSuffix(r.URL.Path, "/files") {
+						body = listing
+					} else {
+						downloads++
+					}
+					return &http.Response{StatusCode: 200, Status: "200 OK", Body: io.NopCloser(bytes.NewReader(body)), Request: r}, nil
+				})}
+				previous := httpClient
+				httpClient = func() *http.Client { return client }
+				t.Cleanup(func() { httpClient = previous })
 
-			got, err := ensureCondaWithMetadata(false, tt.flavor == "micromamba", false, tt.flavor == "conda_standalone", false, false)
-			want := condaExecutable{Path: targetExeFilename(tt.flavor), Flavor: tt.flavor, Version: tt.version}
-			if err != nil || got == nil || *got != want {
-				t.Fatalf("ensureCondaWithMetadata() = %v, %v; want %v", got, err, want)
-			}
-			if downloads != 1 {
-				t.Errorf("downloaded %d archives, want one fresh installation", downloads)
-			}
-			probes, err := os.ReadFile(calls)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if string(probes) != "probe\n" {
-				t.Errorf("version probes = %q, want exactly one", probes)
-			}
-		})
+				if forceInstall {
+					// Force must not probe or reuse the old cached executable.
+					script := "#!/bin/sh\necho cached >> \"$TEST_VERSION_CALLS\"\necho 99.0\n"
+					if err := os.WriteFile(targetExeFilename(tt.flavor), []byte(script), 0755); err != nil {
+						t.Fatal(err)
+					}
+				}
+				got, err := ensureCondaWithMetadata(false, tt.flavor == "micromamba", false, tt.flavor == "conda_standalone", false, forceInstall)
+				want := condaExecutable{Path: targetExeFilename(tt.flavor), Flavor: tt.flavor, Version: tt.version}
+				if err != nil || got == nil || *got != want {
+					t.Fatalf("ensureCondaWithMetadata() = %v, %v; want %v", got, err, want)
+				}
+				if downloads != 1 {
+					t.Errorf("downloaded %d archives, want one fresh installation", downloads)
+				}
+				probes, err := os.ReadFile(calls)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if string(probes) != "probe\n" {
+					t.Errorf("version probes = %q, want exactly one", probes)
+				}
+			})
+		}
 	}
 }
 
