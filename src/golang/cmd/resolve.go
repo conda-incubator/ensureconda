@@ -15,7 +15,7 @@ import (
 
 type versionCheck func(executable string) (*pep440.Version, error)
 
-func executableWithMinVersion(minVersion pep440.Version, prefixes ...string) versionCheck {
+func executableWithMinVersion(minVersion pep440.Version, reportRejection bool, prefixes ...string) versionCheck {
 	return func(executable string) (*pep440.Version, error) {
 		stdout, err := exec.Command(executable, "--version").Output()
 		entry := log.WithFields(log.Fields{
@@ -26,15 +26,28 @@ func executableWithMinVersion(minVersion pep440.Version, prefixes ...string) ver
 		entry.Debug("Detecting executable version")
 		if err != nil {
 			entry.WithError(err).Debug("Skipping executable: could not determine its version")
+			if reportRejection {
+				log.Warnf("Rejected %s: could not check version: %v", executable, err)
+			}
 			return nil, err
 		}
 		version, err := parseExecutableVersion(string(stdout), prefixes...)
 		if err != nil {
 			entry.WithError(err).Debug("Skipping executable: could not determine its version")
+			if reportRejection {
+				log.Warnf("Rejected %s: could not check version: %v", executable, err)
+			}
 			return nil, err
 		}
 		if version == nil || version.LessThan(minVersion) {
 			entry.WithField("version", version).Debug("No acceptable executable version found")
+			if reportRejection {
+				foundVersion := "unknown version"
+				if version != nil {
+					foundVersion = normalizedVersion(*version)
+				}
+				log.Warnf("Rejected %s %s: requires >=%s", executable, foundVersion, minVersion.String())
+			}
 			return nil, nil
 		}
 		return version, nil

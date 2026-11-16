@@ -82,7 +82,7 @@ func TestExecutableVersionRejectionDiagnostics(t *testing.T) {
 				log.SetOutput(previousOutput)
 				log.SetLevel(previousLevel)
 			})
-			_, err := executableWithMinVersion(pep440.MustParse(DefaultMinMambaVersion), "")(path)
+			_, err := executableWithMinVersion(pep440.MustParse(DefaultMinMambaVersion), false, "")(path)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("version check error = %v, want error: %v", err, tt.wantErr)
 			}

@@ -3,6 +3,7 @@ import os
 import pathlib
 import subprocess
 import sys
+import time
 from test.helpers import run_container_test
 from typing import Dict, List, Optional
 
@@ -57,7 +58,7 @@ def isolated_env(tmp_path: pathlib.Path) -> Dict[str, str]:
 @pytest.mark.parametrize(
     "replace_rejected", [False, True], ids=["missing-target", "rejected-target"]
 )
-def test_install(
+def test_install_and_force_refresh(
     golang_exe: Optional[str],
     isolated_env: Dict[str, str],
     tmp_path: pathlib.Path,
@@ -115,6 +116,31 @@ def test_install(
         )
     )
     assert found == python_result
+
+    # macOS and Windows use the real user data directory; do not force a
+    # replacement or change timestamps there.
+    if platform != "linux":
+        return
+
+    # Distinguish the replacement even on filesystems with coarse timestamps.
+    cached = pathlib.Path(installed["path"])
+    fresh_timestamp = time.time() - 60
+    os.utime(cached, (fresh_timestamp, fresh_timestamp))
+    cached_mtime = cached.stat().st_mtime_ns
+    refreshed = json.loads(
+        subprocess.check_output([*args, "--force-install"], encoding="utf8", env=env)
+    )
+    assert os.path.normcase(refreshed["path"]) == os.path.normcase(installed["path"])
+    assert refreshed["flavor"] == installed["flavor"]
+    assert cached.stat().st_mtime_ns > cached_mtime
+    subprocess.check_call([refreshed["path"], "--help"])
+    assert refreshed == json.loads(
+        subprocess.check_output(
+            [sys.executable, "-m", "ensureconda", "--json", "--no-install", *flags],
+            encoding="utf8",
+            env=env,
+        )
+    )
 
 
 @pytest.mark.parametrize("flavor", ["micromamba", "conda_standalone"])

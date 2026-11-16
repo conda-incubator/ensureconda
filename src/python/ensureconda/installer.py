@@ -72,6 +72,13 @@ class NotPublishedError(RuntimeError):
     """Nothing that could be installed is published for this platform."""
 
 
+class ExecutableReplacementError(OSError, RuntimeError):
+    """A downloaded executable could not be moved into place."""
+
+    def __str__(self) -> str:
+        return self.strerror if self.strerror is not None else super().__str__()
+
+
 class AnacondaPkgAttr(NamedTuple):
     """Inner for data from Anaconda API
 
@@ -480,16 +487,24 @@ def new_executable(target_filename: "Path") -> Generator[IO[bytes], None, None]:
                 yield fo
             st = os.stat(temp_filename)
             os.chmod(temp_filename, st.st_mode | stat.S_IXUSR)
-            # On Windows, we need to handle the case where the target file already exists
-            if sys.platform in ["win32", "cygwin", "msys"] and target_filename.exists():
-                try:
-                    target_filename.unlink()
-                except (PermissionError, OSError) as e:
-                    raise RuntimeError(
-                        f"Could not remove existing executable {target_filename} "
-                        f"for replacement"
-                    ) from e
-            os.rename(temp_filename, target_filename)
+            try:
+                os.replace(temp_filename, target_filename)
+            except OSError as error:
+                reason = error.strerror or str(error)
+                detail = f"Could not replace executable {target_filename}: {reason}"
+                if is_windows:
+                    detail += "; it may be in use; close processes using it and retry"
+                if error.errno is None:
+                    replacement_error = ExecutableReplacementError(detail)
+                else:
+                    replacement_error = ExecutableReplacementError(
+                        error.errno,
+                        detail,
+                        error.filename,
+                        getattr(error, "winerror", None),
+                        error.filename2,
+                    )
+                raise replacement_error from error
         except BaseException:
             # Don't leave a partial executable behind, for example after Ctrl-C.
             with contextlib.suppress(OSError):

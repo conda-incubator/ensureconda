@@ -1,5 +1,6 @@
+import errno
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, List, Optional
 
 import pytest
 import requests
@@ -7,7 +8,7 @@ from click.testing import CliRunner
 
 from ensureconda import cli
 from ensureconda.cli import ensureconda_cli
-from ensureconda.installer import NotPublishedError
+from ensureconda.installer import ExecutableReplacementError, NotPublishedError
 from ensureconda.resolve import UnsupportedPlatformError
 
 
@@ -39,20 +40,48 @@ def test_invalid_version_is_a_usage_error(option: str) -> None:
             UnsupportedPlatformError("Unsupported platform 'freebsd14' (amd64)"),
             "Error: Unsupported platform 'freebsd14' (amd64)\n",
         ),
+        (
+            ExecutableReplacementError("Could not replace executable: access denied"),
+            "Error: Could not replace executable: access denied\n",
+        ),
+        (
+            ExecutableReplacementError(
+                errno.EACCES,
+                "Could not replace executable /cache/micromamba: Permission denied",
+                "/cache/temporary",
+                None,
+                "/cache/micromamba",
+            ),
+            "Error: Could not replace executable /cache/micromamba: Permission denied\n",
+        ),
     ],
-    ids=["download-failure", "empty-timeout", "not-published", "unsupported-platform"],
+    ids=[
+        "download-failure",
+        "empty-timeout",
+        "not-published",
+        "unsupported-platform",
+        "replacement-failure",
+        "replacement-failure-with-metadata",
+    ],
+)
+@pytest.mark.parametrize(
+    "options", [[], ["--json"], ["--force-install"], ["--force-install", "--json"]]
 )
 def test_failed_installation_ends_with_one_line(
-    error: Exception, expected_output: str, monkeypatch: pytest.MonkeyPatch
+    error: Exception,
+    expected_output: str,
+    options: List[str],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def ensureconda(**kwargs: Any) -> Optional[Path]:
-        if kwargs["no_install"]:
+    def ensureconda(*args: Any, **kwargs: Any) -> Optional[Path]:
+        if kwargs.get("no_install"):
             return None
         raise error
 
     monkeypatch.setattr(cli, "ensureconda", ensureconda)
+    monkeypatch.setattr(cli, "_ensure", ensureconda)
 
-    result = CliRunner().invoke(ensureconda_cli)
+    result = CliRunner().invoke(ensureconda_cli, options)
 
     assert result.exit_code == 1
     assert result.output == expected_output

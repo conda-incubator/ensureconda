@@ -1,3 +1,4 @@
+import errno
 import gzip
 import hashlib
 import http.client
@@ -131,6 +132,46 @@ def test_failed_write_leaves_no_temporary_file(
 
     leftovers = [p.name for p in tmp_path.iterdir() if p.suffix != ".lock"]
     assert leftovers == []
+
+
+@pytest.mark.parametrize("windows", [False, True])
+@pytest.mark.parametrize("with_metadata", [False, True])
+def test_replacement_failure_preserves_cache_and_cleans_up(
+    windows: bool,
+    with_metadata: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "executable"
+    target.write_bytes(b"old executable")
+    denied = (
+        PermissionError(
+            errno.EACCES, "Access denied", "staged", 5 if windows else None, str(target)
+        )
+        if with_metadata
+        else PermissionError("Access denied")
+    )
+    monkeypatch.setattr(installer, "is_windows", windows)
+    replace = Mock(side_effect=denied)
+    monkeypatch.setattr(os, "replace", replace)
+    with pytest.raises(installer.ExecutableReplacementError) as error:
+        with installer.new_executable(target) as executable:
+            executable.write(b"new executable")
+
+    replace.assert_called_once()
+    message = f"Could not replace executable {target}: Access denied"
+    if windows:
+        message += "; it may be in use; close processes using it and retry"
+    assert str(error.value) == message
+    assert isinstance(error.value, OSError)
+    assert isinstance(error.value, RuntimeError)
+    assert error.value.errno == denied.errno
+    assert error.value.filename == denied.filename
+    assert error.value.filename2 == denied.filename2
+    assert getattr(error.value, "winerror", None) == getattr(denied, "winerror", None)
+    assert error.value.__cause__ is denied
+    assert target.read_bytes() == b"old executable"
+    assert [p.name for p in tmp_path.iterdir() if p.suffix != ".lock"] == ["executable"]
 
 
 @pytest.fixture(params=[".conda", ".tar.bz2"])
