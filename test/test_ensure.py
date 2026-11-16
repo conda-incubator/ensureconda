@@ -5,10 +5,12 @@ from test.test_info import fake_version_outputs
 from typing import List
 
 import pytest
+import requests
 from packaging.version import InvalidVersion, Version
 
 from ensureconda import CondaExecutable, api, ensure, ensureconda
 from ensureconda.api import Flavor, InstallPolicy
+from ensureconda.installer import NotPublishedError
 from ensureconda.resolve import UnsupportedPlatformError
 
 MICROMAMBA = Path("data", "micromamba")
@@ -369,12 +371,91 @@ def test_installed_download_must_satisfy_constraints(
     assert calls == ["micromamba", "conda_standalone"]
 
 
+@pytest.mark.parametrize("flavor", ["micromamba", "conda_standalone"])
+def test_unpublished_target_falls_back_in_either_order(
+    flavor: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    def unpublished() -> Path:
+        raise NotPublishedError(f"{flavor} is not published")
+
+    other = "conda_standalone" if flavor == "micromamba" else "micromamba"
+    expected = STANDALONE if other == "conda_standalone" else MICROMAMBA
+    monkeypatch.setattr(
+        api,
+        "install_micromamba",
+        unpublished if flavor == "micromamba" else lambda: MICROMAMBA,
+    )
+    monkeypatch.setattr(
+        api,
+        "install_conda_exe",
+        unpublished if flavor == "conda_standalone" else lambda: STANDALONE,
+    )
+    fake_version_outputs(
+        monkeypatch, {"micromamba": "2.9", "conda_standalone": "conda 25"}
+    )
+
+    result = ensure([flavor, other])
+
+    assert result is not None and result.path == expected
+    assert f"trying {other.replace('_', '-')} instead" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "error", [requests.HTTPError("404 Error"), requests.ConnectionError("Disconnected")]
+)
+def test_download_errors_propagate_without_fallback(
+    error: Exception, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def fail() -> Path:
+        raise error
+
+    monkeypatch.setattr(api, "install_micromamba", fail)
+    with pytest.raises(type(error)):
+        ensure(["micromamba", "conda_standalone"])
+
+
+def test_last_unpublished_target_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+    def unpublished() -> Path:
+        raise NotPublishedError("micromamba is not published")
+
+    monkeypatch.setattr(api, "install_micromamba", unpublished)
+    with pytest.raises(NotPublishedError, match="micromamba is not published"):
+        ensure(["micromamba"])
+
+
 @pytest.fixture
 def unsupported_platform(monkeypatch: pytest.MonkeyPatch) -> None:
     def no_subdir() -> str:
         raise UnsupportedPlatformError("Unsupported platform 'freebsd14' (amd64)")
 
     monkeypatch.setattr(api, "platform_subdir", no_subdir)
+
+
+@pytest.mark.usefixtures("unsupported_platform")
+@pytest.mark.parametrize("install", ["fallback", "per-target"])
+def test_unsupported_platform_still_finds_an_installed_target(
+    install: InstallPolicy, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(api, "conda_executables", lambda: iter([CONDA]))
+    fake_version_outputs(monkeypatch, {"conda": "conda 25.1.1"})
+
+    # The no_tools fixture fails the test if an installer is called.
+    result = ensure(["micromamba", "conda"], install=install)
+
+    assert result is not None and result.path == CONDA
+
+
+@pytest.mark.usefixtures("unsupported_platform")
+@pytest.mark.parametrize("install", ["fallback", "per-target"])
+def test_unsupported_platform_with_nothing_installed(install: InstallPolicy) -> None:
+    with pytest.raises(UnsupportedPlatformError, match="freebsd14"):
+        ensure(["micromamba", "conda"], install=install)
+
+
+@pytest.mark.usefixtures("unsupported_platform")
+def test_unsupported_platform_is_no_error_when_nothing_would_be_installed() -> None:
+    assert ensure(["micromamba", "conda"], install="never") is None
+    assert ensure(["mamba", "conda"]) is None
 
 
 @pytest.mark.parametrize(
