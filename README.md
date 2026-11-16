@@ -25,9 +25,8 @@ $ conda install -c conda-forge ensureconda
 
 ### Go based
 
-ensureconda is also available as a statically linked Go binary. It finds or
-installs an executable and prints its path. JSON output and configurable
-minimum-version flags are currently available only in the Python CLI.
+ensureconda is also available as a stand-alone Go binary; the Linux builds are
+statically linked. It finds or installs an executable and prints its path.
 
 These can be downloaded from [releases](https://github.com/conda-incubator/ensureconda/releases/latest)
 
