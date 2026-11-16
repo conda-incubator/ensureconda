@@ -10,7 +10,7 @@ import requests
 from packaging.version import InvalidVersion, Version
 
 from ensureconda.api import CondaExecutable, _ensure, _legacy_targets, ensureconda
-from ensureconda.installer import NotPublishedError
+from ensureconda.installer import ExecutableReplacementError, NotPublishedError
 from ensureconda.resolve import UnsupportedPlatformError
 
 
@@ -125,7 +125,11 @@ def ensureconda_cli(
         if detail:
             reason += f": {detail}"
         raise click.ClickException(f"download failed: {reason}")
-    except (NotPublishedError, UnsupportedPlatformError) as error:
+    except (
+        ExecutableReplacementError,
+        NotPublishedError,
+        UnsupportedPlatformError,
+    ) as error:
         raise click.ClickException(str(error))
     if exe:
         print("Found compatible executable", file=sys.stderr, flush=True)
