@@ -13,8 +13,10 @@ import (
 	"unicode/utf8"
 )
 
-func executableHasMinVersion(minVersion pep440.Version, prefixes ...string) func(string) (bool, error) {
-	return func(executable string) (bool, error) {
+type versionCheck func(executable string) (*pep440.Version, error)
+
+func executableWithMinVersion(minVersion pep440.Version, prefixes ...string) versionCheck {
+	return func(executable string) (*pep440.Version, error) {
 		stdout, err := exec.Command(executable, "--version").Output()
 		entry := log.WithFields(log.Fields{
 			"executable":    executable,
@@ -24,18 +26,18 @@ func executableHasMinVersion(minVersion pep440.Version, prefixes ...string) func
 		entry.Debug("Detecting executable version")
 		if err != nil {
 			entry.WithError(err).Debug("Skipping executable: could not determine its version")
-			return false, err
+			return nil, err
 		}
 		version, err := parseExecutableVersion(string(stdout), prefixes...)
 		if err != nil {
 			entry.WithError(err).Debug("Skipping executable: could not determine its version")
-			return false, err
+			return nil, err
 		}
 		if version == nil || version.LessThan(minVersion) {
 			entry.WithField("version", version).Debug("No acceptable executable version found")
-			return false, nil
+			return nil, nil
 		}
-		return true, nil
+		return version, nil
 	}
 }
 
@@ -72,6 +74,21 @@ func parseExecutableVersion(output string, prefixes ...string) (*pep440.Version,
 		}
 	}
 	return nil, nil
+}
+
+// resolveExecutableWithVersion keeps the version that accepted the candidate,
+// so reporting metadata doesn't need another call to --version.
+func resolveExecutableWithVersion(name, dataDir string, check versionCheck) (*condaExecutable, error) {
+	var version *pep440.Version
+	path, err := ResolveExecutable(name, dataDir, func(path string) (bool, error) {
+		var err error
+		version, err = check(path)
+		return version != nil, err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return newCondaExecutable(path, name, *version), nil
 }
 
 func ResolveExecutable(executableName string, dataDir string, versionPredicate func(path string) (bool, error)) (string, error) {

@@ -100,40 +100,45 @@ func sitePath() string {
 	return appdirs.UserDataDir("ensure-conda", "", "", false)
 }
 
-// micromambaIsUsable reports whether executable is a micromamba that can be
-// used: it must run and report at least the minimum version.
-func micromambaIsUsable(executable string) (bool, error) {
+// usableMicromambaVersion returns the version if executable runs and reports
+// at least the minimum micromamba version, or nil otherwise.
+func usableMicromambaVersion(executable string) (*pep440.Version, error) {
 	minMambaVersion, _ := pep440.Parse(DefaultMinMambaVersion)
-	return executableHasMinVersion(minMambaVersion, "")(executable)
+	return executableWithMinVersion(minMambaVersion, "")(executable)
 }
 
-// condaIsUsable reports whether executable is a conda or conda-standalone that
-// can be used: it must run and report at least the minimum version.
-func condaIsUsable(executable string) (bool, error) {
+// usableCondaVersion applies the conda minimum to both conda and conda-standalone.
+func usableCondaVersion(executable string) (*pep440.Version, error) {
 	minCondaVersion, _ := pep440.Parse(DefaultMinCondaVersion)
-	return executableHasMinVersion(minCondaVersion, "conda")(executable)
+	return executableWithMinVersion(minCondaVersion, "conda")(executable)
 }
 
 func EnsureConda(mamba bool, micromamba bool, conda bool, condaStandalone bool, noInstall bool) (string, error) {
-	var executable string
+	result, err := ensureCondaWithMetadata(mamba, micromamba, conda, condaStandalone, noInstall)
+	if result == nil {
+		return "", err
+	}
+	return result.Path, err
+}
+
+func ensureCondaWithMetadata(mamba, micromamba, conda, condaStandalone, noInstall bool) (*condaExecutable, error) {
+	var executable *condaExecutable
 	dataDir := sitePath()
 	minMambaVersion, _ := pep440.Parse(DefaultMinMambaVersion)
 
-	microMambaVersionCheck := micromambaIsUsable
-	condaVersionCheck := condaIsUsable
-	mambaVersionCheck := executableHasMinVersion(minMambaVersion, "mamba", "")
+	mambaVersionCheck := executableWithMinVersion(minMambaVersion, "mamba", "")
 
 	if mamba {
 		log.Debug("Checking for mamba")
-		executable, _ = ResolveExecutable("mamba", dataDir, mambaVersionCheck)
-		if executable != "" {
+		executable, _ = resolveExecutableWithVersion("mamba", dataDir, mambaVersionCheck)
+		if executable != nil {
 			return executable, nil
 		}
 	}
 	if micromamba {
 		log.Debug("Checking for micromamba")
-		executable, _ = ResolveExecutable("micromamba", dataDir, microMambaVersionCheck)
-		if executable != "" {
+		executable, _ = resolveExecutableWithVersion("micromamba", dataDir, usableMicromambaVersion)
+		if executable != nil {
 			return executable, nil
 		}
 		if !noInstall {
@@ -149,39 +154,39 @@ func EnsureConda(mamba bool, micromamba bool, conda bool, condaStandalone bool, 
 			if errors.As(err, &notPublished) && len(remaining) > 0 {
 				log.Warnf("%v; trying %s instead", err, strings.Join(remaining, " or "))
 			} else if err != nil {
-				return "", err
-			} else if valid, _ := microMambaVersionCheck(exe); valid {
-				return exe, nil
+				return nil, err
+			} else if version, _ := usableMicromambaVersion(exe); version != nil {
+				return newCondaExecutable(exe, "micromamba", *version), nil
 			}
 		}
 	}
 	if conda {
 		log.Debug("Checking for conda")
 		// TODO: check $CONDA_EXE
-		executable, _ = ResolveExecutable("conda", dataDir, condaVersionCheck)
-		if executable != "" {
+		executable, _ = resolveExecutableWithVersion("conda", dataDir, usableCondaVersion)
+		if executable != nil {
 			return executable, nil
 		}
 	}
 	if condaStandalone {
 		log.Debug("Checking for conda_standalone")
-		executable, _ = ResolveExecutable("conda_standalone", dataDir, condaVersionCheck)
-		if executable != "" {
+		executable, _ = resolveExecutableWithVersion("conda_standalone", dataDir, usableCondaVersion)
+		if executable != nil {
 			return executable, nil
 		}
 		if !noInstall {
 			exe, err := InstallCondaStandalone()
 			if err != nil {
-				return "", err
+				return nil, err
 			}
 
-			if valid, _ := condaVersionCheck(exe); valid {
-				return exe, nil
+			if version, _ := usableCondaVersion(exe); version != nil {
+				return newCondaExecutable(exe, "conda_standalone", *version), nil
 			}
 		}
 	}
 
-	return "", nil
+	return nil, nil
 }
 
 type ArchSpec struct {
