@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	pep440 "github.com/aquasecurity/go-pep440-version"
+	"github.com/spf13/cobra"
 )
 
 func TestNormalizedVersion(t *testing.T) {
@@ -33,6 +34,57 @@ func TestNormalizedVersion(t *testing.T) {
 				t.Errorf("normalizedVersion(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestPrintExecutable(t *testing.T) {
+	for _, path := range []string{`C:\a path\"tool"`, `C:\Users\José\𝄞\a&b<c>`} {
+		t.Run(path, func(t *testing.T) {
+			info := &condaExecutable{Path: path, Flavor: "conda_standalone", Version: "25.1.0"}
+			for _, asJSON := range []bool{false, true} {
+				var out bytes.Buffer
+				command := &cobra.Command{}
+				command.SetOut(&out)
+				if err := printExecutable(command, info, asJSON); err != nil {
+					t.Fatal(err)
+				}
+				if !asJSON {
+					if out.String() != info.Path {
+						t.Errorf("plain output = %q, want exactly %q", out.String(), info.Path)
+					}
+					continue
+				}
+				for _, b := range out.Bytes() {
+					if b >= 0x80 {
+						t.Fatalf("JSON must be ASCII-only, got %q", out.String())
+					}
+				}
+				var got map[string]string
+				if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+					t.Fatal(err)
+				}
+				if len(got) != 3 || got["path"] != info.Path || got["flavor"] != info.Flavor || got["version"] != info.Version {
+					t.Errorf("JSON output = %v, want path, flavor and version from %v", got, info)
+				}
+			}
+		})
+	}
+}
+
+func TestPrintExecutableInvalidUTF8Path(t *testing.T) {
+	info := &condaExecutable{Path: "/lat\xe9/micromamba", Flavor: "micromamba", Version: "2.9.0"}
+	for _, asJSON := range []bool{false, true} {
+		var out bytes.Buffer
+		command := &cobra.Command{}
+		command.SetOut(&out)
+		err := printExecutable(command, info, asJSON)
+		if asJSON {
+			if err == nil || !strings.Contains(err.Error(), "not valid UTF-8") || out.Len() != 0 {
+				t.Errorf("JSON output = %q, %v; want an error and no output", out.String(), err)
+			}
+		} else if err != nil || out.String() != info.Path {
+			t.Errorf("plain output = %q, %v; want original path bytes %q", out.String(), err, info.Path)
+		}
 	}
 }
 

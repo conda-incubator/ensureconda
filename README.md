@@ -71,13 +71,22 @@ Options:
   --help                          Show this message and exit.
 ```
 
-With `--json`, the Python CLI prints the executable's path, flavor and version
-instead of just its path:
+With `--json`, both the Python and Go CLIs print the executable's path, flavor
+and version instead of just its path:
 
 ```console
 $ ensureconda --json
 {"path": "/home/user/.local/share/ensure-conda/micromamba", "flavor": "micromamba", "version": "2.9.0"}
 ```
+
+The flavor is the matching search branch: `mamba`, `micromamba`, `conda`, or
+`conda_standalone`. The version is the one used for the minimum-version check,
+normalized according to PEP 440. `--json` can be combined with `--no-install`.
+Compare parsed JSON values; whitespace and escaping may differ between the CLIs.
+
+The Go CLI requires a valid UTF-8 executable path for `--json`. If the path
+contains invalid UTF-8 bytes, it exits with an error and leaves stdout empty.
+Plain output preserves the original path bytes.
 
 ### Python API
 

@@ -1,3 +1,4 @@
+import json
 import os
 import pathlib
 import subprocess
@@ -70,6 +71,51 @@ def test_install(
     subprocess.check_call([result, "--help"])
 
 
+@pytest.mark.parametrize("as_json", [False, True], ids=["plain", "json"])
+@pytest.mark.parametrize(
+    "dirname",
+    [b"caf\xc3\xa9", b"\xf0\x9d\x84\x9e", b"lat\xe9"],
+    ids=["utf8", "non-bmp", "invalid-utf8"],
+)
+def test_non_ascii_path(
+    golang_exe: Optional[str],
+    isolated_env: Dict[str, str],
+    tmp_path: pathlib.Path,
+    platform: str,
+    as_json: bool,
+    dirname: bytes,
+) -> None:
+    if golang_exe is None:
+        pytest.skip("environment variable not set")
+    if platform != "linux":
+        pytest.skip("only Linux supports isolating the Go data directory via XDG")
+    data_home = tmp_path / os.fsdecode(dirname)
+    data = data_home / "ensure-conda"
+    data.mkdir(parents=True)
+    executable = data / "micromamba"
+    executable.write_text("#!/bin/sh\necho 2.9.0\n")
+    executable.chmod(0o755)
+    flags = ["--no-install", "--no-mamba", "--no-conda", "--no-conda-exe"]
+    if as_json:
+        flags.append("--json")
+    result = subprocess.run(
+        [golang_exe, *flags],
+        capture_output=True,
+        env={**isolated_env, "PATH": "", "XDG_DATA_HOME": str(data_home)},
+    )
+    if as_json and dirname == b"lat\xe9":
+        assert result.returncode == 1
+        assert result.stdout == b""
+        assert b"executable path is not valid UTF-8" in result.stderr
+    else:
+        assert result.returncode == 0
+        if as_json:
+            assert result.stdout.isascii()
+            assert json.loads(result.stdout)["path"] == str(executable)
+        else:
+            assert result.stdout == os.fsencode(executable)
+
+
 def test_find_installed_micromamba(
     golang_exe: Optional[str],
     isolated_env: Dict[str, str],
@@ -93,14 +139,17 @@ def test_find_installed_micromamba(
         assert pathlib.Path(installed).parent == tmp_path / "ensure-conda"
 
 
+@pytest.mark.parametrize("as_json", [False, True], ids=["plain", "json"])
 def test_reports_nothing_found(
-    golang_exe: Optional[str], isolated_env: Dict[str, str]
+    golang_exe: Optional[str], isolated_env: Dict[str, str], as_json: bool
 ) -> None:
     if golang_exe is None:
         raise pytest.skip("environment variable not set")
     # Outside Linux the data directory isn't isolated and may hold micromamba
     # or conda-standalone from an earlier test, so leave both out.
     flags = ["--no-micromamba", "--no-conda-exe", "--no-install"]
+    if as_json:
+        flags.append("--json")
     result = subprocess.run(
         [golang_exe, *flags],
         env={**isolated_env, "PATH": ""},

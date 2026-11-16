@@ -1,12 +1,15 @@
 package cmd
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"runtime"
 	"strconv"
 	"strings"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/Wessie/appdirs"
 	pep440 "github.com/aquasecurity/go-pep440-version"
@@ -44,6 +47,11 @@ var (
 				panic(err)
 			}
 
+			asJSON, err := cmd.Flags().GetBool("json")
+			if err != nil {
+				panic(err)
+			}
+
 			verbosity, err := cmd.Flags().GetInt("verbosity")
 			if err != nil {
 				panic(err)
@@ -61,25 +69,29 @@ var (
 				log.SetLevel(log.InfoLevel)
 			}
 
-			executable, err := EnsureConda(mamba, micromamba, conda, condaExe, true)
+			executable, err := ensureCondaWithMetadata(mamba, micromamba, conda, condaExe, true)
 			if err != nil {
 				panic(err)
 			}
 
-			if executable != "" {
-				log.Debugf("Found executable %s", executable)
-				fmt.Print(executable)
+			if executable != nil {
+				log.Debugf("Found executable %s", executable.Path)
+				if err := printExecutable(cmd, executable, asJSON); err != nil {
+					er(err)
+				}
 				os.Exit(0)
 			}
 			if !noInstall {
 				log.Debugf("Attempting to install")
-				executable, err = EnsureConda(mamba, micromamba, conda, condaExe, noInstall)
+				executable, err = ensureCondaWithMetadata(mamba, micromamba, conda, condaExe, noInstall)
 				if err != nil {
 					er(err)
 				}
-				if executable != "" {
-					log.Debugf("Found executable after installing %s", executable)
-					fmt.Print(executable)
+				if executable != nil {
+					log.Debugf("Found executable after installing %s", executable.Path)
+					if err := printExecutable(cmd, executable, asJSON); err != nil {
+						er(err)
+					}
 					os.Exit(0)
 				}
 			}
@@ -231,6 +243,37 @@ func Execute(version string) error {
 	return rootCmd.Execute()
 }
 
+func printExecutable(cmd *cobra.Command, executable *condaExecutable, asJSON bool) error {
+	if asJSON {
+		if !utf8.ValidString(executable.Path) {
+			return fmt.Errorf("cannot print JSON: executable path is not valid UTF-8: %q", executable.Path)
+		}
+		encoded, err := json.Marshal(executable)
+		if err != nil {
+			return err
+		}
+		// Keep JSON ASCII-only so shells using a non-UTF-8 console encoding
+		// preserve paths. Marshal already handled quoting and control bytes;
+		// any remaining non-ASCII characters occur inside JSON strings.
+		var ascii strings.Builder
+		for _, r := range string(encoded) {
+			switch {
+			case r < utf8.RuneSelf:
+				ascii.WriteByte(byte(r))
+			case r <= 0xffff:
+				fmt.Fprintf(&ascii, "\\u%04x", r)
+			default:
+				high, low := utf16.EncodeRune(r)
+				fmt.Fprintf(&ascii, "\\u%04x\\u%04x", high, low)
+			}
+		}
+		_, err = fmt.Fprintln(cmd.OutOrStdout(), ascii.String())
+		return err
+	}
+	_, err := fmt.Fprint(cmd.OutOrStdout(), executable.Path)
+	return err
+}
+
 func er(msg interface{}) {
 	log.Error(msg)
 	os.Exit(1)
@@ -266,6 +309,7 @@ func init() {
 	rootCmd.PersistentFlags().Bool("no-conda-exe", false, "")
 
 	rootCmd.PersistentFlags().Bool("no-install", false, "Don't install stuff")
+	rootCmd.PersistentFlags().Bool("json", false, "Print the executable's path, flavor and version as JSON")
 
 	// TODO: implement logger + verbosity
 	rootCmd.PersistentFlags().IntP("verbosity", "v", 1, "verbosity level (0-3)")
