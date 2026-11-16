@@ -49,24 +49,114 @@ Options:
   --mamba / --no-mamba            search for mamba
   --micromamba / --no-micromamba  search for micromamba, install if not
                                   present
-
   --conda / --no-conda            search for conda
   --conda-exe / --no-conda-exe    search for conda.exe / conda-standalone,
                                   install if not present
-
   --no-install                    don't install conda/mamba if no version can
                                   be discovered
-
   --min-conda-version VERSIONNUMBER
                                   minimum version of conda to accept (defaults
                                   to 4.8.2)
-
   --min-mamba-version VERSIONNUMBER
                                   minimum version of mamba/micromamba to
                                   accept (defaults to 0.7.3)
-
+  --json                          print the executable's path, flavor and
+                                  version as JSON
   --help                          Show this message and exit.
 ```
+
+With `--json`, ensureconda prints the executable's path, flavor and version
+instead of just its path:
+
+```console
+$ ensureconda --json
+{"path": "/home/user/.local/share/ensure-conda/micromamba", "flavor": "micromamba", "version": "2.9.0"}
+```
+
+### Python API
+
+```python
+import ensureconda
+
+ensureconda.ensure()  # CondaExecutable(path, flavor, version), or None
+ensureconda.ensure(["micromamba>=2,<3", "conda>=24"])
+ensureconda.ensure(["conda", "micromamba"], install="never")
+ensureconda.identify("/opt/conda/bin/conda")  # Describe a given executable
+
+# The old API still returns only a path, or None.
+ensureconda.ensureconda(micromamba=False, min_conda_version=None)
+```
+
+`ensure()` accepts an ordered sequence of target strings. Each names `mamba`,
+`micromamba`, `conda`, or `conda_standalone`, optionally followed by version
+constraints such as `>=2,<3` or `==2.9.*`. The default order is `mamba`,
+`micromamba`, `conda`, `conda_standalone`. An empty sequence returns `None`.
+Invalid targets raise `ValueError` before any search or installation.
+Target names are case insensitive; `conda-standalone` and `Conda.Standalone`
+also select `conda_standalone`.
+
+The `install` argument selects when installation is attempted. Only
+`micromamba` and `conda_standalone` can be installed; `mamba` and `conda`
+select existing installations.
+
+- `"fallback"`, the default: all targets are searched for compatible installed
+  executables before any installation is attempted. For example,
+  `["micromamba", "conda"]` uses an installed conda if micromamba is absent.
+  If nothing installed matches, the installers are tried in target order.
+- `"per-target"`: each target is searched for and, if it is absent, installed
+  before the next target is considered. With `["micromamba", "conda"]`,
+  micromamba is installed even if a conda is already present.
+- `"never"`: targets are only searched for.
+
+Any other value raises `ValueError` before any search or installation.
+
+Downloads are selected for a conda platform, an operating-system and
+architecture combination such as `linux-64`. If ensureconda cannot determine
+which build to download for the running Python environment, it still searches
+for installed executables. Those may work independently of the download
+mapping. If none is found and installation would otherwise have been attempted,
+it raises
+`ensureconda.resolve.UnsupportedPlatformError` instead of returning `None`.
+
+Version constraints use Python packaging's version-specifier syntax. Downloads
+fetch the latest available build: constraints filter the result, but do not
+select an older release to download. An unpublished build allows trying the
+next target; other download failures propagate.
+
+Later releases may add fields to the result or keys to `ensureconda --json`.
+
+The result's flavor is `"mamba"`, `"micromamba"`, `"conda"`, or
+`"conda_standalone"`. Its version is `None` if `--version` doesn't report one.
+The version used to check a constraint is also returned as metadata. `ensure()`
+requires a known version to satisfy a constraint.
+
+By default, `ensure()` runs `--version` on each candidate it considers:
+
+- If the command succeeds and reports a recognized version, that version is
+  returned as metadata.
+- If it succeeds but the version cannot be parsed or the output cannot be
+  decoded, an unconstrained target can still return it with `version=None`.
+- If the command cannot start or exits unsuccessfully, `ensure()` reports the
+  failure on stderr and skips the candidate. It continues with other candidates,
+  later targets, and installation according to the selected search order.
+
+This check also applies to candidates returned by an installer. It does not
+force replacement of a cached executable that the installer considers fresh.
+Set `probe_version=False` to run `--version` only when a target's constraints
+require it. For an unconstrained target, this also disables checking that the
+executable runs, and the returned version is `None`.
+
+`ensureconda()`, the old API, keeps its boolean options, minimum-version
+arguments, path-or-None result, and original search and installation order.
+It runs version probes only when a minimum is specified. In particular, it
+may install micromamba before looking for an installed conda. The CLI continues
+to prefer installed executables, both with and without `--json`.
+
+`identify()` takes the flavor from the file name, or else from the shape of the
+`--version` output, which can't tell micromamba from mamba 2, nor conda from
+conda-standalone; those are reported as `"micromamba"` and `"conda"`. It raises
+`FileNotFoundError` or `PermissionError` for a path that doesn't exist or isn't
+executable, and `ValueError` for an executable it doesn't recognize.
 
 ### Configuring conda-standalone channel
 
