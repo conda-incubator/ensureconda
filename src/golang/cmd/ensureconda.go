@@ -1,12 +1,15 @@
 package cmd
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"runtime"
 	"strconv"
 	"strings"
+	"unicode/utf16"
+	"unicode/utf8"
 
 	"github.com/Wessie/appdirs"
 	pep440 "github.com/aquasecurity/go-pep440-version"
@@ -44,6 +47,11 @@ var (
 				panic(err)
 			}
 
+			asJSON, err := cmd.Flags().GetBool("json")
+			if err != nil {
+				panic(err)
+			}
+
 			verbosity, err := cmd.Flags().GetInt("verbosity")
 			if err != nil {
 				panic(err)
@@ -61,25 +69,29 @@ var (
 				log.SetLevel(log.InfoLevel)
 			}
 
-			executable, err := EnsureConda(mamba, micromamba, conda, condaExe, true)
+			executable, err := ensureCondaWithMetadata(mamba, micromamba, conda, condaExe, true)
 			if err != nil {
 				panic(err)
 			}
 
-			if executable != "" {
-				log.Debugf("Found executable %s", executable)
-				fmt.Print(executable)
+			if executable != nil {
+				log.Debugf("Found executable %s", executable.Path)
+				if err := printExecutable(cmd, executable, asJSON); err != nil {
+					er(err)
+				}
 				os.Exit(0)
 			}
 			if !noInstall {
 				log.Debugf("Attempting to install")
-				executable, err = EnsureConda(mamba, micromamba, conda, condaExe, noInstall)
+				executable, err = ensureCondaWithMetadata(mamba, micromamba, conda, condaExe, noInstall)
 				if err != nil {
 					er(err)
 				}
-				if executable != "" {
-					log.Debugf("Found executable after installing %s", executable)
-					fmt.Print(executable)
+				if executable != nil {
+					log.Debugf("Found executable after installing %s", executable.Path)
+					if err := printExecutable(cmd, executable, asJSON); err != nil {
+						er(err)
+					}
 					os.Exit(0)
 				}
 			}
@@ -100,69 +112,45 @@ func sitePath() string {
 	return appdirs.UserDataDir("ensure-conda", "", "", false)
 }
 
-// micromambaIsUsable reports whether executable is a micromamba that can be
-// used: it must run and report at least the minimum version.
-func micromambaIsUsable(executable string) (bool, error) {
+// usableMicromambaVersion returns the version if executable runs and reports
+// at least the minimum micromamba version, or nil otherwise.
+func usableMicromambaVersion(executable string) (*pep440.Version, error) {
 	minMambaVersion, _ := pep440.Parse(DefaultMinMambaVersion)
-	return executableHasMinVersion(minMambaVersion, "")(executable)
+	return executableWithMinVersion(minMambaVersion, "")(executable)
 }
 
-// condaIsUsable reports whether executable is a conda or conda-standalone that
-// can be used: it must run and report at least the minimum version.
-func condaIsUsable(executable string) (bool, error) {
+// usableCondaVersion applies the conda minimum to both conda and conda-standalone.
+func usableCondaVersion(executable string) (*pep440.Version, error) {
 	minCondaVersion, _ := pep440.Parse(DefaultMinCondaVersion)
-	return executableHasMinVersion(minCondaVersion, "conda")(executable)
+	return executableWithMinVersion(minCondaVersion, "conda")(executable)
 }
 
 func EnsureConda(mamba bool, micromamba bool, conda bool, condaStandalone bool, noInstall bool) (string, error) {
-	var executable string
+	result, err := ensureCondaWithMetadata(mamba, micromamba, conda, condaStandalone, noInstall)
+	if result == nil {
+		return "", err
+	}
+	return result.Path, err
+}
+
+func ensureCondaWithMetadata(mamba, micromamba, conda, condaStandalone, noInstall bool) (*condaExecutable, error) {
+	var executable *condaExecutable
 	dataDir := sitePath()
 	minMambaVersion, _ := pep440.Parse(DefaultMinMambaVersion)
 
-	microMambaVersionCheck := micromambaIsUsable
-	condaVersionCheck := condaIsUsable
-	mambaVersionCheck := func(executable string) (bool, error) {
-		log.WithFields(log.Fields{
-			"executable":      executable,
-			"minMambaVersion": minMambaVersion.String(),
-		}).Debug("Starting verbose mamba version check")
-		log.Debug("Attempting v1 style version check (prefix 'mamba')")
-		v1Check, err := executableHasMinVersion(minMambaVersion, "mamba")(executable)
-		if err != nil {
-			log.WithError(err).Error("v1 style check encountered an error")
-			return false, fmt.Errorf("v1 style check failed: %w", err)
-		}
-		log.WithField("v1Result", v1Check).Debug("v1 style check result")
-		if v1Check {
-			log.Debug("v1 style check succeeded")
-			return true, nil
-		}
-		log.Debug("v1 style check did not succeed; attempting micromamba style check (empty prefix)")
-		v2Check, err := executableHasMinVersion(minMambaVersion, "")(executable)
-		if err != nil {
-			log.WithError(err).Error("micromamba style check encountered an error")
-			return false, fmt.Errorf("micromamba style check failed: %w", err)
-		}
-		log.WithField("v2Result", v2Check).Debug("micromamba style check result")
-		if v2Check {
-			log.Debug("micromamba style check succeeded")
-			return true, nil
-		}
-		log.Debug("Neither v1 nor micromamba style checks succeeded; returning false")
-		return false, nil
-	}
+	mambaVersionCheck := executableWithMinVersion(minMambaVersion, "mamba", "")
 
 	if mamba {
 		log.Debug("Checking for mamba")
-		executable, _ = ResolveExecutable("mamba", dataDir, mambaVersionCheck)
-		if executable != "" {
+		executable, _ = resolveExecutableWithVersion("mamba", dataDir, mambaVersionCheck)
+		if executable != nil {
 			return executable, nil
 		}
 	}
 	if micromamba {
 		log.Debug("Checking for micromamba")
-		executable, _ = ResolveExecutable("micromamba", dataDir, microMambaVersionCheck)
-		if executable != "" {
+		executable, _ = resolveExecutableWithVersion("micromamba", dataDir, usableMicromambaVersion)
+		if executable != nil {
 			return executable, nil
 		}
 		if !noInstall {
@@ -178,39 +166,39 @@ func EnsureConda(mamba bool, micromamba bool, conda bool, condaStandalone bool, 
 			if errors.As(err, &notPublished) && len(remaining) > 0 {
 				log.Warnf("%v; trying %s instead", err, strings.Join(remaining, " or "))
 			} else if err != nil {
-				return "", err
-			} else if valid, _ := microMambaVersionCheck(exe); valid {
-				return exe, nil
+				return nil, err
+			} else if version, _ := usableMicromambaVersion(exe); version != nil {
+				return newCondaExecutable(exe, "micromamba", *version), nil
 			}
 		}
 	}
 	if conda {
 		log.Debug("Checking for conda")
 		// TODO: check $CONDA_EXE
-		executable, _ = ResolveExecutable("conda", dataDir, condaVersionCheck)
-		if executable != "" {
+		executable, _ = resolveExecutableWithVersion("conda", dataDir, usableCondaVersion)
+		if executable != nil {
 			return executable, nil
 		}
 	}
 	if condaStandalone {
 		log.Debug("Checking for conda_standalone")
-		executable, _ = ResolveExecutable("conda_standalone", dataDir, condaVersionCheck)
-		if executable != "" {
+		executable, _ = resolveExecutableWithVersion("conda_standalone", dataDir, usableCondaVersion)
+		if executable != nil {
 			return executable, nil
 		}
 		if !noInstall {
 			exe, err := InstallCondaStandalone()
 			if err != nil {
-				return "", err
+				return nil, err
 			}
 
-			if valid, _ := condaVersionCheck(exe); valid {
-				return exe, nil
+			if version, _ := usableCondaVersion(exe); version != nil {
+				return newCondaExecutable(exe, "conda_standalone", *version), nil
 			}
 		}
 	}
 
-	return "", nil
+	return nil, nil
 }
 
 type ArchSpec struct {
@@ -255,6 +243,37 @@ func Execute(version string) error {
 	return rootCmd.Execute()
 }
 
+func printExecutable(cmd *cobra.Command, executable *condaExecutable, asJSON bool) error {
+	if asJSON {
+		if !utf8.ValidString(executable.Path) {
+			return fmt.Errorf("cannot print JSON: executable path is not valid UTF-8: %q", executable.Path)
+		}
+		encoded, err := json.Marshal(executable)
+		if err != nil {
+			return err
+		}
+		// Keep JSON ASCII-only so shells using a non-UTF-8 console encoding
+		// preserve paths. Marshal already handled quoting and control bytes;
+		// any remaining non-ASCII characters occur inside JSON strings.
+		var ascii strings.Builder
+		for _, r := range string(encoded) {
+			switch {
+			case r < utf8.RuneSelf:
+				ascii.WriteByte(byte(r))
+			case r <= 0xffff:
+				fmt.Fprintf(&ascii, "\\u%04x", r)
+			default:
+				high, low := utf16.EncodeRune(r)
+				fmt.Fprintf(&ascii, "\\u%04x\\u%04x", high, low)
+			}
+		}
+		_, err = fmt.Fprintln(cmd.OutOrStdout(), ascii.String())
+		return err
+	}
+	_, err := fmt.Fprint(cmd.OutOrStdout(), executable.Path)
+	return err
+}
+
 func er(msg interface{}) {
 	log.Error(msg)
 	os.Exit(1)
@@ -290,6 +309,7 @@ func init() {
 	rootCmd.PersistentFlags().Bool("no-conda-exe", false, "")
 
 	rootCmd.PersistentFlags().Bool("no-install", false, "Don't install stuff")
+	rootCmd.PersistentFlags().Bool("json", false, "Print the executable's path, flavor and version as JSON")
 
 	// TODO: implement logger + verbosity
 	rootCmd.PersistentFlags().IntP("verbosity", "v", 1, "verbosity level (0-3)")

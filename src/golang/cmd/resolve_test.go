@@ -1,14 +1,105 @@
 package cmd
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"strings"
 	"testing"
+
+	pep440 "github.com/aquasecurity/go-pep440-version"
+	log "github.com/sirupsen/logrus"
 )
 
 func acceptAny(string) (bool, error) { return true, nil }
+
+func TestParseExecutableVersion(t *testing.T) {
+	for _, tt := range []struct {
+		name, output, want string
+		prefixes           []string
+		wantErr            bool
+	}{
+		{"mamba v1", "mamba 1.5.12\nconda 24.11.3\n", "1.5.12", []string{"mamba", ""}, false},
+		{"mamba v2", "2.9.0\n", "2.9.0", []string{"mamba", ""}, false},
+		{"old mamba", "mamba 0.5.0\nconda 4.9.0\n", "0.5.0", []string{"mamba", ""}, false},
+		{"invalid mamba", "mamba unknown\nconda 25.1.0\n", "", []string{"mamba", ""}, true},
+		{"mamba line takes precedence", "conda 25.1.0\nmamba 1.5.12\n", "1.5.12", []string{"mamba", ""}, false},
+		{"first micromamba line", "0.1.0\n2.9.0\n", "0.1.0", []string{""}, false},
+		{"invalid first line", "warning: something\n2.9.0\n", "", []string{""}, true},
+		{"first conda line", "conda 4.0.0\nconda 25.1.0\n", "4.0.0", []string{"conda"}, false},
+		{"trailing space", "2.9.0 \n", "2.9.0", []string{""}, false},
+		{"tab", "micromamba\t2.9.0\n", "2.9.0", []string{""}, false},
+		{"outer whitespace", "\n \tconda 25.1.0\t \r\n", "25.1.0", []string{"conda"}, false},
+		{"carriage return", "warning\rconda 25.1.0\r", "25.1.0", []string{"conda"}, false},
+		{"unicode whitespace", "\u2003conda\u00a025.1.0\u2003", "25.1.0", []string{"conda"}, false},
+		{"unicode line separator", "warning\u2028conda 25.1.0", "25.1.0", []string{"conda"}, false},
+		{"control whitespace", "\x1fconda\x1f25.1.0\x1f", "25.1.0", []string{"conda"}, false},
+		{"no matching prefix", "2.9.0\n", "", []string{"conda"}, false},
+		{"empty", "\n \t", "", []string{""}, false},
+		{"invalid UTF-8", "2.9.0\n\xff", "", []string{""}, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			version, err := parseExecutableVersion(tt.output, tt.prefixes...)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("parseExecutableVersion() error = %v, want error: %v", err, tt.wantErr)
+			}
+			got := ""
+			if version != nil {
+				got = version.String()
+			}
+			if got != tt.want {
+				t.Errorf("parseExecutableVersion() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestExecutableVersionRejectionDiagnostics(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the stand-in executables are shell scripts")
+	}
+	for _, tt := range []struct {
+		name, script, message, reason string
+		wantErr                       bool
+	}{
+		{"execution error", "exit 7", "Skipping executable", "exit status 7", true},
+		{"parse error", "echo 'warning: x'", "Skipping executable", "malformed version: x", true},
+		{"below minimum", "printf '0.1.0\\n2.9.0\\n'", "No acceptable executable version found", "version=0.1.0", false},
+		{"empty output", "exit 0", "No acceptable executable version found", "version=\"<nil>\"", false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "micromamba")
+			if err := os.WriteFile(path, []byte("#!/bin/sh\n"+tt.script+"\n"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			var output bytes.Buffer
+			previousOutput, previousLevel := log.StandardLogger().Out, log.GetLevel()
+			log.SetOutput(&output)
+			log.SetLevel(log.DebugLevel)
+			t.Cleanup(func() {
+				log.SetOutput(previousOutput)
+				log.SetLevel(previousLevel)
+			})
+			_, err := executableWithMinVersion(pep440.MustParse(DefaultMinMambaVersion), "")(path)
+			if (err != nil) != tt.wantErr {
+				t.Fatalf("version check error = %v, want error: %v", err, tt.wantErr)
+			}
+			var rejection string
+			for _, line := range strings.Split(output.String(), "\n") {
+				if strings.Contains(line, tt.message) {
+					rejection = line
+				}
+			}
+			for _, want := range []string{"level=debug", tt.message, path, "minVersion=" + DefaultMinMambaVersion, tt.reason} {
+				if !strings.Contains(rejection, want) {
+					t.Errorf("rejection log %q does not contain %q", rejection, want)
+				}
+			}
+		})
+	}
+}
 
 func TestExecutableCandidates(t *testing.T) {
 	tests := []struct {

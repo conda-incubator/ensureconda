@@ -161,7 +161,7 @@ func InstallCondaStandalone() (string, error) {
 	}
 
 	target := targetExeFilename("conda_standalone")
-	return installUnlessUsable("conda_exe_install.lock", target, condaIsUsable, func() (string, error) {
+	return installUnlessUsable("conda_exe_install.lock", target, usableCondaVersion, func() (string, error) {
 		return downloadCondaStandalone(channel, subdir, target)
 	})
 }
@@ -317,7 +317,7 @@ func unpackConda(archive []byte, fileNameMap map[string]string) (string, error) 
 // has just installed one that can be used.
 func installMicromamba(url string) (string, error) {
 	target := targetExeFilename("micromamba")
-	return installUnlessUsable("micromamba_install.lock", target, micromambaIsUsable, func() (string, error) {
+	return installUnlessUsable("micromamba_install.lock", target, usableMicromambaVersion, func() (string, error) {
 		// micro.mamba.pm publishes no digest to verify against.
 		return downloadAndUnpackArchive(
 			url, "", map[string]string{
@@ -328,8 +328,8 @@ func installMicromamba(url string) (string, error) {
 }
 
 // installUnlessUsable calls download while holding the named download lock,
-// unless target passes isUsable once the lock is held.
-func installUnlessUsable(lockName string, target string, isUsable func(string) (bool, error), download func() (string, error)) (string, error) {
+// unless target passes checkVersion once the lock is held.
+func installUnlessUsable(lockName string, target string, checkVersion versionCheck, download func() (string, error)) (string, error) {
 	unlock, err := lockInstall(lockName)
 	if err != nil {
 		return "", err
@@ -339,7 +339,7 @@ func installUnlessUsable(lockName string, target string, isUsable func(string) (
 	// A concurrent process may have installed it while this one waited for the
 	// lock. Check it instead of trusting its age: any executable that was here
 	// before has already been rejected, or this install wouldn't be running.
-	if usable, _ := isUsable(target); usable {
+	if version, _ := checkVersion(target); version != nil {
 		return target, nil
 	}
 	return download()
