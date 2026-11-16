@@ -58,8 +58,8 @@ func TestRequestReadsResponseBodies(t *testing.T) {
 			} else if err != nil {
 				t.Fatal(err)
 			}
-			if !bytes.Equal(response.Body(), payload) {
-				t.Errorf("body length = %d, want the %d-byte payload", len(response.Body()), len(payload))
+			if !bytes.Equal(response.body, payload) {
+				t.Errorf("body length = %d, want the %d-byte payload", len(response.body), len(payload))
 			}
 		})
 	}

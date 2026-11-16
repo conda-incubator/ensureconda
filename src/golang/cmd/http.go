@@ -14,7 +14,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/go-resty/resty/v2"
 	log "github.com/sirupsen/logrus"
 )
 
@@ -48,7 +47,7 @@ var httpClient = sync.OnceValue(newHTTPClient)
 // established within connectTimeout, or that deliver no data for readTimeout.
 // The custom dialer disables Go's automatic HTTP/2 upgrade; HTTP/1.1 is enough
 // for the few requests made per run, and keeps the inactivity timeout simple.
-func newHTTPClient() *resty.Client {
+func newHTTPClient() *http.Client {
 	dialer := &net.Dialer{Timeout: connectTimeout, KeepAlive: 30 * time.Second}
 	transport := &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
@@ -70,7 +69,7 @@ func newHTTPClient() *resty.Client {
 		TLSHandshakeTimeout: connectTimeout,
 		IdleConnTimeout:     90 * time.Second,
 	}
-	return resty.New().SetTransport(transport)
+	return &http.Client{Transport: transport}
 }
 
 // idleTimeoutConn fails any read that receives no data within its timeout.
@@ -98,9 +97,9 @@ func (e *httpStatusError) Error() string {
 }
 
 // checkStatus returns an error unless the response has a 2xx status.
-func checkStatus(resp *resty.Response, rawURL string) error {
-	if !resp.IsSuccess() {
-		return &httpStatusError{url: rawURL, statusCode: resp.StatusCode(), status: resp.Status()}
+func checkStatus(resp *http.Response, rawURL string) error {
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		return &httpStatusError{url: rawURL, statusCode: resp.StatusCode, status: resp.Status}
 	}
 	return nil
 }
@@ -151,7 +150,7 @@ func retryableRequestError(err error) bool {
 
 // requestURLWithRetry reads the entire body into the returned response, so
 // that a truncated or stalled body is retried like any other failure.
-func requestURLWithRetry(rawURL string) (*resty.Response, error) {
+func requestURLWithRetry(rawURL string) (*response, error) {
 	deadline := retryNow().Add(retryTimeBudget)
 	backoff := time.Second
 	for attempt := 1; ; attempt++ {
@@ -170,9 +169,9 @@ func requestURLWithRetry(rawURL string) (*resty.Response, error) {
 		source := ""
 		now := retryNow()
 		if hasStatus {
-			if retryAfter := retryAfterDelay(resp.Header().Get("Retry-After"), now); retryAfter > delay {
+			if retryAfter := retryAfterDelay(resp.header.Get("Retry-After"), now); retryAfter > delay {
 				delay = retryAfter
-				source = fmt.Sprintf(" (Retry-After from HTTP %d)", resp.StatusCode())
+				source = fmt.Sprintf(" (Retry-After from HTTP %d)", status.statusCode)
 			}
 		}
 		remaining := max(0, deadline.Sub(now))
@@ -186,28 +185,34 @@ func requestURLWithRetry(rawURL string) (*resty.Response, error) {
 	}
 }
 
+// response holds the parts of an HTTP response that callers use.
+type response struct {
+	status string
+	header http.Header
+	body   []byte
+}
+
 // requestURL checks the status before reading the body, so incomplete error
 // bodies cannot hide a permanent HTTP error or its Retry-After header.
-func requestURL(rawURL string) (*resty.Response, error) {
-	resp, err := httpClient().R().SetDoNotParseResponse(true).Get(rawURL)
-	if resp != nil && resp.RawBody() != nil {
-		defer resp.RawBody().Close()
-	}
+func requestURL(rawURL string) (*response, error) {
+	resp, err := httpClient().Get(rawURL)
 	if err != nil {
-		return resp, err
+		return nil, err
 	}
+	defer resp.Body.Close()
+	result := &response{status: resp.Status, header: resp.Header}
 	if err := checkStatus(resp, rawURL); err != nil {
-		return resp, err
+		return result, err
 	}
 	var body bytes.Buffer
-	if length := resp.RawResponse.ContentLength; length > 0 && length <= maxPreallocatedBody {
+	if length := resp.ContentLength; length > 0 && length <= maxPreallocatedBody {
 		// ReadFrom needs MinRead bytes of spare capacity for its final read.
 		body.Grow(int(length) + bytes.MinRead)
 	}
-	_, err = body.ReadFrom(resp.RawBody())
-	resp.SetBody(body.Bytes())
+	_, err = body.ReadFrom(resp.Body)
+	result.body = body.Bytes()
 	if err != nil {
 		err = &url.Error{Op: "Get", URL: rawURL, Err: err}
 	}
-	return resp, err
+	return result, err
 }

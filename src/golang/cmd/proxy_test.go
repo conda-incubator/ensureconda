@@ -13,8 +13,6 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"github.com/go-resty/resty/v2"
 )
 
 func TestRequestRetriesRejectedProxyConnect(t *testing.T) {
@@ -68,15 +66,12 @@ func TestRequestRetriesRejectedProxyConnect(t *testing.T) {
 				t.Fatal(err)
 			}
 			client := newHTTPClient()
-			transport, err := client.Transport()
-			if err != nil {
-				t.Fatal(err)
-			}
+			transport := client.Transport.(*http.Transport)
 			transport.Proxy = http.ProxyURL(proxyURL)
 			transport.TLSClientConfig = origin.Client().Transport.(*http.Transport).TLSClientConfig
-			defer client.GetClient().CloseIdleConnections()
+			defer client.CloseIdleConnections()
 			previous := httpClient
-			httpClient = func() *resty.Client { return client }
+			httpClient = func() *http.Client { return client }
 			t.Cleanup(func() { httpClient = previous })
 
 			response, err := requestURLWithRetry(origin.URL)
@@ -84,8 +79,8 @@ func TestRequestRetriesRejectedProxyConnect(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if string(response.Body()) != "complete" || attempts.Load() != 2 || !slices.Equal(clock.delays, []time.Duration{time.Second}) {
-					t.Errorf("body %q, attempts %d, delays %v", response.Body(), attempts.Load(), clock.delays)
+				if string(response.body) != "complete" || attempts.Load() != 2 || !slices.Equal(clock.delays, []time.Duration{time.Second}) {
+					t.Errorf("body %q, attempts %d, delays %v", response.body, attempts.Load(), clock.delays)
 				}
 				return
 			}
