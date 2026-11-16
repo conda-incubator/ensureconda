@@ -488,13 +488,7 @@ def new_executable(target_filename: "Path") -> Generator[IO[bytes], None, None]:
             st = os.stat(temp_filename)
             os.chmod(temp_filename, st.st_mode | stat.S_IXUSR)
             try:
-                # On Windows, rename requires removing an existing target first.
-                if (
-                    sys.platform in ["win32", "cygwin", "msys"]
-                    and target_filename.exists()
-                ):
-                    target_filename.unlink()
-                os.rename(temp_filename, target_filename)
+                os.replace(temp_filename, target_filename)
             except OSError as error:
                 reason = error.strerror or str(error)
                 detail = f"Could not replace executable {target_filename}: {reason}"

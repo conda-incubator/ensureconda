@@ -136,13 +136,14 @@ def test_failed_write_leaves_no_temporary_file(
 
 @pytest.mark.parametrize("windows", [False, True])
 @pytest.mark.parametrize("with_metadata", [False, True])
-def test_replacement_failure_reports_metadata_and_cleans_up(
+def test_replacement_failure_preserves_cache_and_cleans_up(
     windows: bool,
     with_metadata: bool,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     target = tmp_path / "executable"
+    target.write_bytes(b"old executable")
     denied = (
         PermissionError(
             errno.EACCES, "Access denied", "staged", 5 if windows else None, str(target)
@@ -152,7 +153,7 @@ def test_replacement_failure_reports_metadata_and_cleans_up(
     )
     monkeypatch.setattr(installer, "is_windows", windows)
     replace = Mock(side_effect=denied)
-    monkeypatch.setattr(os, "rename", replace)
+    monkeypatch.setattr(os, "replace", replace)
     with pytest.raises(installer.ExecutableReplacementError) as error:
         with installer.new_executable(target) as executable:
             executable.write(b"new executable")
@@ -169,7 +170,8 @@ def test_replacement_failure_reports_metadata_and_cleans_up(
     assert error.value.filename2 == denied.filename2
     assert getattr(error.value, "winerror", None) == getattr(denied, "winerror", None)
     assert error.value.__cause__ is denied
-    assert [p.name for p in tmp_path.iterdir() if p.suffix != ".lock"] == []
+    assert target.read_bytes() == b"old executable"
+    assert [p.name for p in tmp_path.iterdir() if p.suffix != ".lock"] == ["executable"]
 
 
 @pytest.fixture(params=[".conda", ".tar.bz2"])
