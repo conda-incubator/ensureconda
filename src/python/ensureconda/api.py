@@ -4,8 +4,11 @@ import subprocess
 import sys
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Dict, Literal, NamedTuple, Optional
+from typing import TYPE_CHECKING, Callable, Dict, Literal, NamedTuple, Optional, Tuple
 
+from packaging.requirements import InvalidRequirement, Requirement
+from packaging.specifiers import SpecifierSet
+from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
 
 from ensureconda.installer import (
@@ -89,6 +92,10 @@ class CondaExecutable(NamedTuple):
             "flavor": self.flavor,
             "version": None if self.version is None else str(self.version),
         }
+
+
+_FLAVORS: Tuple[Flavor, ...] = ("mamba", "micromamba", "conda", "conda_standalone")
+_TARGET_FLAVORS = {canonicalize_name(flavor): flavor for flavor in _FLAVORS}
 
 
 def _probe_version(executable: "StrPath", flavor: Flavor) -> Optional[Version]:
@@ -263,6 +270,44 @@ def ensureconda(
     if unsupported_platform is not None:
         raise unsupported_platform
     return None
+
+
+def _parse_target(target: str) -> Tuple[Flavor, Optional[SpecifierSet]]:
+    """Parse a tool name and optional version constraints.
+
+    >>> _parse_target("Conda-Standalone")
+    ('conda_standalone', None)
+    >>> flavor, constraint = _parse_target("micromamba>=2,<3")
+    >>> flavor
+    'micromamba'
+    >>> [constraint.contains(v) for v in ["1.9", "2.5", "3.0"]]
+    [False, True, False]
+    >>> _, constraint = _parse_target("conda==25.*")
+    >>> constraint.contains("25.1")
+    True
+    >>> _parse_target("micromamba>=1.0+local")
+    Traceback (most recent call last):
+        ...
+    ValueError: Invalid target 'micromamba>=1.0+local'
+    >>> _parse_target("python")
+    Traceback (most recent call last):
+        ...
+    ValueError: Unknown target 'python'; expected mamba, micromamba, conda, or conda_standalone, optionally followed by version constraints
+    """
+    try:
+        requirement = Requirement(target)
+    except InvalidRequirement as error:
+        raise ValueError(f"Invalid target {target!r}") from error
+
+    flavor = _TARGET_FLAVORS.get(canonicalize_name(requirement.name))
+    if flavor is None:
+        raise ValueError(
+            f"Unknown target {target!r}; expected mamba, micromamba, conda, "
+            "or conda_standalone, optionally followed by version constraints"
+        )
+    if requirement.extras or requirement.marker is not None or requirement.url:
+        raise ValueError(f"Invalid target {target!r}")
+    return flavor, requirement.specifier or None
 
 
 def identify(executable: "StrPath") -> CondaExecutable:
