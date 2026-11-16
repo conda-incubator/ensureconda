@@ -117,6 +117,14 @@ def windows_subdir(sysconfig_platform: str, bits: int) -> str:
     # MSYS2's MinGW builds have other names, such as mingw_aarch64_ucrt_llvm.
     if sysconfig_platform.startswith("mingw_aarch64"):
         return "win-arm64"
+    # conda has no subdir for 32-bit ARM, and win-32 holds x86 builds.
+    if sysconfig_platform == "win-arm32" or sysconfig_platform.startswith(
+        "mingw_armv7"
+    ):
+        raise UnsupportedPlatformError(
+            f"Unsupported platform 'win32' ({sysconfig_platform}): "
+            "no conda subdir is known for it"
+        )
     return windows_subdirs.get(sysconfig_platform, f"win-{bits}")
 
 
