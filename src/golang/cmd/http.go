@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -103,6 +105,30 @@ func checkStatus(resp *resty.Response, rawURL string) error {
 	return nil
 }
 
+// retryAfterDelay parses Retry-After seconds or an HTTP date. Malformed values
+// and past dates do not extend the backoff. Saturate large values so they cannot
+// overflow into a short wait and cause a premature retry.
+func retryAfterDelay(value string, now time.Time) time.Duration {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0
+	}
+	// ParseUint can report overflow before reaching a trailing non-digit.
+	// Validate the entire value before treating an overflow as a long delay.
+	if strings.IndexFunc(value, func(r rune) bool { return r < '0' || r > '9' }) == -1 {
+		seconds, err := strconv.ParseUint(value, 10, 64)
+		const maxDelay = time.Duration(1<<63 - 1)
+		if err != nil || seconds > uint64(maxDelay/time.Second) {
+			return maxDelay
+		}
+		return time.Duration(seconds) * time.Second
+	}
+	if date, err := http.ParseTime(value); err == nil {
+		return max(0, date.Sub(now))
+	}
+	return 0
+}
+
 func retryableRequestError(err error) bool {
 	var status *httpStatusError
 	if errors.As(err, &status) {
@@ -133,26 +159,35 @@ func requestURLWithRetry(rawURL string) (*resty.Response, error) {
 		if err == nil {
 			return resp, nil
 		}
+		var status *httpStatusError
+		hasStatus := errors.As(err, &status)
 		failure := log.WithFields(log.Fields{"url": rawURL, "error": err, "attempt": attempt})
 		if !retryableRequestError(err) {
 			failure.Warn("request failed; not retrying")
 			return resp, err
 		}
 		delay := backoff
+		source := ""
 		now := retryNow()
+		if hasStatus {
+			if retryAfter := retryAfterDelay(resp.Header().Get("Retry-After"), now); retryAfter > delay {
+				delay = retryAfter
+				source = fmt.Sprintf(" (Retry-After from HTTP %d)", resp.StatusCode())
+			}
+		}
 		remaining := max(0, deadline.Sub(now))
 		if delay > remaining {
-			failure.Warnf("request failed; not retrying: remaining time budget %s, required wait %s", remaining, delay)
+			failure.Warnf("request failed; not retrying: remaining time budget %s, required wait %s%s", remaining, delay, source)
 			return resp, err
 		}
-		failure.Warnf("request failed; retrying in %s", delay)
+		failure.Warnf("request failed; retrying in %s%s", delay, source)
 		retrySleep(delay)
 		backoff *= 2
 	}
 }
 
 // requestURL checks the status before reading the body, so incomplete error
-// bodies cannot hide a permanent HTTP error.
+// bodies cannot hide a permanent HTTP error or its Retry-After header.
 func requestURL(rawURL string) (*resty.Response, error) {
 	resp, err := httpClient().R().SetDoNotParseResponse(true).Get(rawURL)
 	if resp != nil && resp.RawBody() != nil {

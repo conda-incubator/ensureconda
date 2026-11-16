@@ -52,6 +52,28 @@ func useRetryClock(t *testing.T) *retryClock {
 	return c
 }
 
+func TestRetryAfterDelay(t *testing.T) {
+	now := time.Date(2026, 11, 15, 12, 0, 0, 0, time.UTC)
+	for _, tt := range []struct {
+		value string
+		want  time.Duration
+	}{
+		{"", 0}, {"garbage", 0}, {"-1", 0}, {"1.5", 0}, {"+2", 0},
+		{"0", 0}, {" 12 ", 12 * time.Second},
+		{now.Add(30 * time.Second).Format(http.TimeFormat), 30 * time.Second},
+		{now.Add(-time.Hour).Format(http.TimeFormat), 0},
+		{"9223372037", time.Duration(1<<63 - 1)},
+		{"99999999999999999999999999999", time.Duration(1<<63 - 1)},
+		{"99999999999999999999999999999x", 0},
+	} {
+		t.Run(tt.value, func(t *testing.T) {
+			if got := retryAfterDelay(tt.value, now); got != tt.want {
+				t.Errorf("retryAfterDelay(%q) = %v, want %v", tt.value, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestRequestRetriesHTTPFailures(t *testing.T) {
 	for _, status := range []int{429, 500, 502, 503, 504, 400, 401, 403, 404, 408, 501} {
 		t.Run(fmt.Sprintf("status=%d", status), func(t *testing.T) {
@@ -59,6 +81,7 @@ func TestRequestRetriesHTTPFailures(t *testing.T) {
 			var attempts atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if attempts.Add(1) == 1 {
+					w.Header().Set("Retry-After", "3")
 					http.Error(w, "failed", status)
 					return
 				}
@@ -77,7 +100,7 @@ func TestRequestRetriesHTTPFailures(t *testing.T) {
 				t.Fatal(err)
 			}
 			body := response.Body()
-			if string(body) != "complete response" || attempts.Load() != 2 || !slices.Equal(clock.delays, []time.Duration{time.Second}) {
+			if string(body) != "complete response" || attempts.Load() != 2 || !slices.Equal(clock.delays, []time.Duration{3 * time.Second}) {
 				t.Errorf("body %q, attempts %d, delays %v", body, attempts.Load(), clock.delays)
 			}
 		})
@@ -94,6 +117,7 @@ func TestRequestPreservesStatusWithIncompleteErrorBody(t *testing.T) {
 				release := make(chan struct{})
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					if attempts.Add(1) == 1 {
+						w.Header().Set("Retry-After", "3")
 						w.Header().Set("Content-Length", "1000")
 						w.WriteHeader(status)
 						_, _ = io.WriteString(w, "partial")
@@ -119,8 +143,8 @@ func TestRequestPreservesStatusWithIncompleteErrorBody(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if string(response.Body()) != "complete" || attempts.Load() != 2 || !slices.Equal(clock.delays, []time.Duration{time.Second}) {
-					t.Errorf("body %q, attempts %d, delays %v; want a successful retry", response.Body(), attempts.Load(), clock.delays)
+				if string(response.Body()) != "complete" || attempts.Load() != 2 || !slices.Equal(clock.delays, []time.Duration{3 * time.Second}) {
+					t.Errorf("body %q, attempts %d, delays %v; want a successful retry after Retry-After", response.Body(), attempts.Load(), clock.delays)
 				}
 			})
 		}
@@ -130,21 +154,29 @@ func TestRequestPreservesStatusWithIncompleteErrorBody(t *testing.T) {
 func TestRequestRetryBudget(t *testing.T) {
 	for _, tt := range []struct {
 		name     string
+		headers  []string
 		duration time.Duration
 		delays   []time.Duration
 	}{
-		{"exponential", 0, []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 32 * time.Second}},
-		{"30s requests", 30 * time.Second, []time.Duration{time.Second, 2 * time.Second}},
-		{"60s requests", 60 * time.Second, []time.Duration{time.Second}},
-		{"70s request", 70 * time.Second, nil},
-		{"120s request", 120 * time.Second, nil},
+		{"exponential", nil, 0, []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 32 * time.Second}},
+		{"long Retry-After", []string{"86400"}, 0, nil},
+		{"HTTP date", []string{"Sun, 15 Nov 2026 12:00:30 GMT"}, 0, []time.Duration{30 * time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second}},
+		{"cumulative Retry-After", []string{"33", "34"}, 0, []time.Duration{33 * time.Second, 34 * time.Second}},
+		{"exact deadline", []string{"70"}, 0, []time.Duration{70 * time.Second}},
+		{"30s requests", nil, 30 * time.Second, []time.Duration{time.Second, 2 * time.Second}},
+		{"60s requests", nil, 60 * time.Second, []time.Duration{time.Second}},
+		{"70s request", nil, 70 * time.Second, nil},
+		{"120s request", nil, 120 * time.Second, nil},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			clock := useRetryClock(t)
 			var attempts atomic.Int32
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				attempts.Add(1)
+				i := int(attempts.Add(1)) - 1
 				clock.advance(tt.duration)
+				if i < len(tt.headers) {
+					w.Header().Set("Retry-After", tt.headers[i])
+				}
 				http.Error(w, "unavailable", http.StatusServiceUnavailable)
 			}))
 			defer server.Close()
@@ -168,6 +200,8 @@ func TestRequestRetriesInterruptedBodies(t *testing.T) {
 			release := make(chan struct{})
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if attempts.Add(1) == 1 {
+					// Retry-After must not extend waits for a failed 200 body.
+					w.Header().Set("Retry-After", "60")
 					w.Header().Set("Content-Length", "1000")
 					_, _ = io.WriteString(w, "partial body longer than the successful one")
 					w.(http.Flusher).Flush()
