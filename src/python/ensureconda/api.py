@@ -1,8 +1,10 @@
+import errno
+import os
 import subprocess
 import sys
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable, Optional
+from typing import TYPE_CHECKING, Callable, Dict, Literal, NamedTuple, Optional
 
 from packaging.version import InvalidVersion, Version
 
@@ -22,6 +24,11 @@ from ensureconda.resolve import (
 
 if TYPE_CHECKING:
     from _typeshed import StrPath
+
+
+# The old version helpers use 0.0.0 as a sentinel for unrecognized output.
+# Keep their return values compatible; new API probes translate it to None.
+_LEGACY_UNKNOWN_VERSION = Version("0.0.0")
 
 
 def determine_mamba_version(exe: "StrPath") -> Version:
@@ -50,7 +57,7 @@ def determine_micromamba_version(exe: "StrPath") -> Version:
     out = subprocess.check_output([exe, "--version"], encoding="utf-8").strip()
     for line in out.splitlines(keepends=False):
         return Version(line.split()[-1])
-    return Version("0.0.0")
+    return _LEGACY_UNKNOWN_VERSION
 
 
 def determine_conda_version(exe: "StrPath") -> Version:
@@ -58,7 +65,77 @@ def determine_conda_version(exe: "StrPath") -> Version:
     for line in out.splitlines(keepends=False):
         if line.startswith("conda"):
             return Version(line.split()[-1])
-    return Version("0.0.0")
+    return _LEGACY_UNKNOWN_VERSION
+
+
+Flavor = Literal["mamba", "micromamba", "conda", "conda_standalone"]
+
+
+class CondaExecutable(NamedTuple):
+    """An executable that ensureconda found, installed, or identified.
+
+    Later releases may add fields.
+    """
+
+    path: Path
+    flavor: Flavor
+    # None when unmeasured, or when `--version` fails or has no known version.
+    version: Optional[Version]
+
+    def to_json(self) -> Dict[str, Optional[str]]:
+        """Return a JSON-serializable dict, as printed by ``ensureconda --json``."""
+        return {
+            "path": str(self.path),
+            "flavor": self.flavor,
+            "version": None if self.version is None else str(self.version),
+        }
+
+
+def _probe_version(executable: "StrPath", flavor: Flavor) -> Optional[Version]:
+    if flavor == "mamba":
+        version = determine_mamba_version(executable)
+    elif flavor == "micromamba":
+        version = determine_micromamba_version(executable)
+    elif flavor in ("conda", "conda_standalone"):
+        version = determine_conda_version(executable)
+    else:
+        raise ValueError(f"Unknown executable flavor: {flavor!r}")
+    return None if version == _LEGACY_UNKNOWN_VERSION else version
+
+
+def _flavor_from_name(executable: "StrPath") -> Optional[Flavor]:
+    name = Path(executable).name.lower()
+    for suffix in (".exe", ".bat", ".cmd"):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+    flavors: Dict[str, Flavor] = {
+        "mamba": "mamba",
+        "micromamba": "micromamba",
+        "conda": "conda",
+        "conda_standalone": "conda_standalone",
+        "conda-standalone": "conda_standalone",
+    }
+    return flavors.get(name)
+
+
+def _probe_flavor(executable: "StrPath") -> Optional[Flavor]:
+    try:
+        output = subprocess.check_output([executable, "--version"], encoding="utf-8")
+    except (subprocess.CalledProcessError, OSError, UnicodeDecodeError):
+        return None
+    lines = output.strip().splitlines()
+    if any(line.startswith("mamba") for line in lines):
+        return "mamba"  # mamba 1 also reports the version of conda
+    if lines and lines[0].startswith("conda"):
+        return "conda"
+    if lines:
+        # micromamba prints only its version.
+        try:
+            Version(lines[0].strip())
+        except InvalidVersion:
+            return None
+        return "micromamba"  # or mamba 2, whose output is identical
+    return None
 
 
 def ensureconda(
@@ -186,3 +263,30 @@ def ensureconda(
     if unsupported_platform is not None:
         raise unsupported_platform
     return None
+
+
+def identify(executable: "StrPath") -> CondaExecutable:
+    """Describe a conda, mamba, micromamba, or conda-standalone executable.
+
+    The flavor comes from the file name, as for the executables that
+    :func:`ensureconda` finds. For other names it comes from the shape of the
+    ``--version`` output instead, which can't distinguish micromamba from
+    mamba 2, nor conda from conda-standalone; those are reported as
+    "micromamba" and "conda".
+
+    Raises FileNotFoundError if the executable doesn't exist, PermissionError
+    if it isn't executable, and ValueError if it can't be recognized.
+    """
+    path = Path(executable)
+    if not path.is_file():
+        raise FileNotFoundError(errno.ENOENT, "No such executable", str(executable))
+    if not os.access(path, os.X_OK):
+        raise PermissionError(errno.EACCES, "Not an executable file", str(executable))
+    flavor = _flavor_from_name(executable) or _probe_flavor(executable)
+    if flavor is None:
+        raise ValueError(f"{executable} is not a recognized conda executable")
+    try:
+        version = _probe_version(executable, flavor)
+    except (subprocess.CalledProcessError, OSError, InvalidVersion, UnicodeDecodeError):
+        version = None
+    return CondaExecutable(path, flavor, version)
