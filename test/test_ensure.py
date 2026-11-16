@@ -288,6 +288,31 @@ def test_zero_sentinel_is_only_used_for_old_api_minimums(
     ) == (path if minimum == "0" else None)
 
 
+@pytest.mark.parametrize("flavor", ["mamba", "micromamba", "conda", "conda_standalone"])
+@pytest.mark.parametrize("mamba_minimum, conda_minimum", [("1", "3"), ("3", "1")])
+def test_each_tool_uses_its_own_old_api_minimum(
+    flavor: Flavor,
+    mamba_minimum: str,
+    conda_minimum: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = Path("tool")
+    monkeypatch.setattr(api, f"{flavor}_executables", lambda: iter([path]))
+    is_mamba = flavor in ("mamba", "micromamba")
+    fake_version_outputs(monkeypatch, {path.name: "2.0" if is_mamba else "conda 2.0"})
+    minimum = mamba_minimum if is_mamba else conda_minimum
+
+    assert ensureconda(
+        mamba=flavor == "mamba",
+        micromamba=flavor == "micromamba",
+        conda=flavor == "conda",
+        conda_exe=flavor == "conda_standalone",
+        no_install=True,
+        min_mamba_version=Version(mamba_minimum),
+        min_conda_version=Version(conda_minimum),
+    ) == (path if minimum == "1" else None)
+
+
 @pytest.mark.parametrize("installed", [False, True])
 @pytest.mark.parametrize("target", ["micromamba>=1", "micromamba>=1,<3"])
 def test_prereleases_satisfy_target_constraints(
