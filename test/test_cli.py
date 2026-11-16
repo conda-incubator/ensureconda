@@ -64,7 +64,9 @@ def test_invalid_version_is_a_usage_error(option: str) -> None:
         "replacement-failure-with-metadata",
     ],
 )
-@pytest.mark.parametrize("options", [[], ["--json"]])
+@pytest.mark.parametrize(
+    "options", [[], ["--json"], ["--force-install"], ["--force-install", "--json"]]
+)
 def test_failed_installation_ends_with_one_line(
     error: Exception,
     expected_output: str,

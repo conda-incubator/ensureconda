@@ -59,6 +59,11 @@ class VersionNumber(click.ParamType):  # type: ignore[type-arg, unused-ignore]
     help="don't install conda/mamba if no version can be discovered",
 )
 @click.option(
+    "--force-install",
+    is_flag=True,
+    help="skip existing executables and download a fresh copy",
+)
+@click.option(
     "--min-conda-version",
     default=Version(_DEFAULT_MIN_CONDA),
     type=VersionNumber(),
@@ -82,14 +87,20 @@ def ensureconda_cli(
     conda: bool,
     conda_exe: bool,
     no_install: bool,
+    force_install: bool,
     min_conda_version: Optional[Version],
     min_mamba_version: Optional[Version],
     as_json: bool,
 ) -> None:
+    if force_install and no_install:
+        raise click.UsageError("--force-install cannot be combined with --no-install")
+    if force_install and not (micromamba or conda_exe):
+        raise click.UsageError("--force-install requires --micromamba or --conda-exe")
+
     exe: Union[CondaExecutable, Path, None]
     try:
-        if as_json:
-            # These flags use old-API minimums, even with JSON output.
+        if as_json or force_install:
+            # Keep old-API minimums when calling the resolver directly.
             targets = _legacy_targets(
                 mamba=mamba,
                 micromamba=micromamba,
@@ -100,9 +111,13 @@ def ensureconda_cli(
             )
             exe = _ensure(
                 targets,
-                install="never" if no_install else "fallback",
-                probe_version=True,
+                install=(
+                    "force" if force_install else "never" if no_install else "fallback"
+                ),
+                probe_version=as_json,
             )
+            if exe is not None and not as_json:
+                exe = exe.path
         else:
             find = partial(
                 ensureconda,

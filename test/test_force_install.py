@@ -1,5 +1,6 @@
 import hashlib
 import io
+import json
 import tarfile
 from pathlib import Path
 from typing import IO, List, Optional
@@ -8,9 +9,10 @@ from unittest.mock import Mock
 import filelock
 import pytest
 import requests
+from click.testing import CliRunner
 from packaging.version import Version
 
-from ensureconda import api, installer
+from ensureconda import api, cli, installer
 from ensureconda.resolve import UnsupportedPlatformError, is_windows
 
 
@@ -31,7 +33,9 @@ def no_discovery(monkeypatch: pytest.MonkeyPatch) -> None:
 
 @pytest.mark.usefixtures("no_discovery")
 @pytest.mark.parametrize("tool", ["micromamba", "conda_standalone"])
-@pytest.mark.parametrize("entry_point", ["new-api", "new-api-incompatible"])
+@pytest.mark.parametrize(
+    "entry_point", ["new-api", "new-api-incompatible", "cli", "json-cli"]
+)
 def test_force_install_replaces_fresh_cache(
     tool: str, entry_point: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -91,6 +95,23 @@ def test_force_install_replaces_fresh_cache(
             # Search-only tools are skipped, and target order is respected.
             result = api.ensure(["conda", tool, "micromamba"], install="force")
             assert result is not None and result.path == target
+        else:
+            args = ["--force-install"]
+            if tool == "conda_standalone":
+                args.append("--no-micromamba")
+            if entry_point == "json-cli":
+                args.append("--json")
+            result_cli = CliRunner().invoke(cli.ensureconda_cli, args)
+            assert result_cli.exit_code == 0, result_cli.output
+            output = result_cli.output.strip().splitlines()[-1]
+            if entry_point == "json-cli":
+                assert json.loads(output) == {
+                    "path": str(target),
+                    "flavor": tool,
+                    "version": "25.1",
+                }
+            else:
+                assert output == str(target)
         assert target.read_bytes() == b"fresh executable"
     assert len(downloads) == 2
     with filelock.FileLock(str(tmp_path / lock_name)).acquire(timeout=0):
@@ -193,6 +214,50 @@ def test_force_install_checks_version_constraints(
 
 
 @pytest.mark.usefixtures("no_discovery")
+@pytest.mark.parametrize("as_json", [False, True])
+@pytest.mark.parametrize(
+    "tool, version, minimum, exit_code",
+    [
+        ("micromamba", "0.7.2", None, 1),
+        ("micromamba", "0.7.3", None, 0),
+        ("conda_standalone", "4.8.1", None, 1),
+        ("conda_standalone", "4.8.2", None, 0),
+        ("micromamba", "2.0", "2.0+local", 1),
+        ("conda_standalone", "2.0", "2.0+local", 1),
+    ],
+)
+def test_force_cli_keeps_version_minimums(
+    tool: str,
+    version: str,
+    minimum: Optional[str],
+    exit_code: int,
+    as_json: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    install = Mock(return_value=Path(tool))
+    micro = tool == "micromamba"
+    monkeypatch.setattr(
+        api, "install_micromamba" if micro else "install_conda_exe", install
+    )
+    monkeypatch.setattr(api, "_probe_version", lambda path, flavor: Version(version))
+    args = ["--force-install", "--no-conda-exe" if micro else "--no-micromamba"]
+    if minimum is not None:
+        args.extend(
+            ["--min-mamba-version" if micro else "--min-conda-version", minimum]
+        )
+    if as_json:
+        args.append("--json")
+
+    result = CliRunner().invoke(cli.ensureconda_cli, args)
+
+    assert result.exit_code == exit_code, result.output
+    if exit_code:
+        assert isinstance(result.exception, SystemExit)
+        assert "Could not find compatible executable" in result.output
+    install.assert_called_once()
+
+
+@pytest.mark.usefixtures("no_discovery")
 @pytest.mark.parametrize("standalone", [False, True])
 def test_force_install_falls_back_only_to_installable_targets(
     standalone: bool,
@@ -237,6 +302,21 @@ def test_force_install_unsupported_platform(
 def test_force_requires_installable_target(targets: List[str]) -> None:
     with pytest.raises(ValueError, match="force installation requires"):
         api.ensure(targets, install="force")
+
+
+@pytest.mark.usefixtures("no_discovery")
+@pytest.mark.parametrize("as_json", [False, True])
+@pytest.mark.parametrize(
+    "options", [["--no-install"], ["--no-micromamba", "--no-conda-exe"]]
+)
+def test_invalid_force_cli_options(options: List[str], as_json: bool) -> None:
+    args = ["--force-install", *options]
+    if as_json:
+        args.append("--json")
+    result = CliRunner().invoke(cli.ensureconda_cli, args)
+    assert result.exit_code == 2
+    assert "Error: --force-install" in result.output
+    assert isinstance(result.exception, SystemExit)
 
 
 @pytest.mark.usefixtures("no_discovery")
