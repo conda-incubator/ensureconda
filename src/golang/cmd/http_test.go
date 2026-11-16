@@ -82,6 +82,7 @@ func useReadTimeout(t *testing.T, timeout time.Duration) {
 }
 
 func TestComputeCandidatesReportsHTTPStatus(t *testing.T) {
+	useRetryClock(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "slow down", http.StatusTooManyRequests)
 	}))
@@ -95,6 +96,7 @@ func TestComputeCandidatesReportsHTTPStatus(t *testing.T) {
 }
 
 func TestDownloadReportsHTTPStatus(t *testing.T) {
+	useRetryClock(t)
 	server := httptest.NewServer(http.NotFoundHandler())
 	defer server.Close()
 

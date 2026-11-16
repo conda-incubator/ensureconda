@@ -363,6 +363,7 @@ func TestLockFileWhileLockFileIsDeleted(t *testing.T) {
 }
 
 func TestInstallersHoldDownloadLock(t *testing.T) {
+	useRetryClock(t)
 	tests := []struct {
 		name string
 		// The Python implementation uses the same names, so the two coordinate.
@@ -406,6 +407,7 @@ func TestInstallersHoldDownloadLock(t *testing.T) {
 }
 
 func TestInstallMicromambaReusesUsableInstall(t *testing.T) {
+	useRetryClock(t)
 	if runtime.GOOS == "windows" {
 		t.Skip("the stand-in for micromamba is a shell script")
 	}
@@ -435,6 +437,7 @@ func TestInstallMicromambaReusesUsableInstall(t *testing.T) {
 // and returns the number of requests made.
 func refuseDownloads(t *testing.T) *atomic.Int32 {
 	t.Helper()
+	useRetryClock(t)
 	var requests atomic.Int32
 	client := resty.New().SetTransport(roundTripper(func(r *http.Request) (*http.Response, error) {
 		requests.Add(1)

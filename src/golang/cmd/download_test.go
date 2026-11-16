@@ -58,36 +58,47 @@ func testArchive(t *testing.T, name string) []byte {
 	return buf.Bytes()
 }
 
-func TestArchiveDownloadBeforeExtraction(t *testing.T) {
+func TestArchiveDownloadRetriesBeforeExtraction(t *testing.T) {
 	for _, name := range []string{"package.tar.bz2", "package.conda"} {
-		for _, verify := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/verify=%t", name, verify), func(t *testing.T) {
-				payload := testArchive(t, name)
-				target := filepath.Join(t.TempDir(), "tool")
-				if err := os.WriteFile(target, []byte("original"), 0755); err != nil {
-					t.Fatal(err)
-				}
-				var attempts atomic.Int32
-				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-					if body, err := os.ReadFile(target); err != nil || string(body) != "original" {
-						t.Errorf("target changed before successful download: %q, %v", body, err)
+		for _, failure := range []string{"503", "truncated"} {
+			for _, verify := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/%s/verify=%t", name, failure, verify), func(t *testing.T) {
+					useRetryClock(t)
+					payload := testArchive(t, name)
+					target := filepath.Join(t.TempDir(), "tool")
+					if err := os.WriteFile(target, []byte("original"), 0755); err != nil {
+						t.Fatal(err)
 					}
-					attempts.Add(1)
-					_, _ = w.Write(payload)
-				}))
-				defer server.Close()
-				digest := ""
-				if verify {
-					digest = sha256Hex(payload)
-				}
-				got, err := downloadAndUnpackArchive(server.URL+"/"+name, digest, map[string]string{"bin/tool": target})
-				if err != nil || got != target || attempts.Load() != 1 {
-					t.Fatalf("download = %q, %v; attempts %d", got, err, attempts.Load())
-				}
-				if body, err := os.ReadFile(target); err != nil || string(body) != "binary" {
-					t.Errorf("target = %q, %v; want binary", body, err)
-				}
-			})
+					var attempts atomic.Int32
+					server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+						if body, err := os.ReadFile(target); err != nil || string(body) != "original" {
+							t.Errorf("target changed before successful download: %q, %v", body, err)
+						}
+						if attempts.Add(1) == 1 {
+							if failure == "503" {
+								http.Error(w, "unavailable", http.StatusServiceUnavailable)
+								return
+							}
+							// The executable is present, but the HTTP body is incomplete.
+							// Extraction must wait for a complete HTTP response.
+							w.Header().Set("Content-Length", fmt.Sprint(len(payload)+1000))
+						}
+						_, _ = w.Write(payload)
+					}))
+					defer server.Close()
+					digest := ""
+					if verify {
+						digest = sha256Hex(payload)
+					}
+					got, err := downloadAndUnpackArchive(server.URL+"/"+name, digest, map[string]string{"bin/tool": target})
+					if err != nil || got != target || attempts.Load() != 2 {
+						t.Fatalf("download = %q, %v; attempts %d", got, err, attempts.Load())
+					}
+					if body, err := os.ReadFile(target); err != nil || string(body) != "binary" {
+						t.Errorf("target = %q, %v; want binary", body, err)
+					}
+				})
+			}
 		}
 	}
 }
@@ -96,6 +107,7 @@ func TestArchiveDownloadDoesNotExtractAfterFailure(t *testing.T) {
 	for _, name := range []string{"package.tar.bz2", "package.conda"} {
 		for _, failure := range []string{"404", "truncated", "checksum", "invalid archive"} {
 			t.Run(name+"/"+failure, func(t *testing.T) {
+				useRetryClock(t)
 				payload := testArchive(t, name)
 				target := filepath.Join(t.TempDir(), "tool")
 				var attempts atomic.Int32
@@ -123,6 +135,9 @@ func TestArchiveDownloadDoesNotExtractAfterFailure(t *testing.T) {
 					t.Fatal("download unexpectedly succeeded")
 				}
 				wantAttempts := int32(1)
+				if failure == "truncated" {
+					wantAttempts = 7
+				}
 				if attempts.Load() != wantAttempts {
 					t.Errorf("got %d attempts, want %d", attempts.Load(), wantAttempts)
 				}
@@ -163,6 +178,7 @@ func TestAnacondaPkgDecodesSha256(t *testing.T) {
 }
 
 func TestDownloadRejectsSha256Mismatch(t *testing.T) {
+	useRetryClock(t)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte("not the expected archive"))
 	}))

@@ -205,7 +205,7 @@ func InstallCondaStandalone() (string, error) {
 // packages for the given channel and subdir (ascending by version/build/timestamp).
 func computeCandidates(channel string, subdir string) ([]AnacondaPkg, error) {
 	url := fmt.Sprintf("%s/package/%s/conda-standalone/files", anacondaAPIBaseURL, channel)
-	resp, err := requestURL(url)
+	resp, err := requestURLWithRetry(url)
 	if err != nil {
 		return nil, fmt.Errorf("GET candidates: %w", err)
 	}
@@ -265,7 +265,7 @@ func downloadAndUnpackArchive(url string, expectedSha256 string, fileNameMap map
 		return "", fmt.Errorf("unrecognized archive type for URL: %s", url)
 	}
 
-	resp, err := requestURL(url)
+	resp, err := requestURLWithRetry(url)
 	if err != nil {
 		return "", err
 	}

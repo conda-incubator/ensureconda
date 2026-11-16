@@ -3,7 +3,9 @@ package cmd
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -11,10 +13,19 @@ import (
 	"time"
 
 	"github.com/go-resty/resty/v2"
+	log "github.com/sirupsen/logrus"
 )
+
+// Only scheduling retries is bounded; an active download may finish later.
+const retryTimeBudget = 70 * time.Second
 
 // Limit eager allocation from Content-Length; larger bodies can still grow.
 const maxPreallocatedBody = 128 << 20
+
+var (
+	retryNow   = time.Now
+	retrySleep = time.Sleep
+)
 
 // Timeouts matching the Python implementation. readTimeout limits inactivity,
 // not the total download time, so slow downloads that keep making progress
@@ -39,6 +50,14 @@ func newHTTPClient() *resty.Client {
 	dialer := &net.Dialer{Timeout: connectTimeout, KeepAlive: 30 * time.Second}
 	transport := &http.Transport{
 		Proxy: http.ProxyFromEnvironment,
+		OnProxyConnectResponse: func(_ context.Context, _ *url.URL, _ *http.Request, resp *http.Response) error {
+			// net/http otherwise returns a plain error for rejected tunnels.
+			// Treat these as connection failures, like Python's ProxyError.
+			if resp.StatusCode != http.StatusOK {
+				return &net.OpError{Op: "proxyconnect", Net: "tcp", Err: fmt.Errorf("HTTP %s", resp.Status)}
+			}
+			return nil
+		},
 		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 			conn, err := dialer.DialContext(ctx, network, addr)
 			if err != nil {
@@ -82,6 +101,54 @@ func checkStatus(resp *resty.Response, rawURL string) error {
 		return &httpStatusError{url: rawURL, statusCode: resp.StatusCode(), status: resp.Status()}
 	}
 	return nil
+}
+
+func retryableRequestError(err error) bool {
+	var status *httpStatusError
+	if errors.As(err, &status) {
+		switch status.statusCode {
+		case 429, 500, 502, 503, 504:
+			return true
+		default:
+			return false
+		}
+	}
+	// url.Error implements net.Error even for malformed URLs or redirect loops.
+	// Inspect its cause instead of treating every request error as transient.
+	var urlError *url.Error
+	if errors.As(err, &urlError) {
+		err = urlError.Err
+	}
+	var networkError net.Error
+	return errors.As(err, &networkError) || errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF)
+}
+
+// requestURLWithRetry reads the entire body into the returned response, so
+// that a truncated or stalled body is retried like any other failure.
+func requestURLWithRetry(rawURL string) (*resty.Response, error) {
+	deadline := retryNow().Add(retryTimeBudget)
+	backoff := time.Second
+	for attempt := 1; ; attempt++ {
+		resp, err := requestURL(rawURL)
+		if err == nil {
+			return resp, nil
+		}
+		failure := log.WithFields(log.Fields{"url": rawURL, "error": err, "attempt": attempt})
+		if !retryableRequestError(err) {
+			failure.Warn("request failed; not retrying")
+			return resp, err
+		}
+		delay := backoff
+		now := retryNow()
+		remaining := max(0, deadline.Sub(now))
+		if delay > remaining {
+			failure.Warnf("request failed; not retrying: remaining time budget %s, required wait %s", remaining, delay)
+			return resp, err
+		}
+		failure.Warnf("request failed; retrying in %s", delay)
+		retrySleep(delay)
+		backoff *= 2
+	}
 }
 
 // requestURL checks the status before reading the body, so incomplete error
