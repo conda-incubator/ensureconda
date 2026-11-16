@@ -312,6 +312,61 @@ func TestForceStandaloneChecksumFailurePreservesCache(t *testing.T) {
 	}
 }
 
+func TestForceInstallCLIReportsVersionRejection(t *testing.T) {
+	for _, rejectStandalone := range []bool{false, true} {
+		for _, asJSON := range []bool{false, true} {
+			t.Run(fmt.Sprintf("rejectStandalone=%t/json=%t", rejectStandalone, asJSON), func(t *testing.T) {
+				useSitePath(t)
+				existingForceTools(t)
+				condaVersion := "25.1"
+				if rejectStandalone {
+					condaVersion = "0.1.0"
+				}
+				args := []string{"-test.run=^TestForceInstallCLIHelper$", "--", "--force-install"}
+				if asJSON {
+					args = append(args, "--json")
+				}
+				command := exec.Command(os.Args[0], args...)
+				command.Env = append(os.Environ(),
+					"ENSURECONDA_TEST_FORCE_SITE="+sitePath(),
+					"ENSURECONDA_TEST_MICROMAMBA_VERSION=0.1.0",
+					"ENSURECONDA_TEST_CONDA_VERSION="+condaVersion,
+				)
+				var stderr bytes.Buffer
+				command.Stderr = &stderr
+				out, err := command.Output()
+				if (err != nil) != rejectStandalone {
+					t.Fatalf("CLI error = %v, stdout %s, stderr %s; want failure=%t", err, out, &stderr, rejectStandalone)
+				}
+				microMessage := "Rejected " + targetExeFilename("micromamba") + " 0.1.0: requires >=" + DefaultMinMambaVersion
+				if !strings.Contains(stderr.String(), microMessage) {
+					t.Errorf("stderr %q, want %q", &stderr, microMessage)
+				}
+				condaMessage := "Rejected " + targetExeFilename("conda_standalone") + " 0.1.0: requires >=" + DefaultMinCondaVersion
+				if rejectStandalone {
+					if !strings.Contains(stderr.String(), condaMessage) || !strings.Contains(stderr.String(), "Could not find compatible executable") {
+						t.Errorf("stderr %q, want standalone rejection and final failure", &stderr)
+					}
+					if len(out) != 0 {
+						t.Errorf("failed resolution printed a path: %q", out)
+					}
+				} else if asJSON {
+					var got condaExecutable
+					if err := json.Unmarshal(out, &got); err != nil {
+						t.Fatalf("invalid fallback JSON %q: %v", out, err)
+					}
+					want := condaExecutable{Path: targetExeFilename("conda_standalone"), Flavor: "conda_standalone", Version: "25.1"}
+					if got != want {
+						t.Errorf("fallback JSON = %v, want %v", got, want)
+					}
+				} else if string(out) != targetExeFilename("conda_standalone") {
+					t.Errorf("fallback output = %q, want conda-standalone", out)
+				}
+			})
+		}
+	}
+}
+
 func TestForceInstallCLIHelper(t *testing.T) {
 	TestSitePath = os.Getenv("ENSURECONDA_TEST_FORCE_SITE")
 	if TestSitePath == "" {
