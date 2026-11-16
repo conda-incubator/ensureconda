@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -204,16 +205,13 @@ func InstallCondaStandalone() (string, error) {
 // packages for the given channel and subdir (ascending by version/build/timestamp).
 func computeCandidates(channel string, subdir string) ([]AnacondaPkg, error) {
 	url := fmt.Sprintf("%s/package/%s/conda-standalone/files", anacondaAPIBaseURL, channel)
-	client := httpClient()
-	var data []AnacondaPkg
-	resp, err := client.R().
-		SetResult(&data).
-		Get(url)
+	resp, err := requestURLWithRetry(url)
 	if err != nil {
 		return nil, fmt.Errorf("GET candidates: %w", err)
 	}
-	if err := checkStatus(resp, url); err != nil {
-		return nil, err
+	var data []AnacondaPkg
+	if err := json.Unmarshal(resp.Body(), &data); err != nil {
+		return nil, fmt.Errorf("decoding candidates from %s: %w", url, err)
 	}
 
 	candidates := selectCandidates(data, subdir)
@@ -263,15 +261,24 @@ func inferArchiveTypeFromUrl(url string) ArchiveType {
 // against it before anything is extracted.
 func downloadAndUnpackArchive(url string, expectedSha256 string, fileNameMap map[string]string) (string, error) {
 	archiveType := inferArchiveTypeFromUrl(url)
-
-	switch archiveType {
-	case TarBz2Archive:
-		return downloadAndUnpackTarBz2(url, expectedSha256, fileNameMap)
-	case CondaArchive:
-		return downloadAndUnpackConda(url, expectedSha256, fileNameMap)
-	default:
+	if archiveType == UnrecognizedArchive {
 		return "", fmt.Errorf("unrecognized archive type for URL: %s", url)
 	}
+
+	resp, err := requestURLWithRetry(url)
+	if err != nil {
+		return "", err
+	}
+	archive := resp.Body()
+	if expectedSha256 != "" {
+		if err := verifySha256(archive, expectedSha256); err != nil {
+			return "", fmt.Errorf("%s (HTTP %s): %w", url, resp.Status(), err)
+		}
+	}
+	if archiveType == TarBz2Archive {
+		return unpackTarBz2(bytes.NewReader(archive), fileNameMap)
+	}
+	return unpackConda(archive, fileNameMap)
 }
 
 // verifySha256 returns an error unless data has the expected hex digest.
@@ -283,64 +290,15 @@ func verifySha256(data []byte, expected string) error {
 	return nil
 }
 
-func downloadAndUnpackTarBz2(url string, expectedSha256 string, fileNameMap map[string]string) (string, error) {
-	client := httpClient()
-	resp, err := client.R().
-		SetDoNotParseResponse(true).
-		Get(url)
-
-	if err != nil {
-		return "", err
-	}
-	if resp.RawBody() == nil {
-		return "", fmt.Errorf("nil response body from %s", url)
-	}
-	defer resp.RawBody().Close()
-	if err := checkStatus(resp, url); err != nil {
-		return "", err
-	}
-
-	var archive io.Reader = resp.RawBody()
-	if expectedSha256 != "" {
-		// Buffer the archive so that it can be verified before extraction.
-		data, err := io.ReadAll(resp.RawBody())
-		if err != nil {
-			return "", err
-		}
-		if err := verifySha256(data, expectedSha256); err != nil {
-			return "", fmt.Errorf("%s (HTTP %s): %w", url, resp.Status(), err)
-		}
-		archive = bytes.NewReader(data)
-	}
-
+func unpackTarBz2(archive io.Reader, fileNameMap map[string]string) (string, error) {
 	bzf := bzip2.NewReader(archive)
 	tarReader := tar.NewReader(bzf)
 	file, err := extractTarFiles(tarReader, fileNameMap)
 	return file, err
 }
 
-func downloadAndUnpackConda(url string, expectedSha256 string, fileNameMap map[string]string) (string, error) {
-	client := httpClient()
-	resp, err := client.R().Get(url)
-
-	if err != nil {
-		return "", err
-	}
-	if err := checkStatus(resp, url); err != nil {
-		return "", err
-	}
-
-	// Read the response body into a byte slice
-	body := resp.Body()
-	if expectedSha256 != "" {
-		if err := verifySha256(body, expectedSha256); err != nil {
-			return "", fmt.Errorf("%s (HTTP %s): %w", url, resp.Status(), err)
-		}
-	}
-
-	byteReader := bytes.NewReader(body)
-
-	zipReader, err := zip.NewReader(byteReader, int64(len(body)))
+func unpackConda(archive []byte, fileNameMap map[string]string) (string, error) {
+	zipReader, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
 	if err != nil {
 		return "", err
 	}
