@@ -91,7 +91,9 @@ def test_force_install_replaces_fresh_cache(
     # Each force request downloads again, even immediately after another one.
     for _ in range(2):
         if entry_point == "new-api-incompatible":
-            # Rejecting the new version does not restore the old compatible copy.
+            # A metadata constraint miss never downloads or replaces the cached
+            # copy. Micromamba still downloads latest, and rejecting that does
+            # not restore the old compatible copy.
             assert api.ensure([f"{tool}<2"], install="force") is None
         elif entry_point == "new-api":
             # Search-only tools are skipped, and target order is respected.
@@ -114,8 +116,14 @@ def test_force_install_replaces_fresh_cache(
                 }
             else:
                 assert output == str(target)
-        assert target.read_bytes() == b"fresh executable"
-    assert len(downloads) == 2
+        assert target.read_bytes() == (
+            b"old executable"
+            if entry_point == "new-api-incompatible" and tool == "conda_standalone"
+            else b"fresh executable"
+        )
+    assert len(downloads) == (
+        0 if entry_point == "new-api-incompatible" and tool == "conda_standalone" else 2
+    )
     with filelock.FileLock(str(tmp_path / lock_name)).acquire(timeout=0):
         pass
 
@@ -305,6 +313,29 @@ def test_force_reports_version_rejection_before_fallback(
     rejected = "Rejected micromamba 2.3.0: requires >=3"
     assert rejected in output
     assert output.index(rejected) < output.index("Downloading conda-standalone")
+
+
+@pytest.mark.parametrize("force", [False, True])
+def test_constraint_miss_is_a_warning_when_forced(
+    force: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for finder in ["mamba_executables", "micromamba_executables", "conda_executables"]:
+        monkeypatch.setattr(api, finder, lambda: iter([]))
+    miss = "micromamba: no published version for linux-64 satisfies >=3"
+
+    def install(constraint: object, **kwargs: object) -> Path:
+        raise installer.NoCompatibleVersionError(miss)
+
+    monkeypatch.setattr(api, "install_micromamba", install)
+    args = ["--no-conda-exe", "--min-mamba-version", "3", "--verbosity", "0"]
+    if force:
+        args.append("--force-install")
+
+    result = CliRunner().invoke(cli.ensureconda_cli, args)
+
+    assert result.exit_code == 1, result.output
+    assert (miss in result.output) == force
+    assert "Could not find compatible executable" in result.output
 
 
 @pytest.mark.usefixtures("no_discovery")
