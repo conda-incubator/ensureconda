@@ -3,6 +3,7 @@ import sys
 import sysconfig
 from pathlib import Path
 from test.test_info import executable_file
+from typing import Optional
 
 import pytest
 
@@ -13,6 +14,32 @@ from ensureconda.resolve import (
     subdir_for,
     windows_subdir,
 )
+
+
+@pytest.mark.parametrize("value", [None, ""])
+def test_default_data_directory(
+    value: Optional[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    if value is None:
+        monkeypatch.delenv("ENSURECONDA_DATA_DIR", raising=False)
+    else:
+        monkeypatch.setenv("ENSURECONDA_DATA_DIR", value)
+    monkeypatch.setattr(
+        "ensureconda.resolve.appdirs.user_data_dir", lambda app: str(tmp_path)
+    )
+    assert resolve.site_path() == tmp_path
+
+
+@pytest.mark.parametrize("relative", [False, True])
+def test_data_directory_override(
+    relative: bool, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    directory = Path("custom data") if relative else tmp_path / "custom data"
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ENSURECONDA_DATA_DIR", str(directory))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "ignored"))
+    assert resolve.site_path() == directory
+    assert not directory.exists()  # Discovery does not create the directory.
 
 
 @pytest.mark.parametrize("location", ["data", "bin"])

@@ -116,8 +116,7 @@ func ResolveExecutable(executableName string, dataDir string, versionPredicate f
 			filteredPaths = append(filteredPaths, dir)
 		}
 	}
-	newPathEnv := strings.Join(filteredPaths, string(os.PathListSeparator))
-	return FindExecutable(executableName, newPathEnv, versionPredicate)
+	return findExecutableInDirs(executableName, filteredPaths, versionPredicate)
 }
 
 // defaultPathExt is used on Windows when PATHEXT is unset.
@@ -160,11 +159,15 @@ func assertExecutable(file string) error {
 }
 
 func FindExecutable(executableFileName string, searchPath string, predicate func(path string) (bool, error)) (string, error) {
+	return findExecutableInDirs(executableFileName, filepath.SplitList(searchPath), predicate)
+}
+
+func findExecutableInDirs(executableFileName string, directories []string, predicate func(path string) (bool, error)) (string, error) {
 	log.
-		WithField("searchPath", searchPath).
+		WithField("searchDirectories", directories).
 		WithField("executable", executableFileName).
 		Debug("Searching for executable")
-	for _, dir := range filepath.SplitList(searchPath) {
+	for _, dir := range directories {
 		if dir == "" {
 			// Unix shell semantics: searchPath element "" means "."
 			dir = "."

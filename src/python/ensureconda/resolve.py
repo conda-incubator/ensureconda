@@ -43,6 +43,9 @@ def which_no_shims(executable: str) -> Optional[str]:
 
 
 def site_path() -> pathlib.Path:
+    override = os.environ.get("ENSURECONDA_DATA_DIR")
+    if override:
+        return pathlib.Path(override)
     return pathlib.Path(appdirs.user_data_dir("ensure-conda"))
 
 

@@ -1,6 +1,48 @@
 package cmd
 
-import "testing"
+import (
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/Wessie/appdirs"
+)
+
+func TestDataDirectoryOverride(t *testing.T) {
+	previous := TestSitePath
+	TestSitePath = ""
+	t.Cleanup(func() { TestSitePath = previous })
+	for _, directory := range []string{filepath.Join(t.TempDir(), "custom data"), "relative data"} {
+		t.Run(directory, func(t *testing.T) {
+			t.Setenv("ENSURECONDA_DATA_DIR", directory)
+			t.Setenv("XDG_DATA_HOME", filepath.Join(t.TempDir(), "ignored"))
+			if got := sitePath(); got != directory {
+				t.Fatalf("sitePath() = %q, want %q", got, directory)
+			}
+			if _, err := os.Stat(directory); !os.IsNotExist(err) {
+				t.Fatalf("discovery created the directory, or stat failed: %v", err)
+			}
+		})
+	}
+}
+
+func TestDefaultDataDirectory(t *testing.T) {
+	previous := TestSitePath
+	TestSitePath = ""
+	t.Cleanup(func() { TestSitePath = previous })
+	for _, unset := range []bool{false, true} {
+		t.Setenv("ENSURECONDA_DATA_DIR", "")
+		if unset {
+			if err := os.Unsetenv("ENSURECONDA_DATA_DIR"); err != nil {
+				t.Fatal(err)
+			}
+		}
+		want := appdirs.UserDataDir("ensure-conda", "", "", false)
+		if got := sitePath(); got != want {
+			t.Fatalf("sitePath() = %q, want %q", got, want)
+		}
+	}
+}
 
 func TestPlatformSubdir(t *testing.T) {
 	tests := []struct {
