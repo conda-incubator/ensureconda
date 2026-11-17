@@ -275,7 +275,7 @@ def _ensure(
                 "force installation requires micromamba or conda_standalone"
             )
 
-    report_rejections = install == "force"
+    rejection_level = logging.WARNING if install == "force" else logging.INFO
 
     # A missing download mapping need not prevent using an installed tool.
     unsupported_platform: Optional[UnsupportedPlatformError] = None
@@ -342,6 +342,15 @@ def _ensure(
                 continue
             candidates = iter([installed_path])
         else:
+            logger.debug(
+                "Searching for %s matching %s",
+                flavor,
+                (
+                    f">={constraint}"
+                    if isinstance(constraint, Version)
+                    else constraint or "any version"
+                ),
+            )
             candidates = finders[flavor]()
         for path in candidates:
             result = check_executable(
@@ -349,9 +358,13 @@ def _ensure(
                 flavor,
                 constraint,
                 probe_version=probe_version,
-                report_rejections=report_rejections,
+                rejection_level=rejection_level,
             )
             if result is not None:
+                if result.version is None:
+                    logger.info("Selected %s at %s", flavor, path)
+                else:
+                    logger.info("Selected %s %s at %s", flavor, result.version, path)
                 return result
     if unsupported_platform is not None:
         raise unsupported_platform

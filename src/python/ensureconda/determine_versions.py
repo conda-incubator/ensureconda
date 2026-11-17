@@ -110,8 +110,7 @@ def check_executable(
     constraint: _VersionConstraint,
     *,
     probe_version: bool = True,
-    quiet: bool = False,
-    report_rejections: bool = False,
+    rejection_level: Optional[int] = logging.INFO,
 ) -> Optional[CondaExecutable]:
     version = None
     if constraint is not None or probe_version:
@@ -133,7 +132,7 @@ def check_executable(
                     if isinstance(error, subprocess.CalledProcessError)
                     else str(error)
                 )
-                if not quiet:
+                if rejection_level is not None:
                     logger.warning(
                         "Skipping %s: could not determine its version (%s)",
                         path,
@@ -150,10 +149,14 @@ def check_executable(
         if version is None or not constraint.contains(version, prereleases=True):
             requirement = str(constraint)
     if requirement is not None:
-        if report_rejections and not quiet:
+        if rejection_level is not None:
             found_version = version if version is not None else "unknown version"
-            logger.warning(
-                "Rejected %s %s: requires %s", path, found_version, requirement
+            logger.log(
+                rejection_level,
+                "Rejected %s %s: requires %s",
+                path,
+                found_version,
+                requirement,
             )
         return None
     return CondaExecutable(path, flavor, version)

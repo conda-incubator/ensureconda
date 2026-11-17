@@ -295,6 +295,7 @@ def stream_conda_executable(url: str, sha256: Optional[str] = None) -> Path:
     dest_filename = f"conda_standalone{exe_suffix()}"
 
     filename = urlparse(url).path.rsplit("/", 1)[-1]
+    logger.info("conda-standalone: downloading %s", url)
     with TemporaryFile() as conda:
         request_url_with_retry(url, destination=conda)
         if sha256:
@@ -355,15 +356,22 @@ def install_conda_exe(
                 "conda_standalone",
                 constraint,
                 probe_version=probe_version,
-                quiet=True,
+                rejection_level=None,
             )
             is not None
         ):
+            logger.debug(
+                "Reusing cached executable %s after acquiring the download lock",
+                target_path,
+            )
             return target_path
 
         channel = get_channel_name()
         candidates = compute_candidates(channel, subdir)
         chosen = candidates[-1]
+        logger.info(
+            "conda-standalone: selected version %s for %s", chosen.version, subdir
+        )
         url = "https:" + chosen.download_url
         path_to_written_executable = stream_conda_executable(url, chosen.sha256)
         return path_to_written_executable
@@ -373,6 +381,7 @@ def compute_candidates(channel: str, subdir: str) -> List[AnacondaPkg]:
     """Compute the candidates for the conda-standalone package"""
 
     url = f"https://api.anaconda.org/package/{channel}/conda-standalone/files"
+    logger.debug("Fetching conda-standalone metadata from %s", url)
     resp = request_url_with_retry(url)
     api_response_data: List[Dict[str, Any]] = resp.json()
 
@@ -458,12 +467,17 @@ def install_micromamba(
                 "micromamba",
                 constraint,
                 probe_version=probe_version,
-                quiet=True,
+                rejection_level=None,
             )
             is not None
         ):
+            logger.debug(
+                "Reusing cached executable %s after acquiring the download lock",
+                target_path,
+            )
             return target_path
 
+        logger.info("micromamba: downloading latest for %s", subdir)
         url = f"https://micro.mamba.pm/api/micromamba/{subdir}/latest"
         try:
             resp = request_url_with_retry(url)
