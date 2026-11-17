@@ -210,6 +210,18 @@ conda-standalone; those are reported as `"micromamba"` and `"conda"`. It raises
 `FileNotFoundError` or `PermissionError` for a path that doesn't exist or isn't
 executable, and `ValueError` for an executable it doesn't recognize.
 
+### Diagnostics
+
+Both command lines write diagnostic messages to stderr and reserve stdout for
+an executable path or `--json` result. `--verbosity 1` (the default) explains
+version rejections, download selection, lock waits and the final result.
+Use `--verbosity 0` for warnings and errors, or `--verbosity 2` for detailed
+search and cache diagnostics.
+
+The Python API logs under the `ensureconda` logger: its decisions at INFO, and
+warnings such as waiting more than 5 seconds for another process's download.
+The Python CLI configures that logger only for the duration of an invocation.
+
 ### Cache location
 
 By default, ensureconda stores downloaded executables in:
