@@ -115,6 +115,14 @@ def test_install_replaces_a_new_executable_that_the_search_rejected(
     monkeypatch.delenv("PATH", raising=False)
     monkeypatch.setattr(resolve, "site_path", lambda: tmp_path)
     monkeypatch.setattr("ensureconda.installer.site_path", lambda: tmp_path)
+    monkeypatch.setattr(
+        "ensureconda.installer.select_micromamba",
+        lambda *args: (
+            "https://example.invalid/micromamba.tar.bz2",
+            Version("2"),
+            None,
+        ),
+    )
     monkeypatch.setattr("ensureconda.installer.request_url_with_retry", download)
     monkeypatch.setattr("ensureconda.installer.extract_files_from_tar_bz2", extract)
     monkeypatch.setattr(_versions, "determine_micromamba_version", determine_version)

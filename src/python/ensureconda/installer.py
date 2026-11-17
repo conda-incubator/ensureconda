@@ -21,9 +21,10 @@ from typing import (
     List,
     NamedTuple,
     Optional,
+    Tuple,
     Union,
 )
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import filelock
 import requests
@@ -51,27 +52,6 @@ READ_TIMEOUT_SEC = 60
 
 RETRY_TIME_BUDGET_SEC = 70
 """Elapsed seconds allowed for scheduling retries; active downloads may finish."""
-
-# Keep this in step with micromambaSubdirs in src/golang/cmd/install.go.
-MICROMAMBA_SUBDIRS = frozenset(
-    {
-        "linux-64",
-        "linux-aarch64",
-        "linux-ppc64le",
-        "linux-riscv64",
-        "osx-64",
-        "osx-arm64",
-        "win-64",
-        "win-arm64",
-    }
-)
-"""Platforms that micromamba is published for.
-
-This is `conda_platforms` in
-<https://api.anaconda.org/package/conda-forge/micromamba>. It only decides what
-a 404 from micro.mamba.pm means, so a platform that is missing here still gets
-micromamba as soon as one is published.
-"""
 
 
 class NotPublishedError(RuntimeError):
@@ -126,8 +106,15 @@ def _retry_after_delay(value: str) -> Optional[float]:
         return None
 
 
+class _HeadersOnlySession(requests.Session):
+    def get_redirect_target(self, resp: requests.Response) -> Optional[str]:
+        # Even with allow_redirects=False, Requests normally consumes a
+        # redirect body to prepare Response.next. We only need its headers.
+        return None
+
+
 def request_url_with_retry(
-    url: str, *, destination: Optional[IO[bytes]] = None
+    url: str, *, destination: Optional[IO[bytes]] = None, follow_redirects: bool = True
 ) -> requests.Response:
     """Retrieve a URL, retrying transient failures during the entire download.
 
@@ -135,6 +122,9 @@ def request_url_with_retry(
     provided, stream the body there instead, replacing its contents on each
     attempt and rewinding it on success. The caller owns the destination;
     the returned response's body has already been consumed in this mode.
+
+    With follow_redirects=False, return headers without reading the body, and
+    return a 404 instead of raising; the latest-version lookup expects both.
 
     Retry-After on retryable HTTP responses can extend an individual wait.
     Schedule retries only within RETRY_TIME_BUDGET_SEC seconds of the initial
@@ -151,10 +141,19 @@ def request_url_with_retry(
             destination.seek(0)
             destination.truncate()
         try:
-            with requests.get(
-                url, stream=True, timeout=(CONNECT_TIMEOUT_SEC, READ_TIMEOUT_SEC)
+            session_type = requests.Session if follow_redirects else _HeadersOnlySession
+            with session_type() as session, session.get(
+                url,
+                stream=True,
+                timeout=(CONNECT_TIMEOUT_SEC, READ_TIMEOUT_SEC),
+                allow_redirects=follow_redirects,
             ) as response:
+                if not follow_redirects and response.status_code == 404:
+                    return response
                 response.raise_for_status()
+                if not follow_redirects:
+                    # Inspect headers only, even if the endpoint unexpectedly returns 200.
+                    return response
                 # urllib3 1.x otherwise accepts bodies shorter than Content-Length.
                 response.raw.enforce_content_length = True
                 if destination is None:
@@ -379,11 +378,13 @@ def install_conda_exe(
         return path_to_written_executable
 
 
-def compute_candidates(channel: str, subdir: str) -> List[AnacondaPkg]:
-    """Compute the candidates for the conda-standalone package"""
+def compute_candidates(
+    channel: str, subdir: str, package: str = "conda-standalone"
+) -> List[AnacondaPkg]:
+    """List supported builds for the package, sorted by version/build/time."""
 
-    url = f"https://api.anaconda.org/package/{channel}/conda-standalone/files"
-    logger.debug("Fetching conda-standalone metadata from %s", url)
+    url = f"https://api.anaconda.org/package/{channel}/{package}/files"
+    logger.debug("Fetching %s metadata from %s", package, url)
     resp = request_url_with_retry(url)
     api_response_data: List[Dict[str, Any]] = resp.json()
 
@@ -412,7 +413,7 @@ def compute_candidates(channel: str, subdir: str) -> List[AnacondaPkg]:
             info.attrs.subdir == subdir
             # Ignore onedir packages as workaround for
             # <https://github.com/conda/conda-standalone/issues/182>
-            and "_onedir_" not in info.attrs.build
+            and (package != "conda-standalone" or "_onedir_" not in info.attrs.build)
             and (labels is None or ("main" in labels and "broken" not in labels))
         ):
             continue
@@ -420,7 +421,8 @@ def compute_candidates(channel: str, subdir: str) -> List[AnacondaPkg]:
             artifact = urlparse(info.download_url)
         except ValueError:
             logger.warning(
-                "Skipping conda-standalone %s for %s: invalid download URL",
+                "Skipping %s %s for %s: invalid download URL",
+                package,
                 info.version,
                 subdir,
             )
@@ -431,7 +433,7 @@ def compute_candidates(channel: str, subdir: str) -> List[AnacondaPkg]:
             Version(info.version)
         except InvalidVersion:
             logger.warning(
-                f"Skipping conda-standalone {info.version} for {subdir}: "
+                f"Skipping {package} {info.version} for {subdir}: "
                 "not a valid version"
             )
             continue
@@ -445,8 +447,10 @@ def compute_candidates(channel: str, subdir: str) -> List[AnacondaPkg]:
         )
     )
     if len(candidates) == 0:
+        if package == "micromamba":
+            raise NotPublishedError(f"micromamba is not published for {subdir}")
         raise NotPublishedError(
-            f"No conda-standalone package found for {subdir} in channel {channel}"
+            f"No {package} package found for {subdir} in channel {channel}"
         )
     return candidates
 
@@ -490,31 +494,25 @@ def install_micromamba(
             )
             return target_path
 
-        logger.info("micromamba: downloading latest for %s", subdir)
-        url = f"https://micro.mamba.pm/api/micromamba/{subdir}/latest"
-        try:
-            resp = request_url_with_retry(url)
-        except requests.HTTPError as error:
-            # micro.mamba.pm answers 404 when it has no build of a version for
-            # a platform. That can also be a release that conda-forge hasn't
-            # finished uploading, so for a platform that micromamba is
-            # published for, a 404 remains an error.
-            if (
-                error.response is not None
-                and error.response.status_code == 404
-                and subdir not in MICROMAMBA_SUBDIRS
-            ):
-                raise NotPublishedError(
-                    f"micromamba is not published for {subdir}"
-                ) from error
-            raise
-
+        url, version, sha256 = select_micromamba(subdir, constraint)
+        logger.info("micromamba: downloading version %s for %s", version, subdir)
+        resp = request_url_with_retry(url)
         tarball = io.BytesIO(resp.content)
-        if is_windows:
-            filename = "Library/bin/micromamba.exe"
-        else:
-            filename = "bin/micromamba"
-
+        if sha256:
+            verify_sha256(tarball, sha256, url)
+        filename = "Library/bin/micromamba.exe" if is_windows else "bin/micromamba"
+        if urlparse(url).path.endswith(".conda"):
+            with closing(
+                stream_conda_component(
+                    urlparse(url).path.rsplit("/", 1)[-1], tarball, component="pkg"
+                )
+            ) as stream:
+                for tar, member in stream:
+                    if member.name == filename:
+                        fo = tar.extractfile(member)
+                        if fo is not None:
+                            return write_executable_from_file_object(fo, dest_filename)
+            raise RuntimeError("Could not find micromamba in the package")
         return extract_files_from_tar_bz2(
             tarball=tarball, filename=filename, dest_filename=dest_filename
         )
@@ -533,6 +531,61 @@ def select_candidate(
         f"{package}: no published version for {subdir} satisfies {requirement_text(constraint)}; "
         f"newest available is {candidates[-1].version}"
     )
+
+
+def select_micromamba(
+    subdir: str, constraint: _VersionConstraint
+) -> Tuple[str, Version, Optional[str]]:
+    latest = f"https://micro.mamba.pm/api/micromamba/{subdir}/latest"
+    logger.debug("Checking latest micromamba at %s", latest)
+    response = request_url_with_retry(latest, follow_redirects=False)
+    if response.status_code == 404:
+        logger.info(
+            "micromamba: latest artifact unavailable; checking release metadata"
+        )
+    else:
+        version = None
+        try:
+            artifact = urljoin(latest, response.headers.get("Location", ""))
+            parsed = urlparse(artifact)
+            prefix = f"/conda-forge/{subdir}/micromamba-"
+            if (
+                response.status_code in (301, 302, 303, 307, 308)
+                and parsed.scheme == "https"
+                and parsed.netloc == "conda.anaconda.org"
+                and parsed.path.startswith(prefix)
+                and parsed.path.endswith(".tar.bz2")
+                and not parsed.query
+                and not parsed.fragment
+            ):
+                package_version, build = parsed.path[
+                    len(prefix) : -len(".tar.bz2")
+                ].rsplit("-", 1)
+                if build:
+                    version = Version(package_version)
+        except ValueError:
+            # A malformed redirect URL or package filename cannot identify
+            # the release; the full metadata can still provide a usable build.
+            pass
+        if version is not None:
+            if version_satisfies(version, constraint):
+                logger.info(
+                    "micromamba: selected latest version %s for %s", version, subdir
+                )
+                return artifact, version, None
+            logger.info(
+                "micromamba: latest version %s does not satisfy %s; checking release metadata",
+                version,
+                requirement_text(constraint),
+            )
+        else:
+            logger.info(
+                "micromamba: latest response did not identify a release; checking release metadata"
+            )
+    candidates = compute_candidates("conda-forge", subdir, "micromamba")
+    chosen = select_candidate(candidates, constraint, "micromamba", subdir)
+    logger.info("micromamba: selected version %s for %s", chosen.version, subdir)
+    return "https:" + chosen.download_url, Version(chosen.version), chosen.sha256
 
 
 def exe_suffix() -> str:
