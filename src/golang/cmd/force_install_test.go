@@ -32,8 +32,12 @@ func serveForceInstall(t *testing.T) *[]string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	condaVersion := os.Getenv("ENSURECONDA_TEST_CONDA_VERSION")
+	if condaVersion == "" {
+		condaVersion = "25.1"
+	}
 	listing, err := json.Marshal([]AnacondaPkg{{
-		Attrs: AnacondaPkgAttr{Subdir: subdir}, Version: "25.1",
+		Attrs: AnacondaPkgAttr{Subdir: subdir}, Version: condaVersion,
 		DownloadUrl: "//example.invalid/conda.tar.bz2", Sha256: sha256Hex(archive),
 	}})
 	if err != nil {
@@ -322,7 +326,7 @@ func TestForceInstallCLIReportsVersionRejection(t *testing.T) {
 				if rejectStandalone {
 					condaVersion = "0.1.0"
 				}
-				args := []string{"-test.run=^TestForceInstallCLIHelper$", "--", "--force-install"}
+				args := []string{"-test.run=^TestForceInstallCLIHelper$", "--", "--force-install", "--verbosity", "0"}
 				if asJSON {
 					args = append(args, "--json")
 				}
@@ -342,7 +346,7 @@ func TestForceInstallCLIReportsVersionRejection(t *testing.T) {
 				if !strings.Contains(stderr.String(), microMessage) {
 					t.Errorf("stderr %q, want %q", &stderr, microMessage)
 				}
-				condaMessage := "Rejected " + targetExeFilename("conda_standalone") + " 0.1.0: requires >=" + DefaultMinCondaVersion
+				condaMessage := "satisfies >=" + DefaultMinCondaVersion + "; newest available is 0.1.0"
 				if rejectStandalone {
 					if !strings.Contains(stderr.String(), condaMessage) || !strings.Contains(stderr.String(), "Could not find compatible executable") {
 						t.Errorf("stderr %q, want standalone rejection and final failure", &stderr)

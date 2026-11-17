@@ -191,7 +191,10 @@ func downloadCondaStandalone(channel string, subdir string, target string) (stri
 	if err != nil {
 		return "", fmt.Errorf("listing conda-standalone candidates: %w", err)
 	}
-	chosen := candidates[len(candidates)-1]
+	chosen, err := newestCompatible(candidates, pep440.MustParse(DefaultMinCondaVersion), "conda-standalone", subdir)
+	if err != nil {
+		return "", err
+	}
 	log.Infof("conda-standalone: selected version %s for %s", chosen.Version, subdir)
 
 	downloadUrl := "https:" + chosen.DownloadUrl
@@ -525,4 +528,18 @@ func writeExecutable(fileName string, header *tar.Header, tarReader *tar.Reader)
 		return fmt.Errorf("stat temp file: %w", err)
 	}
 	return os.Chmod(fileName, st.Mode()|syscall.S_IXUSR)
+}
+
+// A constraint miss belongs to a target, not to the entire tool or platform.
+type noCompatibleVersionError struct{ message string }
+
+func (e *noCompatibleVersionError) Error() string { return e.message }
+
+func newestCompatible(candidates []AnacondaPkg, minimum pep440.Version, tool, subdir string) (AnacondaPkg, error) {
+	for i := len(candidates) - 1; i >= 0; i-- {
+		if !pep440.MustParse(candidates[i].Version).LessThan(minimum) {
+			return candidates[i], nil
+		}
+	}
+	return AnacondaPkg{}, &noCompatibleVersionError{fmt.Sprintf("%s: no published version for %s satisfies >=%s; newest available is %s", tool, subdir, minimum.String(), candidates[len(candidates)-1].Version)}
 }
