@@ -15,6 +15,7 @@ import filelock
 import pytest
 import requests
 from conda_package_streaming.create import conda_builder
+from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 from urllib3.response import HTTPResponse
 
@@ -352,6 +353,39 @@ def test_compute_candidates_skips_unusable_download_urls(
     messages = log_messages()
     assert "Skipping conda-standalone 1.0" in messages
     assert "invalid download URL" in messages
+
+
+def test_conda_standalone_selects_newest_matching_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(installer, "site_path", lambda: tmp_path)
+    monkeypatch.setattr(installer, "platform_subdir", lambda: "linux-64")
+    packages = [
+        installer.AnacondaPkg(
+            0,
+            installer.AnacondaPkgAttr("linux-64", "0", 0, 0),
+            "conda",
+            version,
+            f"//example.invalid/conda-standalone-{version}-0.tar.bz2",
+        )
+        for version in ["24.1", "25.1"]
+    ]
+    monkeypatch.setattr(installer, "compute_candidates", lambda *args: packages)
+    urls: List[str] = []
+
+    def stream(url: str, sha256: Optional[str] = None, **kwargs: object) -> Path:
+        urls.append(url)
+        return tmp_path / "conda_standalone"
+
+    monkeypatch.setattr(installer, "stream_conda_executable", stream)
+
+    installer.install_conda_exe(SpecifierSet("<25"), force=True)
+    assert urls == ["https://example.invalid/conda-standalone-24.1-0.tar.bz2"]
+    with pytest.raises(
+        installer.NoCompatibleVersionError, match="newest available is 25.1"
+    ):
+        installer.install_conda_exe(SpecifierSet(">=26"), force=True)
+    assert len(urls) == 1
 
 
 def test_micromamba_is_extracted_while_holding_the_download_lock(

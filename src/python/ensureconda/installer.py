@@ -30,7 +30,12 @@ import requests
 from conda_package_streaming.package_streaming import stream_conda_component
 from packaging.version import InvalidVersion, Version
 
-from ensureconda._versions import _VersionConstraint, check_executable
+from ensureconda._versions import (
+    _VersionConstraint,
+    check_executable,
+    requirement_text,
+    version_satisfies,
+)
 from ensureconda.resolve import is_exe, is_windows, platform_subdir, site_path
 
 logger = logging.getLogger(__name__)
@@ -71,6 +76,10 @@ micromamba as soon as one is published.
 
 class NotPublishedError(RuntimeError):
     """Nothing that could be installed is published for this platform."""
+
+
+class NoCompatibleVersionError(RuntimeError):
+    """Packages exist for the platform, but none satisfies this target."""
 
 
 class ExecutableReplacementError(OSError, RuntimeError):
@@ -361,7 +370,7 @@ def install_conda_exe(
 
         channel = get_channel_name()
         candidates = compute_candidates(channel, subdir)
-        chosen = candidates[-1]
+        chosen = select_candidate(candidates, constraint, "conda-standalone", subdir)
         logger.info(
             "conda-standalone: selected version %s for %s", chosen.version, subdir
         )
@@ -509,6 +518,21 @@ def install_micromamba(
         return extract_files_from_tar_bz2(
             tarball=tarball, filename=filename, dest_filename=dest_filename
         )
+
+
+def select_candidate(
+    candidates: List[AnacondaPkg],
+    constraint: _VersionConstraint,
+    package: str,
+    subdir: str,
+) -> AnacondaPkg:
+    for candidate in reversed(candidates):
+        if version_satisfies(Version(candidate.version), constraint):
+            return candidate
+    raise NoCompatibleVersionError(
+        f"{package}: no published version for {subdir} satisfies {requirement_text(constraint)}; "
+        f"newest available is {candidates[-1].version}"
+    )
 
 
 def exe_suffix() -> str:

@@ -35,6 +35,7 @@ from ensureconda._versions import (
 )
 from ensureconda._versions import requirement_text
 from ensureconda.installer import (
+    NoCompatibleVersionError,
     NotPublishedError,
     install_conda_exe,
     install_micromamba,
@@ -221,8 +222,12 @@ def ensure(
     With probe_version=False, run --version only when a target has constraints;
     otherwise the version is None and the executable is not checked by running
     it. Unknown versions cannot satisfy a constraint.
-    Installation fetches the latest available build; constraints filter the
-    result and do not select an older release to download.
+    Micromamba installation fetches the latest available build; constraints
+    filter the result and do not select an older release to download.
+    Conda-standalone installation selects the newest package satisfying the
+    constraint before downloading. A target with no matching published version
+    permits later targets, including less restrictive requirements for the
+    same tool.
     Forced installation replaces the cached copy before checking the result.
     Rejection by a version constraint or execution check does not restore the
     previous copy, even if it was compatible.
@@ -321,6 +326,13 @@ def _ensure(
                         )
                     if install == "force":
                         refreshed[flavor] = installed_path
+            except NoCompatibleVersionError as error:
+                logger.log(
+                    logging.WARNING if report_rejections else logging.INFO,
+                    "%s",
+                    error,
+                )
+                continue
             except NotPublishedError as error:
                 if install == "force":
                     unpublished.add(flavor)
