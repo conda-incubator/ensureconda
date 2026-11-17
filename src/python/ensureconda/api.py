@@ -336,7 +336,7 @@ def _ensure(
         "conda": conda_executables,
         "conda_standalone": conda_standalone_executables,
     }
-    installers: Dict[Flavor, Callable[[Callable[[Path], bool]], Optional[Path]]] = {
+    installers: Dict[Flavor, Callable[[Callable[[Path], bool]], Path]] = {
         "micromamba": install_micromamba,
         "conda_standalone": install_conda_exe,
     }
@@ -438,7 +438,7 @@ def _ensure(
             if flavor in installers
         )
 
-    refreshed: Dict[Flavor, Optional[Path]] = {}
+    refreshed: Dict[Flavor, Path] = {}
     unpublished: Set[Flavor] = set()
     for index, (flavor, constraint, installing) in enumerate(steps):
         if flavor in unpublished:
@@ -470,9 +470,7 @@ def _ensure(
                     file=sys.stderr,
                 )
                 continue
-            candidates = (
-                iter([installed_path]) if installed_path is not None else iter([])
-            )
+            candidates = iter([installed_path])
         else:
             candidates = finders[flavor]()
         for path in candidates:
