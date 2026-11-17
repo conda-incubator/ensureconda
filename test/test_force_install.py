@@ -15,7 +15,7 @@ from click.testing import CliRunner
 from packaging.version import Version
 
 from ensureconda import api, cli, determine_versions, installer
-from ensureconda.resolve import UnsupportedPlatformError, is_windows
+from ensureconda.resolve import UnsupportedPlatformError, is_windows, platform_subdir
 
 
 @pytest.fixture
@@ -74,12 +74,39 @@ def test_force_install_replaces_fresh_cache(
     downloads: List[str] = []
 
     def download(
-        url: str, *, destination: Optional[IO[bytes]] = None
+        url: str,
+        *,
+        destination: Optional[IO[bytes]] = None,
+        follow_redirects: bool = True,
     ) -> requests.Response:
         with pytest.raises(filelock.Timeout):
             filelock.FileLock(str(tmp_path / lock_name)).acquire(timeout=0)
-        downloads.append(url)
         response = requests.Response()
+        if not follow_redirects:
+            response.status_code = 307
+            response.headers["Location"] = (
+                f"https://conda.anaconda.org/conda-forge/{platform_subdir()}/micromamba-25.1-0.tar.bz2"
+            )
+            return response
+        if url.endswith("/files"):
+            response._content = json.dumps(
+                [
+                    {
+                        "attrs": {
+                            "subdir": platform_subdir(),
+                            "build": "0",
+                            "build_number": 0,
+                            "timestamp": 0,
+                        },
+                        "size": 0,
+                        "type": "conda",
+                        "version": "25.1",
+                        "download_url": "//example.invalid/micromamba.tar.bz2",
+                    }
+                ]
+            ).encode()
+            return response
+        downloads.append(url)
         response._content = archive.getvalue()
         if destination is not None:
             destination.write(archive.getvalue())
@@ -91,9 +118,7 @@ def test_force_install_replaces_fresh_cache(
     # Each force request downloads again, even immediately after another one.
     for _ in range(2):
         if entry_point == "new-api-incompatible":
-            # A metadata constraint miss never downloads or replaces the cached
-            # copy. Micromamba still downloads latest, and rejecting that does
-            # not restore the old compatible copy.
+            # A metadata constraint miss never downloads or replaces the cached copy.
             assert api.ensure([f"{tool}<2"], install="force") is None
         elif entry_point == "new-api":
             # Search-only tools are skipped, and target order is respected.
@@ -118,12 +143,10 @@ def test_force_install_replaces_fresh_cache(
                 assert output == str(target)
         assert target.read_bytes() == (
             b"old executable"
-            if entry_point == "new-api-incompatible" and tool == "conda_standalone"
+            if entry_point == "new-api-incompatible"
             else b"fresh executable"
         )
-    assert len(downloads) == (
-        0 if entry_point == "new-api-incompatible" and tool == "conda_standalone" else 2
-    )
+    assert len(downloads) == (0 if entry_point == "new-api-incompatible" else 2)
     with filelock.FileLock(str(tmp_path / lock_name)).acquire(timeout=0):
         pass
 

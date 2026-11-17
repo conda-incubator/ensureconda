@@ -408,6 +408,15 @@ def test_micromamba_is_extracted_while_holding_the_download_lock(
 
     monkeypatch.setattr(installer, "site_path", lambda: tmp_path)
     monkeypatch.setattr(installer, "request_url_with_retry", lambda url: response)
+    monkeypatch.setattr(
+        installer,
+        "select_micromamba",
+        lambda *args: (
+            "https://example.invalid/micromamba.tar.bz2",
+            Version("2"),
+            None,
+        ),
+    )
     monkeypatch.setattr(installer, "extract_files_from_tar_bz2", extract)
 
     executable = installer.install_micromamba()
@@ -1115,10 +1124,13 @@ def request_micromamba(
     def get(
         session: requests.Session, method: str, url: str, **kwargs: Any
     ) -> requests.Response:
-        assert url == f"https://micro.mamba.pm/api/micromamba/{subdir}/latest"
         response = requests.Response()
-        response.status_code = status
         response.raw = io.BytesIO()
+        if url.endswith("/files") and subdir == "linux-s390x":
+            response.status_code = 200
+            response._content = b"[]"
+            return response
+        response.status_code = status
         return response
 
     monkeypatch.setattr(requests.Session, "request", get)
@@ -1135,13 +1147,13 @@ def test_micromamba_not_published_for_the_platform(
     ) as error:
         request_micromamba("linux-s390x", 404, tmp_path, monkeypatch)
 
-    assert isinstance(error.value.__cause__, requests.HTTPError)
+    assert error.value.__cause__ is None
 
 
 @pytest.mark.parametrize(
     "subdir, status",
     [
-        # A release that hasn't been uploaded for this platform yet.
+        # The release metadata consulted after a 404 from latest fails too.
         ("linux-64", 404),
         ("linux-s390x", 403),
     ],
