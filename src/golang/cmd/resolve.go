@@ -15,13 +15,13 @@ import (
 
 type versionCheck func(executable string) (*pep440.Version, error)
 
-func executableWithMinVersion(minVersion pep440.Version, reportRejection bool, prefixes ...string) versionCheck {
+func executableWithMinVersion(minVersion pep440.Version, rejectionLevel log.Level, prefixes ...string) versionCheck {
 	return func(executable string) (*pep440.Version, error) {
-		return checkExecutableMinVersion(executable, minVersion, reportRejection, prefixes...)
+		return checkExecutableMinVersion(executable, minVersion, rejectionLevel, prefixes...)
 	}
 }
 
-func checkExecutableMinVersion(executable string, minVersion pep440.Version, reportRejection bool, prefixes ...string) (*pep440.Version, error) {
+func checkExecutableMinVersion(executable string, minVersion pep440.Version, rejectionLevel log.Level, prefixes ...string) (*pep440.Version, error) {
 	stdout, err := exec.Command(executable, "--version").Output()
 	entry := log.WithFields(log.Fields{
 		"executable":    executable,
@@ -31,28 +31,22 @@ func checkExecutableMinVersion(executable string, minVersion pep440.Version, rep
 	entry.Debug("Detecting executable version")
 	if err != nil {
 		entry.WithError(err).Debug("Skipping executable: could not determine its version")
-		if reportRejection {
-			log.Warnf("Rejected %s: could not check version: %v", executable, err)
-		}
+		log.StandardLogger().Logf(rejectionLevel, "Rejected %s: could not check version: %v", executable, err)
 		return nil, err
 	}
 	version, err := parseExecutableVersion(string(stdout), prefixes...)
 	if err != nil {
 		entry.WithError(err).Debug("Skipping executable: could not determine its version")
-		if reportRejection {
-			log.Warnf("Rejected %s: could not check version: %v", executable, err)
-		}
+		log.StandardLogger().Logf(rejectionLevel, "Rejected %s: could not check version: %v", executable, err)
 		return nil, err
 	}
 	if version == nil || version.LessThan(minVersion) {
 		entry.WithField("version", version).Debug("No acceptable executable version found")
-		if reportRejection {
-			foundVersion := "unknown version"
-			if version != nil {
-				foundVersion = normalizedVersion(*version)
-			}
-			log.Warnf("Rejected %s %s: requires >=%s", executable, foundVersion, minVersion.String())
+		foundVersion := "unknown version"
+		if version != nil {
+			foundVersion = normalizedVersion(*version)
 		}
+		log.StandardLogger().Logf(rejectionLevel, "Rejected %s %s: requires >=%s", executable, foundVersion, minVersion.String())
 		return nil, nil
 	}
 	return version, nil

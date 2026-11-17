@@ -175,7 +175,7 @@ func installCondaStandalone(forceInstall bool) (string, error) {
 	}
 	defer unlock()
 	if !forceInstall {
-		if version, _ := checkExecutableMinVersion(target, pep440.MustParse(DefaultMinCondaVersion), false, "conda"); version != nil {
+		if version, _ := checkExecutableMinVersion(target, pep440.MustParse(DefaultMinCondaVersion), log.DebugLevel, "conda"); version != nil {
 			return target, nil
 		}
 	}
@@ -191,6 +191,7 @@ func downloadCondaStandalone(channel string, subdir string, target string) (stri
 		return "", fmt.Errorf("listing conda-standalone candidates: %w", err)
 	}
 	chosen := candidates[len(candidates)-1]
+	log.Infof("conda-standalone: selected version %s for %s", chosen.Version, subdir)
 
 	downloadUrl := "https:" + chosen.DownloadUrl
 	log.WithFields(log.Fields{"url": downloadUrl}).Info("downloading conda-standalone")
@@ -339,10 +340,11 @@ func installMicromamba(url string, forceInstall bool) (string, error) {
 	}
 	defer unlock()
 	if !forceInstall {
-		if version, _ := checkExecutableMinVersion(target, pep440.MustParse(DefaultMinMambaVersion), false, ""); version != nil {
+		if version, _ := checkExecutableMinVersion(target, pep440.MustParse(DefaultMinMambaVersion), log.DebugLevel, ""); version != nil {
 			return target, nil
 		}
 	}
+	log.Info("micromamba: downloading latest")
 	return downloadAndUnpackArchive(url, "", map[string]string{
 		"Library/bin/micromamba.exe": target,
 		"bin/micromamba":             target,
