@@ -42,7 +42,6 @@ from ensureconda.resolve import (
     UnsupportedPlatformError,
     conda_executables,
     conda_standalone_executables,
-    is_exe,
     mamba_executables,
     micromamba_executables,
     platform_subdir,
@@ -259,33 +258,18 @@ def _ensure(
         "conda": conda_executables,
         "conda_standalone": conda_standalone_executables,
     }
-    installers: Dict[Flavor, Callable[[Callable[[Path], bool]], Path]] = {
-        "micromamba": install_micromamba,
-        "conda_standalone": install_conda_exe,
-    }
+    installable = ("micromamba", "conda_standalone")
     if install == "force":
-        if not any(flavor in installers for flavor, _ in parsed):
+        if not any(flavor in installable for flavor, _ in parsed):
             raise ValueError(
                 "force installation requires micromamba or conda_standalone"
             )
 
     report_rejections = install == "force"
 
-    def usable(
-        flavor: Flavor, constraint: _VersionConstraint
-    ) -> Callable[[Path], bool]:
-        """Return the check that the search applies to a candidate for a target."""
-        return lambda path: (
-            is_exe(path)
-            and check_executable(
-                path, flavor, constraint, probe_version=probe_version, quiet=True
-            )
-            is not None
-        )
-
     # A missing download mapping need not prevent using an installed tool.
     unsupported_platform: Optional[UnsupportedPlatformError] = None
-    if install != "never" and any(flavor in installers for flavor, _ in parsed):
+    if install != "never" and any(flavor in installable for flavor, _ in parsed):
         try:
             platform_subdir()
         except UnsupportedPlatformError as error:
@@ -301,13 +285,13 @@ def _ensure(
     for flavor, constraint in parsed:
         if install != "force":
             steps.append((flavor, constraint, False))
-        if install in ("per-target", "force") and flavor in installers:
+        if install in ("per-target", "force") and flavor in installable:
             steps.append((flavor, constraint, True))
     if install == "fallback":
         steps.extend(
             (flavor, constraint, True)
             for flavor, constraint in parsed
-            if flavor in installers
+            if flavor in installable
         )
 
     refreshed: Dict[Flavor, Path] = {}
@@ -320,11 +304,18 @@ def _ensure(
                 if install == "force" and flavor in refreshed:
                     installed_path = refreshed[flavor]
                 else:
-                    installed_path = installers[flavor](
-                        (lambda _: False)
-                        if install == "force"
-                        else usable(flavor, constraint)
-                    )
+                    if flavor == "micromamba":
+                        installed_path = install_micromamba(
+                            constraint,
+                            force=install == "force",
+                            probe_version=probe_version,
+                        )
+                    else:
+                        installed_path = install_conda_exe(
+                            constraint,
+                            force=install == "force",
+                            probe_version=probe_version,
+                        )
                     if install == "force":
                         refreshed[flavor] = installed_path
             except NotPublishedError as error:

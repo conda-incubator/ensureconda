@@ -145,7 +145,7 @@ def nothing_installed(monkeypatch: pytest.MonkeyPatch) -> None:
 def failing_micromamba_install(
     monkeypatch: pytest.MonkeyPatch, error: Exception
 ) -> None:
-    def install_micromamba(is_usable: object) -> Path:
+    def install_micromamba(constraint: object, **kwargs: object) -> Path:
         raise error
 
     monkeypatch.setattr(api, "install_micromamba", install_micromamba)
@@ -160,7 +160,9 @@ def test_unpublished_micromamba_falls_back_to_conda_standalone(
 ) -> None:
     conda_standalone = Path("data", "conda_standalone")
     failing_micromamba_install(monkeypatch, NotPublishedError(NOT_PUBLISHED))
-    monkeypatch.setattr(api, "install_conda_exe", lambda _: conda_standalone)
+    monkeypatch.setattr(
+        api, "install_conda_exe", lambda *args, **kwargs: conda_standalone
+    )
 
     assert api.ensureconda() == conda_standalone
     assert capsys.readouterr().err == (
@@ -207,7 +209,9 @@ def test_failed_micromamba_download_does_not_fall_back(
     failing_micromamba_install(
         monkeypatch, requests.HTTPError(f"{status} Error", response=response)
     )
-    monkeypatch.setattr(api, "install_conda_exe", lambda _: Path("unused"))
+    monkeypatch.setattr(
+        api, "install_conda_exe", lambda *args, **kwargs: Path("unused")
+    )
 
     with pytest.raises(requests.HTTPError):
         api.ensureconda()
