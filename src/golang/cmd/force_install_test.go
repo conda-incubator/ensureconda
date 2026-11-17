@@ -36,6 +36,10 @@ func serveForceInstall(t *testing.T) *[]string {
 	if condaVersion == "" {
 		condaVersion = "25.1"
 	}
+	microVersion := os.Getenv("ENSURECONDA_TEST_MICROMAMBA_VERSION")
+	if microVersion == "" {
+		microVersion = "25.1"
+	}
 	listing, err := json.Marshal([]AnacondaPkg{{
 		Attrs: AnacondaPkgAttr{Subdir: subdir}, Version: condaVersion,
 		DownloadUrl: "//example.invalid/conda.tar.bz2", Sha256: sha256Hex(archive),
@@ -47,15 +51,21 @@ func serveForceInstall(t *testing.T) *[]string {
 	client := &http.Client{Transport: roundTripper(func(r *http.Request) (*http.Response, error) {
 		requests = append(requests, r.URL.String())
 		lockName := "conda_exe_install.lock"
-		if strings.Contains(r.URL.Path, "/micromamba/") {
+		if strings.Contains(r.URL.Path, "micromamba") {
 			lockName = "micromamba_install.lock"
 		}
 		if held, err := lockIsHeld(filepath.Join(sitePath(), lockName)); err != nil || !held {
 			t.Fatalf("request without %s: held=%v, error=%v", lockName, held, err)
 		}
+		if strings.HasSuffix(r.URL.Path, "/latest") {
+			return &http.Response{StatusCode: 307, Status: "307 Temporary Redirect", Request: r, Header: http.Header{"Location": {"https://conda.anaconda.org/conda-forge/" + subdir + "/micromamba-" + microVersion + "-0.tar.bz2"}}, Body: http.NoBody}, nil
+		}
 		body := archive
 		if strings.HasSuffix(r.URL.Path, "/files") {
 			body = listing
+			if strings.Contains(r.URL.Path, "micromamba") {
+				body, _ = json.Marshal([]AnacondaPkg{{Attrs: AnacondaPkgAttr{Subdir: subdir}, Version: microVersion, DownloadUrl: "//conda.anaconda.org/conda-forge/" + subdir + "/micromamba-" + microVersion + "-0.tar.bz2"}})
+			}
 		}
 		return &http.Response{
 			StatusCode: 200, Status: "200 OK", Request: r,
@@ -83,7 +93,7 @@ func TestForceInstallReplacesFreshCache(t *testing.T) {
 			if tool == "micromamba" {
 				install = installMicromambaForPlatform
 				lockName = "micromamba_install.lock"
-				wantRequests = 2
+				wantRequests = 4
 			}
 			for range 2 {
 				got, err := install(true)
@@ -124,7 +134,7 @@ func TestForceInstallRetriesDownloadUnderLock(t *testing.T) {
 			transport := client.Transport
 			attempts := 0
 			client.Transport = roundTripper(func(r *http.Request) (*http.Response, error) {
-				if !strings.HasSuffix(r.URL.Path, "/files") {
+				if !strings.HasSuffix(r.URL.Path, "/files") && !strings.HasSuffix(r.URL.Path, "/latest") {
 					attempts++
 					if attempts == 1 {
 						if held, err := lockIsHeld(filepath.Join(sitePath(), lockName)); err != nil || !held {
@@ -196,7 +206,7 @@ func TestForceInstallDoesNotFallBackToExistingTools(t *testing.T) {
 			useSitePath(t)
 			existingForceTools(t)
 			requests := refuseDownloads(t)
-			useMicromambaSubdirs(t)
+			unpublishMicromamba(t)
 			old, err := os.ReadFile(targetExeFilename("micromamba"))
 			if err != nil {
 				t.Fatal(err)
@@ -205,9 +215,9 @@ func TestForceInstallDoesNotFallBackToExistingTools(t *testing.T) {
 			if got != nil || err == nil {
 				t.Fatalf("ensureCondaWithMetadata(force) = %q, %v; want a failed download", got, err)
 			}
-			wantRequests := int32(1)
+			wantRequests := int32(2)
 			if standalone {
-				wantRequests = 2
+				wantRequests = 3
 			} else {
 				var notPublished *notPublishedError
 				if !errors.As(err, &notPublished) {
@@ -342,7 +352,7 @@ func TestForceInstallCLIReportsVersionRejection(t *testing.T) {
 				if (err != nil) != rejectStandalone {
 					t.Fatalf("CLI error = %v, stdout %s, stderr %s; want failure=%t", err, out, &stderr, rejectStandalone)
 				}
-				microMessage := "Rejected " + targetExeFilename("micromamba") + " 0.1.0: requires >=" + DefaultMinMambaVersion
+				microMessage := "satisfies >=" + DefaultMinMambaVersion + "; newest available is 0.1.0"
 				if !strings.Contains(stderr.String(), microMessage) {
 					t.Errorf("stderr %q, want %q", &stderr, microMessage)
 				}

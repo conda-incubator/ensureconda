@@ -92,7 +92,15 @@ def test_install_and_force_refresh(
     # Both implementations must use the install directory, even on hosts with
     # conda already installed or CONDA_EXE set by an activated environment.
     env = {**isolated_env, "PATH": "", "CONDA_EXE": ""}
-    installed = json.loads(subprocess.check_output(args, encoding="utf8", env=env))
+    run = subprocess.run(
+        args, capture_output=True, check=True, encoding="utf8", env=env
+    )
+    installed = json.loads(run.stdout)
+    tool = "conda-standalone" if standalone else "micromamba"
+    assert any(
+        f"downloading {tool}" in line and "https://" in line
+        for line in run.stderr.splitlines()
+    ), run.stderr
     assert installed["flavor"] == (
         "conda_standalone" if "--no-micromamba" in flags else "micromamba"
     )

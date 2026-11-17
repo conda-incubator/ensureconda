@@ -38,7 +38,7 @@ func testArchive(t *testing.T, name string) []byte {
 	}
 	var buf bytes.Buffer
 	zipWriter := zip.NewWriter(&buf)
-	entry, err := zipWriter.Create("pkg-conda-standalone-test.tar.zst")
+	entry, err := zipWriter.Create("pkg-test-1-0.tar.zst")
 	if err != nil {
 		t.Fatal(err)
 	}

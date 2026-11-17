@@ -572,8 +572,12 @@ func TestEnsureCondaReplacesUnusableInstall(t *testing.T) {
 			if err == nil {
 				t.Error("EnsureConda() succeeded, want the refused download to fail")
 			}
-			if n := requests.Load(); n != 1 {
-				t.Errorf("made %d requests, want 1 to replace the executable", n)
+			wantRequests := int32(1)
+			if tt.exeName == "micromamba" {
+				wantRequests = 2
+			}
+			if n := requests.Load(); n != wantRequests {
+				t.Errorf("made %d requests, want %d to replace the executable", n, wantRequests)
 			}
 		})
 	}

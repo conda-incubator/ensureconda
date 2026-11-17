@@ -30,7 +30,7 @@ func TestSelectCandidates(t *testing.T) {
 
 	messages := captureLog(t)
 	var versions []string
-	for _, candidate := range selectCandidates(data, "linux-64") {
+	for _, candidate := range selectCandidates(data, "linux-64", "conda-standalone") {
 		versions = append(versions, candidate.Version)
 	}
 

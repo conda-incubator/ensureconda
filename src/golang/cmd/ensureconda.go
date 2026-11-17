@@ -205,8 +205,11 @@ func ensureCondaWithMetadata(mamba, micromamba, conda, condaStandalone, noInstal
 			if condaStandalone {
 				remaining = append(remaining, "conda-standalone")
 			}
+			var noCompatible *noCompatibleVersionError
 			var notPublished *notPublishedError
-			if errors.As(err, &notPublished) && len(remaining) > 0 {
+			if errors.As(err, &noCompatible) {
+				log.StandardLogger().Log(rejectionLevel, err)
+			} else if errors.As(err, &notPublished) && len(remaining) > 0 {
 				log.Warnf("%v; trying %s instead", err, strings.Join(remaining, " or "))
 			} else if err != nil {
 				return nil, err
