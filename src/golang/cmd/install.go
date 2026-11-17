@@ -14,6 +14,7 @@ import (
 	"io"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -176,9 +177,13 @@ func downloadCondaStandalone(channel string, subdir string, target string) (stri
 	installedExe, err := downloadAndUnpackArchive(
 		downloadUrl, chosen.Sha256, map[string]string{
 			"standalone_conda/conda.exe": target,
-		})
+		}, &downloadValidation{flavor: "conda-standalone", minimum: pep440.MustParse(DefaultMinCondaVersion), expected: pep440.MustParse(chosen.Version)})
 
 	if err != nil {
+		var invalid *downloadedExecutableError
+		if errors.As(err, &invalid) {
+			return "", err
+		}
 		return "", fmt.Errorf("downloading or unpacking conda-standalone: %w", err)
 	}
 	return installedExe, nil
@@ -262,7 +267,7 @@ func inferArchiveTypeFromUrl(rawURL string) ArchiveType {
 // downloadAndUnpackArchive extracts the files in fileNameMap from the archive
 // at url. If expectedSha256 is not empty, the whole archive is verified
 // against it before anything is extracted.
-func downloadAndUnpackArchive(url string, expectedSha256 string, fileNameMap map[string]string) (string, error) {
+func downloadAndUnpackArchive(url string, expectedSha256 string, fileNameMap map[string]string, validation *downloadValidation) (string, error) {
 	archiveType := inferArchiveTypeFromUrl(url)
 	if archiveType == UnrecognizedArchive {
 		return "", fmt.Errorf("unrecognized archive type for URL: %s", url)
@@ -279,9 +284,9 @@ func downloadAndUnpackArchive(url string, expectedSha256 string, fileNameMap map
 		}
 	}
 	if archiveType == TarBz2Archive {
-		return unpackTarBz2(bytes.NewReader(archive), fileNameMap)
+		return unpackTarBz2(bytes.NewReader(archive), fileNameMap, validation)
 	}
-	return unpackConda(archive, fileNameMap)
+	return unpackConda(archive, fileNameMap, validation)
 }
 
 // verifySha256 returns an error unless data has the expected hex digest.
@@ -293,14 +298,14 @@ func verifySha256(data []byte, expected string) error {
 	return nil
 }
 
-func unpackTarBz2(archive io.Reader, fileNameMap map[string]string) (string, error) {
+func unpackTarBz2(archive io.Reader, fileNameMap map[string]string, validation *downloadValidation) (string, error) {
 	bzf := bzip2.NewReader(archive)
 	tarReader := tar.NewReader(bzf)
-	file, err := extractTarFiles(tarReader, fileNameMap)
+	file, err := extractTarFiles(tarReader, fileNameMap, validation)
 	return file, err
 }
 
-func unpackConda(archive []byte, fileNameMap map[string]string) (string, error) {
+func unpackConda(archive []byte, fileNameMap map[string]string, validation *downloadValidation) (string, error) {
 	zipReader, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
 	if err != nil {
 		return "", err
@@ -321,7 +326,7 @@ func unpackConda(archive []byte, fileNameMap map[string]string) (string, error) 
 			defer zstReader.Close()
 
 			tarReader := tar.NewReader(zstReader)
-			file, err := extractTarFiles(tarReader, fileNameMap)
+			file, err := extractTarFiles(tarReader, fileNameMap, validation)
 			return file, err
 		}
 	}
@@ -354,7 +359,7 @@ func installMicromamba(url string, forceInstall bool) (string, error) {
 	return downloadAndUnpackArchive(chosen.DownloadUrl, chosen.Sha256, map[string]string{
 		"Library/bin/micromamba.exe": target,
 		"bin/micromamba":             target,
-	})
+	}, &downloadValidation{flavor: "micromamba", minimum: pep440.MustParse(DefaultMinMambaVersion), expected: pep440.MustParse(chosen.Version)})
 }
 
 // lockInstall takes the named download lock in the site path, so that
@@ -417,7 +422,7 @@ func isBeingDeleted(goos string, err error) bool {
 	return goos == "windows" && (errors.Is(err, os.ErrPermission) || errors.Is(err, windowsSharingViolation))
 }
 
-func extractTarFiles(tarReader *tar.Reader, fileNameMap map[string]string) (string, error) {
+func extractTarFiles(tarReader *tar.Reader, fileNameMap map[string]string, validation *downloadValidation) (string, error) {
 	for {
 		header, err := tarReader.Next()
 
@@ -431,7 +436,7 @@ func extractTarFiles(tarReader *tar.Reader, fileNameMap map[string]string) (stri
 		switch header.Typeflag {
 		case tar.TypeReg:
 			if targetFileName := fileNameMap[header.Name]; targetFileName != "" {
-				if err := extractTarFile(header, targetFileName, tarReader); err != nil {
+				if err := extractTarFile(header, targetFileName, tarReader, validation); err != nil {
 					return "", err
 				}
 				return targetFileName, nil
@@ -446,11 +451,14 @@ func extractTarFiles(tarReader *tar.Reader, fileNameMap map[string]string) (stri
 // holding a lock on the target, the same lock the Python implementation uses,
 // so that concurrent writers don't interfere. The temporary file is removed if
 // anything fails.
-func extractTarFile(header *tar.Header, targetFileName string, tarReader *tar.Reader) error {
+func extractTarFile(header *tar.Header, targetFileName string, tarReader *tar.Reader, validation *downloadValidation) error {
 	// A name of its own, as in the Python implementation. A writer that doesn't
 	// take the lock below, such as an older release, then can't write to the
 	// same file.
 	tmpFileName := fmt.Sprintf("%s.%s.tmp", targetFileName, rand.Text())
+	if runtime.GOOS == "windows" && validation != nil {
+		tmpFileName += ".exe"
+	}
 	log.WithFields(log.Fields{
 		"srcPath": header.Name,
 		"dstPath": tmpFileName,
@@ -467,6 +475,9 @@ func extractTarFile(header *tar.Header, targetFileName string, tarReader *tar.Re
 	removeTemporaryFiles(targetFileName)
 
 	err = writeExecutable(tmpFileName, header, tarReader)
+	if err == nil && validation != nil {
+		err = validateDownload(tmpFileName, *validation)
+	}
 	if err == nil {
 		err = os.Rename(tmpFileName, targetFileName)
 		if err != nil {
@@ -491,7 +502,9 @@ func removeTemporaryFiles(targetFileName string) {
 	dir, name := filepath.Split(targetFileName)
 	entries, _ := os.ReadDir(dir)
 	for _, entry := range entries {
-		if isTemporary, _ := filepath.Match(name+".*.tmp", entry.Name()); isTemporary {
+		isTemporary, _ := filepath.Match(name+".*.tmp", entry.Name())
+		isWindowsTemporary, _ := filepath.Match(name+".*.tmp.exe", entry.Name())
+		if isTemporary || isWindowsTemporary {
 			_ = os.Remove(filepath.Join(dir, entry.Name()))
 		}
 	}
@@ -581,4 +594,45 @@ func selectMicromamba(latest, subdir string, minimum pep440.Version) (AnacondaPk
 	chosen.DownloadUrl = "https:" + chosen.DownloadUrl
 	log.Infof("micromamba: selected version %s for %s", chosen.Version, subdir)
 	return chosen, nil
+}
+
+type downloadValidation struct {
+	flavor            string
+	minimum, expected pep440.Version
+}
+
+// downloadedExecutableError means that a download failed its version check.
+type downloadedExecutableError struct {
+	tool string
+	err  error
+}
+
+func (e *downloadedExecutableError) Error() string {
+	return e.tool + ": downloaded executable " + e.err.Error()
+}
+
+func (e *downloadedExecutableError) Unwrap() error { return e.err }
+
+func validateDownload(path string, validation downloadValidation) error {
+	output, err := exec.Command(path, "--version").Output()
+	if err != nil {
+		return &downloadedExecutableError{validation.flavor, fmt.Errorf("failed its version check: %w", err)}
+	}
+	prefix := ""
+	if validation.flavor == "conda-standalone" {
+		prefix = "conda"
+	}
+	version, err := parseExecutableVersion(string(output), prefix)
+	if err != nil {
+		return &downloadedExecutableError{validation.flavor, fmt.Errorf("failed its version check: %w", err)}
+	}
+	if version == nil || version.LessThan(validation.minimum) {
+		reported := "unknown version"
+		if version != nil {
+			reported = version.String()
+		}
+		return &downloadedExecutableError{validation.flavor, fmt.Errorf("reports %s, expected %s satisfying >=%s", reported, validation.expected.String(), validation.minimum.String())}
+	}
+	log.Infof("%s: validated executable version %s (package version %s)", validation.flavor, version.String(), validation.expected.String())
+	return nil
 }

@@ -104,7 +104,7 @@ func TestDownloadReportsHTTPStatus(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			target := filepath.Join(t.TempDir(), "conda_standalone")
 			_, err := downloadAndUnpackArchive(
-				server.URL+"/"+name, "", map[string]string{"standalone_conda/conda.exe": target},
+				server.URL+"/"+name, "", map[string]string{"standalone_conda/conda.exe": target}, nil,
 			)
 			if err == nil || !strings.Contains(err.Error(), "HTTP 404") {
 				t.Fatalf("downloadAndUnpackArchive() error = %v, want HTTP 404", err)

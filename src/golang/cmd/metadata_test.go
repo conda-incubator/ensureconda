@@ -217,8 +217,8 @@ func TestEnsureCondaInstalledMetadata(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if string(probes) != "probe\n" {
-					t.Errorf("version probes = %q, want exactly one", probes)
+				if string(probes) != "probe\nprobe\n" {
+					t.Errorf("version probes = %q, want staged validation and installed metadata", probes)
 				}
 			})
 		}
