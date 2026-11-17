@@ -34,16 +34,12 @@ def golang_exe() -> Optional[str]:
 
 @pytest.fixture()
 def isolated_env(tmp_path: pathlib.Path) -> Dict[str, str]:
-    """An environment that gives the binary a data directory of its own.
-
-    Otherwise the tests install into the user's real data directory, and reuse
-    whatever a previous run or test left there.
-
-    Only on Linux does the binary take the directory from the environment. On
-    macOS and Windows it asks the system, so there the tests still use the real
-    one.
-    """
-    return {**os.environ, "XDG_DATA_HOME": str(tmp_path)}
+    """Give both implementations a fresh data directory on every platform."""
+    return {
+        **os.environ,
+        "ENSURECONDA_DATA_DIR": str(tmp_path / "ensure-conda"),
+        "XDG_DATA_HOME": str(tmp_path / "ignored-xdg"),
+    }
 
 
 @pytest.mark.parametrize(
@@ -68,20 +64,24 @@ def test_install_and_force_refresh(
 ) -> None:
     if golang_exe is None:
         raise pytest.skip("environment variable not set")
-    if replace_rejected and platform != "linux":
-        pytest.skip("only Linux supports isolating the Go data directory via XDG")
-    if platform == "linux":
-        data = tmp_path / "ensure-conda"
-        data.mkdir()
-        standalone = "--no-micromamba" in flags
+    data = tmp_path / "ensure-conda"
+    data.mkdir()
+    standalone = "--no-micromamba" in flags
+    if platform != "win32":
         # Model a developer's populated cache: another usable flavor must not
         # satisfy this test instead of installing the requested one.
         other = data / ("mamba" if standalone else "conda_standalone")
         output = "mamba 1.5.12" if standalone else "conda 25.1.0"
         other.write_text(f"#!/bin/sh\necho {output}\n")
         other.chmod(0o755)
-        if replace_rejected:
-            executable = data / ("conda_standalone" if standalone else "micromamba")
+    if replace_rejected:
+        name = "conda_standalone" if standalone else "micromamba"
+        executable = data / (name + (".exe" if platform == "win32" else ""))
+        if platform == "win32":
+            # A corrupt PE file provides the same unusable-cache case without
+            # requiring a POSIX shell to fake an old version.
+            executable.write_bytes(b"not an executable")
+        else:
             prefix = "conda " if standalone else ""
             # A new file must still be replaced when its version is too old.
             executable.write_text(f"#!/bin/sh\necho {prefix}0.1.0\n")
@@ -97,8 +97,7 @@ def test_install_and_force_refresh(
         "conda_standalone" if "--no-micromamba" in flags else "micromamba"
     )
     assert installed["version"] != "0.1.0"
-    if platform == "linux":
-        assert pathlib.Path(installed["path"]).parent == tmp_path / "ensure-conda"
+    assert pathlib.Path(installed["path"]).parent == data
     subprocess.check_call([installed["path"], "--help"])
     found = json.loads(
         subprocess.check_output([*args, "--no-install"], encoding="utf8", env=env)
@@ -117,11 +116,6 @@ def test_install_and_force_refresh(
     )
     assert found == python_result
 
-    # macOS and Windows use the real user data directory; do not force a
-    # replacement or change timestamps there.
-    if platform != "linux":
-        return
-
     # Distinguish the replacement even on filesystems with coarse timestamps.
     cached = pathlib.Path(installed["path"])
     fresh_timestamp = time.time() - 60
@@ -134,13 +128,30 @@ def test_install_and_force_refresh(
     assert refreshed["flavor"] == installed["flavor"]
     assert cached.stat().st_mtime_ns > cached_mtime
     subprocess.check_call([refreshed["path"], "--help"])
-    assert refreshed == json.loads(
+    python_refreshed = json.loads(
         subprocess.check_output(
             [sys.executable, "-m", "ensureconda", "--json", "--no-install", *flags],
             encoding="utf8",
             env=env,
         )
     )
+    assert os.path.normcase(refreshed["path"]) == os.path.normcase(
+        python_refreshed["path"]
+    )
+    assert refreshed["flavor"] == python_refreshed["flavor"]
+    assert refreshed["version"] == python_refreshed["version"]
+
+    # Changing the override must hide the previous installation in both CLIs.
+    empty_env = {**env, "ENSURECONDA_DATA_DIR": str(tmp_path / "empty-data")}
+    for command in [[golang_exe], [sys.executable, "-m", "ensureconda"]]:
+        absent = subprocess.run(
+            [*command, "--no-install", "--json", *flags],
+            env=empty_env,
+            capture_output=True,
+            encoding="utf8",
+        )
+        assert absent.returncode == 1
+        assert absent.stdout == ""
 
 
 @pytest.mark.parametrize("flavor", ["micromamba", "conda_standalone"])
@@ -155,8 +166,8 @@ def test_default_flags(
 ) -> None:
     if golang_exe is None:
         pytest.skip("environment variable not set")
-    if platform != "linux":
-        pytest.skip("only Linux supports isolating the Go data directory via XDG")
+    if platform == "win32":
+        pytest.skip("the fake executables in this test are POSIX shell scripts")
     data = tmp_path / "ensure-conda"
     data.mkdir()
     executable = data / flavor
@@ -226,8 +237,8 @@ def test_output_matches_python(
 ) -> None:
     if golang_exe is None:
         pytest.skip("environment variable not set")
-    if platform != "linux":
-        pytest.skip("only Linux supports isolating the Go data directory via XDG")
+    if platform == "win32":
+        pytest.skip("the fake executables in this test are POSIX shell scripts")
     data = tmp_path / "ensure-conda"
     data.mkdir()
     executable = data / flavor
@@ -277,10 +288,10 @@ def test_output_matches_python(
 @pytest.mark.parametrize("as_json", [False, True], ids=["plain", "json"])
 @pytest.mark.parametrize(
     "dirname",
-    [b"caf\xc3\xa9", b"\xf0\x9d\x84\x9e", b"lat\xe9"],
-    ids=["utf8", "non-bmp", "invalid-utf8"],
+    [b"caf\xc3\xa9", b"\xf0\x9d\x84\x9e", b"lat\xe9", b"with:colon"],
+    ids=["utf8", "non-bmp", "invalid-utf8", "path-separator"],
 )
-def test_non_ascii_path(
+def test_default_directory_matches_python(
     golang_exe: Optional[str],
     isolated_env: Dict[str, str],
     tmp_path: pathlib.Path,
@@ -291,7 +302,7 @@ def test_non_ascii_path(
     if golang_exe is None:
         pytest.skip("environment variable not set")
     if platform != "linux":
-        pytest.skip("only Linux supports isolating the Go data directory via XDG")
+        pytest.skip("only Linux uses XDG_DATA_HOME for the default data directory")
     data_home = tmp_path / os.fsdecode(dirname)
     data = data_home / "ensure-conda"
     data.mkdir(parents=True)
@@ -301,10 +312,12 @@ def test_non_ascii_path(
     flags = ["--no-install", "--no-mamba", "--no-conda", "--no-conda-exe"]
     if as_json:
         flags.append("--json")
+    env = {**isolated_env, "PATH": "", "XDG_DATA_HOME": str(data_home)}
+    env.pop("ENSURECONDA_DATA_DIR", None)
     result = subprocess.run(
         [golang_exe, *flags],
         capture_output=True,
-        env={**isolated_env, "PATH": "", "XDG_DATA_HOME": str(data_home)},
+        env=env,
     )
     if as_json and dirname == b"lat\xe9":
         assert result.returncode == 1
@@ -317,6 +330,20 @@ def test_non_ascii_path(
             assert json.loads(result.stdout)["path"] == str(executable)
         else:
             assert result.stdout == os.fsencode(executable)
+
+    if not as_json and dirname == b"lat\xe9":
+        # Python's plain output fails under regular UTF-8 locales; see #144.
+        return
+    python_result = subprocess.run(
+        [sys.executable, "-m", "ensureconda", *flags], capture_output=True, env=env
+    )
+    assert python_result.returncode == 0
+    if as_json:
+        assert json.loads(python_result.stdout)["path"] == str(executable)
+        if dirname != b"lat\xe9":
+            assert json.loads(result.stdout) == json.loads(python_result.stdout)
+    else:
+        assert python_result.stdout == result.stdout + b"\n"
 
 
 @pytest.mark.parametrize(
@@ -347,8 +374,7 @@ def test_find_installed_executable(
     # On Windows, a found executable's extension is spelled as in PATHEXT
     # (".EXE"), while a fresh install reports ".exe".
     assert os.path.normcase(found) == os.path.normcase(installed)
-    if platform == "linux":
-        assert pathlib.Path(installed).parent == tmp_path / "ensure-conda"
+    assert pathlib.Path(installed).parent == tmp_path / "ensure-conda"
 
 
 @pytest.mark.parametrize("as_json", [False, True], ids=["plain", "json"])
@@ -357,9 +383,7 @@ def test_reports_nothing_found(
 ) -> None:
     if golang_exe is None:
         raise pytest.skip("environment variable not set")
-    # Outside Linux the data directory isn't isolated and may hold micromamba
-    # or conda-standalone from an earlier test, so leave both out.
-    flags = ["--no-micromamba", "--no-conda-exe", "--no-install"]
+    flags = ["--no-install"]
     if as_json:
         flags.append("--json")
     result = subprocess.run(
