@@ -3,9 +3,10 @@
 import io
 import json
 import logging
+import subprocess
 import tarfile
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import pytest
 import requests
@@ -208,6 +209,49 @@ def serve_package(
     return urls
 
 
+@pytest.mark.parametrize("tool", ["micromamba", "conda_standalone"])
+@pytest.mark.parametrize("failure", ["execution", "version", "unknown", "none"])
+def test_validate_before_replacing_cache(
+    tool: str,
+    failure: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(installer, "site_path", lambda: tmp_path)
+    target = tmp_path / (tool + installer.exe_suffix())
+    target.write_bytes(b"old")
+    urls = serve_package(monkeypatch, tool)
+
+    def probe(path: Path, flavor: str) -> Optional[Version]:
+        assert path != target and path.read_bytes() == b"new"
+        assert target.read_bytes() == b"old"
+        if failure == "execution":
+            raise OSError("cannot run")
+        return (
+            None
+            if failure == "unknown"
+            else Version("1" if failure == "version" else "2")
+        )
+
+    monkeypatch.setattr(_versions, "_probe_version", probe)
+    install = (
+        installer.install_micromamba
+        if tool == "micromamba"
+        else installer.install_conda_exe
+    )
+    if failure == "none":
+        assert install(SpecifierSet(">=2"), force=True) == target
+        assert target.read_bytes() == b"new"
+    else:
+        with pytest.raises(installer.DownloadedExecutableError):
+            install(SpecifierSet(">=2"), force=True)
+        assert target.read_bytes() == b"old"
+    assert len(urls) == 2
+    assert all(
+        path == target or path.name.endswith(".lock") for path in tmp_path.iterdir()
+    )
+
+
 @pytest.mark.parametrize("policy", ["fallback", "per-target", "force"])
 def test_later_requirement_can_install_after_constraint_miss(
     policy: api.InstallPolicy,
@@ -221,3 +265,51 @@ def test_later_requirement_can_install_after_constraint_miss(
     result = api.ensure(["micromamba>=3", "micromamba>=1"], install=policy)
     assert result is not None and result.version == Version("2")
     assert len([url for url in urls if url.endswith(".tar.bz2")]) == 1
+
+
+@pytest.mark.parametrize("target", ["micromamba", "micromamba>=1"])
+@pytest.mark.parametrize("output", ["", "new-format", "undecodable", "nonzero"])
+def test_download_with_unknown_version(
+    target: str,
+    output: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(installer, "site_path", lambda: tmp_path)
+    serve_package(monkeypatch, "micromamba")
+    cached = tmp_path / ("micromamba" + installer.exe_suffix())
+    cached.write_bytes(b"old")
+
+    def check_output(*args: Any, **kwargs: Any) -> str:
+        if output == "undecodable":
+            return b"\xff".decode()
+        if output == "nonzero":
+            raise subprocess.CalledProcessError(1, "micromamba --version")
+        return output
+
+    monkeypatch.setattr(subprocess, "check_output", check_output)
+    if target == "micromamba" and output != "nonzero":
+        assert api.ensure([target], install="force") == api.CondaExecutable(
+            cached, "micromamba", None
+        )
+        assert cached.read_bytes() == b"new"
+    else:
+        with pytest.raises(installer.DownloadedExecutableError):
+            api.ensure([target], install="force")
+        assert cached.read_bytes() == b"old"
+
+
+def test_standalone_package_revision_can_differ_from_executable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(installer, "site_path", lambda: tmp_path)
+    monkeypatch.setattr(_versions, "_probe_version", lambda *args: Version("26.9.4"))
+    serve_package(monkeypatch, "conda_standalone", "26.9.4.post1")
+    with caplog.at_level("INFO", logger="ensureconda"):
+        installer.install_conda_exe(SpecifierSet(">=26.9"), force=True)
+    assert any(
+        "executable version 26.9.4 (package version 26.9.4.post1)" in message
+        for message in caplog.messages
+    )

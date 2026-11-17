@@ -8,7 +8,11 @@ from click.testing import CliRunner
 
 from ensureconda import cli
 from ensureconda.cli import ensureconda_cli
-from ensureconda.installer import ExecutableReplacementError, NotPublishedError
+from ensureconda.installer import (
+    DownloadedExecutableError,
+    ExecutableReplacementError,
+    NotPublishedError,
+)
 from ensureconda.resolve import UnsupportedPlatformError
 
 
@@ -54,6 +58,14 @@ def test_invalid_version_is_a_usage_error(option: str) -> None:
             ),
             "Error: Could not replace executable /cache/micromamba: Permission denied\n",
         ),
+        (
+            DownloadedExecutableError(
+                "micromamba: downloaded executable reports 1.5, expected 2.0"
+                " satisfying >=2"
+            ),
+            "Error: micromamba: downloaded executable reports 1.5, expected 2.0"
+            " satisfying >=2\n",
+        ),
     ],
     ids=[
         "download-failure",
@@ -62,6 +74,7 @@ def test_invalid_version_is_a_usage_error(option: str) -> None:
         "unsupported-platform",
         "replacement-failure",
         "replacement-failure-with-metadata",
+        "invalid-download",
     ],
 )
 @pytest.mark.parametrize(

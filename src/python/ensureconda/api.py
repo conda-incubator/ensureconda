@@ -35,6 +35,7 @@ from ensureconda._versions import (
 )
 from ensureconda._versions import requirement_text
 from ensureconda.installer import (
+    DownloadedExecutableError,
     NoCompatibleVersionError,
     NotPublishedError,
     install_conda_exe,
@@ -214,21 +215,23 @@ def ensure(
       tool at most once per call. Requires at least one installable target.
 
     Return the path, flavor, and version, or None if no compatible executable
-    is found. If --version cannot start or exits unsuccessfully, log a warning
-    and skip the candidate, including after installation.
-    Successful commands with unparseable or undecodable output can satisfy
-    unconstrained targets, with version=None.
+    is found. An installed candidate that cannot run is logged and skipped.
+    Successful installed commands with unparseable or undecodable output can
+    satisfy unconstrained targets, with version=None.
 
-    With probe_version=False, run --version only when a target has constraints;
-    otherwise the version is None and the executable is not checked by running
-    it. Unknown versions cannot satisfy a constraint.
+    With probe_version=False, probe installed candidates only when constrained,
+    and omit unconstrained result versions. Downloads must always run
+    successfully; without a constraint, an unreadable version is acceptable.
     Select the newest package satisfying the constraint before downloading.
     Micromamba uses the latest redirect first, then release metadata if needed.
     A target with no matching published version permits later targets, including
     less restrictive requirements for the same tool.
-    Forced installation replaces the cached copy before checking the result.
-    Rejection by a version constraint or execution check does not restore the
-    previous copy, even if it was compatible.
+
+    Validate downloaded executables before replacing the cached copy, even in
+    force mode. A download that fails this check keeps the old cache and is
+    skipped with a warning. If subsequent targets yield no match, raise the
+    last DownloadedExecutableError. Package and executable versions may differ;
+    the executable must independently satisfy the requested constraint.
 
     If ensureconda cannot determine which build to download for this Python
     environment, search existing executables only (unless install="force").
@@ -301,9 +304,10 @@ def _ensure(
         )
 
     refreshed: Dict[Flavor, Path] = {}
-    unpublished: Set[Flavor] = set()
+    failed: Set[Flavor] = set()
+    last_invalid_download: Optional[DownloadedExecutableError] = None
     for index, (flavor, constraint, installing) in enumerate(steps):
-        if flavor in unpublished:
+        if flavor in failed:
             continue
         if installing:
             try:
@@ -331,15 +335,23 @@ def _ensure(
                     error,
                 )
                 continue
-            except NotPublishedError as error:
+            except (DownloadedExecutableError, NotPublishedError) as error:
+                if isinstance(error, DownloadedExecutableError):
+                    last_invalid_download = error
                 if install == "force":
-                    unpublished.add(flavor)
+                    failed.add(flavor)
                 remaining = dict.fromkeys(
                     name.replace("_", "-")
                     for name, _, _ in steps[index + 1 :]
-                    if name not in unpublished
+                    if name not in failed
                 )
                 if not remaining:
+                    if (
+                        isinstance(error, NotPublishedError)
+                        and last_invalid_download is not None
+                    ):
+                        logger.warning("%s", error)
+                        break
                     raise
                 logger.warning(f"{error}; trying {' or '.join(remaining)} instead")
                 continue
@@ -363,6 +375,8 @@ def _ensure(
                 else:
                     logger.info("Selected %s %s at %s", flavor, result.version, path)
                 return result
+    if last_invalid_download is not None:
+        raise last_invalid_download
     if unsupported_platform is not None:
         raise unsupported_platform
     return None

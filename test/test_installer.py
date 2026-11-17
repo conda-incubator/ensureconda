@@ -395,7 +395,9 @@ def test_micromamba_is_extracted_while_holding_the_download_lock(
     response = requests.Response()
     response._content = b"tarball"
 
-    def extract(tarball: io.BytesIO, filename: str, dest_filename: str) -> Path:
+    def extract(
+        tarball: io.BytesIO, filename: str, dest_filename: str, **kwargs: object
+    ) -> Path:
         # Another process must still be unable to take the download lock.
         with pytest.raises(filelock.Timeout):
             filelock.FileLock(str(lock_path)).acquire(timeout=0)

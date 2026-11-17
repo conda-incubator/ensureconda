@@ -445,13 +445,24 @@ def test_force_downloads_repeated_tool_only_once(
 
 
 @pytest.mark.usefixtures("no_discovery")
+@pytest.mark.parametrize(
+    "error",
+    [
+        installer.NotPublishedError("micromamba is not published"),
+        installer.DownloadedExecutableError(
+            "micromamba: downloaded executable failed its version check"
+        ),
+    ],
+    ids=["not-published", "invalid-download"],
+)
 @pytest.mark.parametrize("standalone", [False, True])
-def test_force_does_not_retry_an_unpublished_tool_for_later_constraints(
+def test_force_does_not_retry_a_failed_tool_for_later_constraints(
     standalone: bool,
+    error: Exception,
     monkeypatch: pytest.MonkeyPatch,
     log_messages: Callable[[], str],
 ) -> None:
-    micro = Mock(side_effect=installer.NotPublishedError("micromamba is not published"))
+    micro = Mock(side_effect=error)
     conda = Mock(return_value=Path("conda_standalone"))
     monkeypatch.setattr(api, "install_micromamba", micro)
     monkeypatch.setattr(api, "install_conda_exe", conda)
@@ -461,11 +472,9 @@ def test_force_does_not_retry_an_unpublished_tool_for_later_constraints(
         result = api.ensure(targets, install="force", probe_version=False)
         assert result is not None and result.path == Path("conda_standalone")
         conda.assert_called_once()
-        assert log_messages() == (
-            "micromamba is not published; trying conda-standalone instead\n"
-        )
+        assert log_messages() == f"{error}; trying conda-standalone instead\n"
     else:
-        with pytest.raises(installer.NotPublishedError):
+        with pytest.raises(type(error)):
             api.ensure(targets, install="force")
         conda.assert_not_called()
         assert log_messages() == ""

@@ -5,6 +5,7 @@ import logging
 import os
 import shutil
 import stat
+import subprocess
 import tarfile
 import time
 import uuid
@@ -31,7 +32,9 @@ import requests
 from conda_package_streaming.package_streaming import stream_conda_component
 from packaging.version import InvalidVersion, Version
 
+from ensureconda import _versions
 from ensureconda._versions import (
+    Flavor,
     _VersionConstraint,
     check_executable,
     requirement_text,
@@ -60,6 +63,16 @@ class NotPublishedError(RuntimeError):
 
 class NoCompatibleVersionError(RuntimeError):
     """Packages exist for the platform, but none satisfies this target."""
+
+
+class DownloadedExecutableError(RuntimeError):
+    """The downloaded executable cannot run or fails the requested requirement."""
+
+
+class DownloadValidation(NamedTuple):
+    flavor: Flavor
+    constraint: _VersionConstraint
+    expected_version: Version
 
 
 class ExecutableReplacementError(OSError, RuntimeError):
@@ -212,20 +225,31 @@ def request_url_with_retry(
 
 
 def extract_files_from_tar_bz2(
-    tarball: io.BytesIO, filename: str, dest_filename: str
+    tarball: io.BytesIO,
+    filename: str,
+    dest_filename: str,
+    *,
+    validation: Optional[DownloadValidation] = None,
 ) -> Path:
     tarball.seek(0)
     with tarfile.open(mode="r:bz2", fileobj=tarball) as tf:
         fo = tf.extractfile(filename)
         if fo is None:
             raise RuntimeError("Could not extract executable!")
-        return write_executable_from_file_object(fo, dest_filename)
+        return write_executable_from_file_object(
+            fo, dest_filename, validation=validation
+        )
 
 
-def write_executable_from_file_object(fo: IO[bytes], dest_filename: str) -> Path:
+def write_executable_from_file_object(
+    fo: IO[bytes],
+    dest_filename: str,
+    *,
+    validation: Optional[DownloadValidation] = None,
+) -> Path:
     site_path().mkdir(parents=True, exist_ok=True)
     target_path = site_path() / dest_filename
-    with new_executable(target_path) as exe_fo:
+    with new_executable(target_path, validation=validation) as exe_fo:
         shutil.copyfileobj(fo, exe_fo, length=1024 * 1024)
     return target_path
 
@@ -283,7 +307,12 @@ def verify_sha256(fileobj: IO[bytes], expected: str, url: str) -> None:
         )
 
 
-def stream_conda_executable(url: str, sha256: Optional[str] = None) -> Path:
+def stream_conda_executable(
+    url: str,
+    sha256: Optional[str] = None,
+    *,
+    validation: Optional[DownloadValidation] = None,
+) -> Path:
     """Extract `conda.exe` from the conda-standalone package at the given URL.
 
     This is roughly a more modern version of `extract_files_from_tar_bz2`
@@ -311,7 +340,9 @@ def stream_conda_executable(url: str, sha256: Optional[str] = None) -> Path:
                         raise RuntimeError(
                             f"Could not extract executable {member.name} from {url}!"
                         )
-                    conda_exe = write_executable_from_file_object(fo, dest_filename)
+                    conda_exe = write_executable_from_file_object(
+                        fo, dest_filename, validation=validation
+                    )
                     return conda_exe
         raise RuntimeError("Could not find conda.exe in the conda-standalone package")
 
@@ -374,7 +405,13 @@ def install_conda_exe(
             "conda-standalone: selected version %s for %s", chosen.version, subdir
         )
         url = "https:" + chosen.download_url
-        path_to_written_executable = stream_conda_executable(url, chosen.sha256)
+        path_to_written_executable = stream_conda_executable(
+            url,
+            chosen.sha256,
+            validation=DownloadValidation(
+                "conda_standalone", constraint, Version(chosen.version)
+            ),
+        )
         return path_to_written_executable
 
 
@@ -496,6 +533,7 @@ def install_micromamba(
 
         url, version, sha256 = select_micromamba(subdir, constraint)
         logger.info("micromamba: downloading version %s for %s", version, subdir)
+        validation = DownloadValidation("micromamba", constraint, version)
         resp = request_url_with_retry(url)
         tarball = io.BytesIO(resp.content)
         if sha256:
@@ -511,10 +549,15 @@ def install_micromamba(
                     if member.name == filename:
                         fo = tar.extractfile(member)
                         if fo is not None:
-                            return write_executable_from_file_object(fo, dest_filename)
+                            return write_executable_from_file_object(
+                                fo, dest_filename, validation=validation
+                            )
             raise RuntimeError("Could not find micromamba in the package")
         return extract_files_from_tar_bz2(
-            tarball=tarball, filename=filename, dest_filename=dest_filename
+            tarball=tarball,
+            filename=filename,
+            dest_filename=dest_filename,
+            validation=validation,
         )
 
 
@@ -593,7 +636,9 @@ def exe_suffix() -> str:
 
 
 @contextlib.contextmanager
-def new_executable(target_filename: "Path") -> Generator[IO[bytes], None, None]:
+def new_executable(
+    target_filename: "Path", *, validation: Optional[DownloadValidation] = None
+) -> Generator[IO[bytes], None, None]:
     """Create a new executable that can be written to.
 
     Care is take to both prevent concurrent writes as well as guarding against
@@ -601,12 +646,16 @@ def new_executable(target_filename: "Path") -> Generator[IO[bytes], None, None]:
     """
     lock_path = f"{str(target_filename)}.lock"
     with lock_with_feedback(lock_path, f"file write ({target_filename})"):
-        temp_filename = target_filename.with_name(uuid.uuid4().hex)
+        temp_filename = target_filename.with_name(
+            uuid.uuid4().hex + (".exe" if is_windows else "")
+        )
         try:
             with open(temp_filename, "wb") as fo:
                 yield fo
             st = os.stat(temp_filename)
             os.chmod(temp_filename, st.st_mode | stat.S_IXUSR)
+            if validation is not None:
+                validate_download(temp_filename, validation)
             try:
                 os.replace(temp_filename, target_filename)
             except OSError as error:
@@ -630,3 +679,33 @@ def new_executable(target_filename: "Path") -> Generator[IO[bytes], None, None]:
             with contextlib.suppress(OSError):
                 temp_filename.unlink()
             raise
+
+
+def validate_download(path: Path, validation: DownloadValidation) -> None:
+    tool = validation.flavor.replace("_", "-")
+    try:
+        version = _versions._probe_version(path, validation.flavor)
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise DownloadedExecutableError(
+            f"{tool}: downloaded executable failed its version check: {error}"
+        ) from error
+    except (InvalidVersion, UnicodeDecodeError):
+        version = None
+    if version is None and validation.constraint is None:
+        logger.info(
+            "%s: downloaded executable ran but reported no recognizable version (package version %s)",
+            tool,
+            validation.expected_version,
+        )
+        return
+    if version is None or not version_satisfies(version, validation.constraint):
+        raise DownloadedExecutableError(
+            f"{tool}: downloaded executable reports {version or 'unknown version'}, "
+            f"expected {validation.expected_version} satisfying {requirement_text(validation.constraint)}"
+        )
+    logger.info(
+        "%s: validated executable version %s (package version %s)",
+        tool,
+        version,
+        validation.expected_version,
+    )
