@@ -208,6 +208,17 @@ conda-standalone; those are reported as `"micromamba"` and `"conda"`. It raises
 `FileNotFoundError` or `PermissionError` for a path that doesn't exist or isn't
 executable, and `ValueError` for an executable it doesn't recognize.
 
+### Cache location
+
+By default, ensureconda stores downloaded executables in:
+
+- Linux: `~/.local/share/ensure-conda` (or `$XDG_DATA_HOME/ensure-conda` if set)
+- macOS: `~/Library/Application Support/ensure-conda`
+- Windows: `%LOCALAPPDATA%\ensure-conda\ensure-conda`
+
+To use a different directory, set `ENSURECONDA_DATA_DIR` to its absolute path.
+This applies to both Python and Go. An unset or empty value keeps the default.
+
 ### Configuring conda-standalone channel
 
 When ensureconda downloads the conda-standalone executable, you can select the

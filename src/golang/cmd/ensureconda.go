@@ -120,6 +120,9 @@ func sitePath() string {
 	if TestSitePath != "" {
 		return TestSitePath
 	}
+	if override := os.Getenv("ENSURECONDA_DATA_DIR"); override != "" {
+		return override
+	}
 	return appdirs.UserDataDir("ensure-conda", "", "", false)
 }
 
