@@ -151,10 +151,14 @@ func retryableRequestError(err error) bool {
 // requestURLWithRetry reads the entire body into the returned response, so
 // that a truncated or stalled body is retried like any other failure.
 func requestURLWithRetry(rawURL string) (*response, error) {
+	return requestURLWithRetryMode(rawURL, false)
+}
+
+func requestURLWithRetryMode(rawURL string, headersOnly bool) (*response, error) {
 	deadline := retryNow().Add(retryTimeBudget)
 	backoff := time.Second
 	for attempt := 1; ; attempt++ {
-		resp, err := requestURL(rawURL)
+		resp, err := requestURLMode(rawURL, headersOnly)
 		if err == nil {
 			return resp, nil
 		}
@@ -187,22 +191,50 @@ func requestURLWithRetry(rawURL string) (*response, error) {
 
 // response holds the parts of an HTTP response that callers use.
 type response struct {
-	status string
-	header http.Header
-	body   []byte
+	statusCode int
+	status     string
+	header     http.Header
+	body       []byte
 }
 
 // requestURL checks the status before reading the body, so incomplete error
 // bodies cannot hide a permanent HTTP error or its Retry-After header.
-func requestURL(rawURL string) (*response, error) {
-	resp, err := httpClient().Get(rawURL)
+func requestURL(rawURL string) (*response, error) { return requestURLMode(rawURL, false) }
+
+func getURL(rawURL string, headersOnly bool) (*http.Response, error) {
+	client := httpClient()
+	if !headersOnly {
+		return client.Get(rawURL)
+	}
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := client.Transport.RoundTrip(req)
+	if err != nil {
+		return nil, &url.Error{Op: "Get", URL: rawURL, Err: err}
+	}
+	return resp, nil
+}
+
+func requestURLMode(rawURL string, headersOnly bool) (*response, error) {
+	resp, err := getURL(rawURL, headersOnly)
 	if err != nil {
 		return nil, err
 	}
 	defer resp.Body.Close()
-	result := &response{status: resp.Status, header: resp.Header}
+	result := &response{statusCode: resp.StatusCode, status: resp.Status, header: resp.Header}
+	if headersOnly {
+		switch resp.StatusCode {
+		case 301, 302, 303, 307, 308, http.StatusNotFound:
+			return result, nil
+		}
+	}
 	if err := checkStatus(resp, rawURL); err != nil {
 		return result, err
+	}
+	if headersOnly {
+		return result, nil
 	}
 	var body bytes.Buffer
 	if length := resp.ContentLength; length > 0 && length <= maxPreallocatedBody {

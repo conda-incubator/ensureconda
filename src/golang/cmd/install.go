@@ -38,20 +38,6 @@ func targetExeFilename(exeName string) string {
 	return targetFileName
 }
 
-// micromambaSubdirs are the platforms that micromamba is published for. Keep
-// it in step with MICROMAMBA_SUBDIRS in src/python/ensureconda/installer.py.
-// It is a variable so that tests can change it.
-var micromambaSubdirs = map[string]bool{
-	"linux-64":      true,
-	"linux-aarch64": true,
-	"linux-ppc64le": true,
-	"linux-riscv64": true,
-	"osx-64":        true,
-	"osx-arm64":     true,
-	"win-64":        true,
-	"win-arm64":     true,
-}
-
 // notPublishedError means that nothing to install is published for the platform.
 type notPublishedError struct {
 	message string
@@ -69,19 +55,7 @@ func installMicromambaForPlatform(forceInstall bool) (string, error) {
 		return "", err
 	}
 	url := fmt.Sprintf("https://micro.mamba.pm/api/micromamba/%s/latest", subdir)
-	exe, err := installMicromamba(url, forceInstall)
-	return exe, micromambaInstallError(err, subdir)
-}
-
-// micromambaInstallError turns a 404 into a notPublishedError, unless
-// micromamba is published for the platform: micro.mamba.pm also answers 404
-// for a release that hasn't been uploaded for a platform yet.
-func micromambaInstallError(err error, subdir string) error {
-	var status *httpStatusError
-	if errors.As(err, &status) && status.statusCode == 404 && !micromambaSubdirs[subdir] {
-		return &notPublishedError{fmt.Sprintf("micromamba is not published for %s", subdir)}
-	}
-	return err
+	return installMicromamba(url, forceInstall)
 }
 
 type AnacondaPkgAttr struct {
@@ -213,7 +187,11 @@ func downloadCondaStandalone(channel string, subdir string, target string) (stri
 // computeCandidates returns the sorted list of available conda-standalone
 // packages for the given channel and subdir (ascending by version/build/timestamp).
 func computeCandidates(channel string, subdir string) ([]AnacondaPkg, error) {
-	url := fmt.Sprintf("%s/package/%s/conda-standalone/files", anacondaAPIBaseURL, channel)
+	return computePackageCandidates(channel, subdir, "conda-standalone")
+}
+
+func computePackageCandidates(channel, subdir, packageName string) ([]AnacondaPkg, error) {
+	url := fmt.Sprintf("%s/package/%s/%s/files", anacondaAPIBaseURL, channel, packageName)
 	resp, err := requestURLWithRetry(url)
 	if err != nil {
 		return nil, fmt.Errorf("GET candidates: %w", err)
@@ -223,29 +201,32 @@ func computeCandidates(channel string, subdir string) ([]AnacondaPkg, error) {
 		return nil, fmt.Errorf("decoding candidates from %s: %w", url, err)
 	}
 
-	candidates := selectCandidates(data, subdir)
+	candidates := selectCandidates(data, subdir, packageName)
 	if len(candidates) == 0 {
-		return nil, fmt.Errorf("no conda-standalone package found for %s in channel %s", subdir, channel)
+		if packageName == "micromamba" {
+			return nil, &notPublishedError{fmt.Sprintf("micromamba is not published for %s", subdir)}
+		}
+		return nil, &notPublishedError{fmt.Sprintf("no %s package found for %s in channel %s", packageName, subdir, channel)}
 	}
 	sort.Sort(AnacondaPkgs(candidates))
 	return candidates, nil
 }
 
 // selectCandidates returns the packages in data that are suitable for subdir.
-func selectCandidates(data []AnacondaPkg, subdir string) []AnacondaPkg {
+func selectCandidates(data []AnacondaPkg, subdir, packageName string) []AnacondaPkg {
 	candidates := make([]AnacondaPkg, 0)
 	for _, datum := range data {
 		if datum.Attrs.Subdir != subdir ||
 			// Ignore onedir packages as workaround for
 			// <https://github.com/conda/conda-standalone/issues/182>
-			strings.Contains(datum.Attrs.Build, "_onedir_") ||
+			(packageName == "conda-standalone" && strings.Contains(datum.Attrs.Build, "_onedir_")) ||
 			// Builds marked as broken get the "broken" label and may keep "main".
 			(datum.Labels != nil && (!slices.Contains(datum.Labels, "main") || slices.Contains(datum.Labels, "broken"))) {
 			continue
 		}
 		artifact, err := url.Parse(datum.DownloadUrl)
 		if err != nil {
-			log.Warnf("Skipping conda-standalone %s for %s: invalid download URL", datum.Version, subdir)
+			log.Warnf("Skipping %s %s for %s: invalid download URL", packageName, datum.Version, subdir)
 			continue
 		}
 		if !(strings.HasSuffix(artifact.Path, ".tar.bz2") || strings.HasSuffix(artifact.Path, ".conda")) {
@@ -256,7 +237,7 @@ func selectCandidates(data []AnacondaPkg, subdir string) []AnacondaPkg {
 			log.WithFields(log.Fields{
 				"version": datum.Version,
 				"subdir":  datum.Attrs.Subdir,
-			}).Warn("skipping unparseable conda-standalone version")
+			}).Warnf("skipping unparseable %s version", packageName)
 			continue
 		}
 		candidates = append(candidates, datum)
@@ -264,10 +245,15 @@ func selectCandidates(data []AnacondaPkg, subdir string) []AnacondaPkg {
 	return candidates
 }
 
-func inferArchiveTypeFromUrl(url string) ArchiveType {
-	if strings.HasSuffix(url, "/latest") || strings.HasSuffix(url, ".tar.bz2") {
+func inferArchiveTypeFromUrl(rawURL string) ArchiveType {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return UnrecognizedArchive
+	}
+	path := parsed.Path
+	if strings.HasSuffix(path, ".tar.bz2") {
 		return TarBz2Archive
-	} else if strings.HasSuffix(url, ".conda") {
+	} else if strings.HasSuffix(path, ".conda") {
 		return CondaArchive
 	}
 	return UnrecognizedArchive
@@ -321,7 +307,7 @@ func unpackConda(archive []byte, fileNameMap map[string]string) (string, error) 
 	}
 
 	for _, f := range zipReader.File {
-		if strings.HasPrefix(f.Name, "pkg-conda-standalone") && strings.HasSuffix(f.Name, ".tar.zst") {
+		if strings.HasPrefix(f.Name, "pkg-") && strings.HasSuffix(f.Name, ".tar.zst") {
 			rc, err := f.Open()
 			if err != nil {
 				return "", err
@@ -356,8 +342,16 @@ func installMicromamba(url string, forceInstall bool) (string, error) {
 			return target, nil
 		}
 	}
-	log.Info("micromamba: downloading latest")
-	return downloadAndUnpackArchive(url, "", map[string]string{
+	subdir, err := PlatformSubdir()
+	if err != nil {
+		return "", err
+	}
+	chosen, err := selectMicromamba(url, subdir, pep440.MustParse(DefaultMinMambaVersion))
+	if err != nil {
+		return "", err
+	}
+	log.Infof("micromamba: downloading version %s for %s", chosen.Version, subdir)
+	return downloadAndUnpackArchive(chosen.DownloadUrl, chosen.Sha256, map[string]string{
 		"Library/bin/micromamba.exe": target,
 		"bin/micromamba":             target,
 	})
@@ -541,4 +535,50 @@ func newestCompatible(candidates []AnacondaPkg, minimum pep440.Version, tool, su
 		}
 	}
 	return AnacondaPkg{}, &noCompatibleVersionError{fmt.Sprintf("%s: no published version for %s satisfies >=%s; newest available is %s", tool, subdir, minimum.String(), candidates[len(candidates)-1].Version)}
+}
+
+func selectMicromamba(latest, subdir string, minimum pep440.Version) (AnacondaPkg, error) {
+	resp, err := requestURLWithRetryMode(latest, true)
+	if err != nil {
+		return AnacondaPkg{}, err
+	}
+	if resp.statusCode == 404 {
+		log.Info("micromamba: latest artifact unavailable; checking release metadata")
+	} else {
+		latestURL, _ := url.Parse(latest)
+		redirect, parseErr := url.Parse(resp.header.Get("Location"))
+		var artifact *url.URL
+		var version *pep440.Version
+		if parseErr == nil && latestURL != nil && resp.statusCode >= 300 && resp.statusCode < 400 {
+			artifact = latestURL.ResolveReference(redirect)
+			prefix := "/conda-forge/" + subdir + "/micromamba-"
+			if artifact.Scheme == "https" && artifact.Host == "conda.anaconda.org" && artifact.RawQuery == "" && artifact.Fragment == "" && strings.HasPrefix(artifact.Path, prefix) && strings.HasSuffix(artifact.Path, ".tar.bz2") {
+				name := strings.TrimSuffix(strings.TrimPrefix(artifact.Path, prefix), ".tar.bz2")
+				if split := strings.LastIndex(name, "-"); split > 0 && split < len(name)-1 {
+					if parsed, err := pep440.Parse(name[:split]); err == nil {
+						version = &parsed
+					}
+				}
+			}
+		}
+		if version == nil {
+			log.Info("micromamba: latest response did not identify a release; checking release metadata")
+		} else if version.LessThan(minimum) {
+			log.Infof("micromamba: latest version %s does not satisfy >=%s; checking release metadata", version.String(), minimum.String())
+		} else {
+			log.Infof("micromamba: selected latest version %s for %s", version.String(), subdir)
+			return AnacondaPkg{Version: version.String(), DownloadUrl: artifact.String()}, nil
+		}
+	}
+	candidates, err := computePackageCandidates("conda-forge", subdir, "micromamba")
+	if err != nil {
+		return AnacondaPkg{}, err
+	}
+	chosen, err := newestCompatible(candidates, minimum, "micromamba", subdir)
+	if err != nil {
+		return AnacondaPkg{}, err
+	}
+	chosen.DownloadUrl = "https:" + chosen.DownloadUrl
+	log.Infof("micromamba: selected version %s for %s", chosen.Version, subdir)
+	return chosen, nil
 }
