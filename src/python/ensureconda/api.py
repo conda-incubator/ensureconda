@@ -37,6 +37,7 @@ from ensureconda.determine_versions import (
 from ensureconda.determine_versions import (
     determine_micromamba_version as determine_micromamba_version,
 )
+from ensureconda.determine_versions import requirement_text
 from ensureconda.installer import (
     NotPublishedError,
     install_conda_exe,
@@ -343,13 +344,7 @@ def _ensure(
             candidates = iter([installed_path])
         else:
             logger.debug(
-                "Searching for %s matching %s",
-                flavor,
-                (
-                    f">={constraint}"
-                    if isinstance(constraint, Version)
-                    else constraint or "any version"
-                ),
+                "Searching for %s matching %s", flavor, requirement_text(constraint)
             )
             candidates = finders[flavor]()
         for path in candidates:

@@ -104,6 +104,27 @@ def _probe_version(executable: _StrPath, flavor: Flavor) -> Optional[Version]:
     return None if version == _LEGACY_UNKNOWN_VERSION else version
 
 
+def version_satisfies(
+    version: Optional[Version], constraint: _VersionConstraint
+) -> bool:
+    if isinstance(constraint, Version):
+        # Preserve the old API's unknown-version sentinel and direct comparison.
+        return (
+            version if version is not None else _LEGACY_UNKNOWN_VERSION
+        ) >= constraint
+    if constraint is None:
+        return True
+    return version is not None and constraint.contains(version, prereleases=True)
+
+
+def requirement_text(constraint: _VersionConstraint) -> str:
+    return (
+        f">={constraint}"
+        if isinstance(constraint, Version)
+        else str(constraint or "any version")
+    )
+
+
 def check_executable(
     path: Path,
     flavor: Flavor,
@@ -139,16 +160,8 @@ def check_executable(
                         reason,
                     )
                 return None
-    requirement = None
-    if isinstance(constraint, Version):
-        # Only the old API compares unknown output as version 0.0.0.
-        comparison_version = version if version is not None else _LEGACY_UNKNOWN_VERSION
-        if comparison_version < constraint:
-            requirement = f">={constraint}"
-    elif constraint is not None:
-        if version is None or not constraint.contains(version, prereleases=True):
-            requirement = str(constraint)
-    if requirement is not None:
+    if not version_satisfies(version, constraint):
+        requirement = requirement_text(constraint)
         if rejection_level is not None:
             found_version = version if version is not None else "unknown version"
             logger.log(
