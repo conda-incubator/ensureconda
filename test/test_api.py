@@ -9,7 +9,11 @@ import requests
 from packaging.version import InvalidVersion, Version
 
 from ensureconda import api, determine_versions, resolve
-from ensureconda.installer import NotPublishedError
+from ensureconda.installer import (
+    DownloadedExecutableError,
+    NoCompatibleVersionError,
+    NotPublishedError,
+)
 from ensureconda.resolve import UnsupportedPlatformError
 
 BROKEN_MAMBA = Path("broken", "mamba")
@@ -107,7 +111,9 @@ def test_install_replaces_a_new_executable_that_the_search_rejected(
         response._content = b"tarball"
         return response
 
-    def extract(tarball: object, filename: str, dest_filename: str) -> Path:
+    def extract(
+        tarball: object, filename: str, dest_filename: str, **kwargs: object
+    ) -> Path:
         nonlocal current
         executable.write_bytes(b"new micromamba")
         executable.chmod(0o755)
@@ -202,6 +208,70 @@ def test_unpublished_micromamba_with_nothing_left_to_try(
 
     with pytest.raises(NotPublishedError, match=NOT_PUBLISHED):
         api.ensureconda(conda=False, conda_exe=False)
+
+
+INVALID_DOWNLOAD = "micromamba: downloaded executable failed its version check"
+
+
+@pytest.mark.usefixtures("nothing_installed")
+@pytest.mark.parametrize("install", ["fallback", "per-target", "force"])
+def test_invalid_micromamba_download_falls_back_to_conda_standalone(
+    install: api.InstallPolicy,
+    monkeypatch: pytest.MonkeyPatch,
+    log_messages: Callable[[], str],
+) -> None:
+    conda_standalone = Path("data", "conda_standalone")
+    failing_micromamba_install(monkeypatch, DownloadedExecutableError(INVALID_DOWNLOAD))
+    monkeypatch.setattr(
+        api, "install_conda_exe", lambda *args, **kwargs: conda_standalone
+    )
+
+    result = api.ensure(
+        ["micromamba", "conda_standalone"], install=install, probe_version=False
+    )
+
+    assert result is not None and result.path == conda_standalone
+    assert log_messages() == f"{INVALID_DOWNLOAD}; trying conda-standalone instead\n"
+
+
+@pytest.mark.usefixtures("nothing_installed")
+def test_invalid_micromamba_download_with_nothing_left_to_try(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    failing_micromamba_install(monkeypatch, DownloadedExecutableError(INVALID_DOWNLOAD))
+
+    with pytest.raises(DownloadedExecutableError, match=INVALID_DOWNLOAD):
+        api.ensure(["micromamba"])
+
+
+@pytest.mark.usefixtures("nothing_installed")
+@pytest.mark.parametrize(
+    "miss", [NoCompatibleVersionError("too old"), NotPublishedError("unpublished")]
+)
+def test_invalid_download_survives_later_miss(
+    miss: Exception,
+    monkeypatch: pytest.MonkeyPatch,
+    log_messages: Callable[[], str],
+) -> None:
+    launch_error = OSError("Exec format error")
+    invalid = DownloadedExecutableError(INVALID_DOWNLOAD)
+
+    def invalid_micromamba(*args: object, **kwargs: object) -> Path:
+        raise invalid from launch_error
+
+    monkeypatch.setattr(api, "install_micromamba", invalid_micromamba)
+
+    def miss_standalone(*args: object, **kwargs: object) -> Path:
+        raise miss
+
+    monkeypatch.setattr(api, "install_conda_exe", miss_standalone)
+    with pytest.raises(DownloadedExecutableError) as caught:
+        api.ensure(["micromamba", "conda_standalone>=10"], install="force")
+    assert caught.value is invalid and caught.value.__cause__ is launch_error
+    assert caught.value.__context__ is not miss
+    assert log_messages() == (
+        f"{INVALID_DOWNLOAD}; trying conda-standalone instead\n{miss}\n"
+    )
 
 
 @pytest.mark.usefixtures("nothing_installed")
