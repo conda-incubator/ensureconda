@@ -1,11 +1,10 @@
 import contextlib
 import hashlib
 import io
+import logging
 import os
 import shutil
 import stat
-import subprocess
-import sys
 import tarfile
 import time
 import uuid
@@ -17,7 +16,6 @@ from tempfile import TemporaryFile
 from typing import (
     IO,
     Any,
-    Callable,
     Dict,
     Generator,
     List,
@@ -32,7 +30,10 @@ import requests
 from conda_package_streaming.package_streaming import stream_conda_component
 from packaging.version import InvalidVersion, Version
 
-from ensureconda.resolve import is_windows, platform_subdir, site_path
+from ensureconda._versions import _VersionConstraint, check_executable
+from ensureconda.resolve import is_exe, is_windows, platform_subdir, site_path
+
+logger = logging.getLogger(__name__)
 
 LOCK_NOTIFICATION_INTERVAL_SEC = 5
 """Seconds between lock acquisition attempts and waiting notifications."""
@@ -175,7 +176,7 @@ def request_url_with_retry(
                 f"attempt {attempt}"
             )
             if not retryable:
-                print(f"{failure}; not retrying", file=sys.stderr)
+                logger.warning(f"{failure}; not retrying")
                 raise
 
             delay_sec = backoff_sec
@@ -191,17 +192,13 @@ def request_url_with_retry(
                     )
             remaining_sec = max(0.0, deadline_sec - time.monotonic())
             if delay_sec > remaining_sec:
-                print(
+                logger.warning(
                     f"{failure}; retrying again would exceed the remaining time budget "
-                    f"({remaining_sec:.1f}s remaining, {delay_sec:g}s required){delay_source}",
-                    file=sys.stderr,
+                    f"({remaining_sec:.1f}s remaining, {delay_sec:g}s required){delay_source}"
                 )
                 raise
 
-            print(
-                f"{failure}; retrying in {delay_sec:g}s{delay_source}",
-                file=sys.stderr,
-            )
+            logger.warning(f"{failure}; retrying in {delay_sec:g}s{delay_source}")
             time.sleep(delay_sec)
             backoff_sec *= 2
 
@@ -244,10 +241,9 @@ def lock_with_feedback(
             lock.acquire(timeout=LOCK_NOTIFICATION_INTERVAL_SEC)
         except filelock.Timeout:
             total_wait_time = time.monotonic() - lock_start
-            print(
+            logger.info(
                 f"Waiting for lock for {lock_name} to be released by another process... "
-                f"({total_wait_time:.1f}s)",
-                file=sys.stderr,
+                f"({total_wait_time:.1f}s)"
             )
         else:
             break
@@ -256,9 +252,8 @@ def lock_with_feedback(
         # Success! Now report total wait time if we had to wait
         total_wait_time = time.monotonic() - lock_start
         if total_wait_time > 0.1:
-            print(
-                f"Lock for {lock_name} acquired after waiting {total_wait_time:.1f} seconds",
-                file=sys.stderr,
+            logger.info(
+                f"Lock for {lock_name} acquired after waiting {total_wait_time:.1f} seconds"
             )
         # Yield control back to the caller
         yield
@@ -293,6 +288,7 @@ def stream_conda_executable(url: str, sha256: Optional[str] = None) -> Path:
     dest_filename = f"conda_standalone{exe_suffix()}"
 
     filename = urlparse(url).path.rsplit("/", 1)[-1]
+    logger.info("conda-standalone: downloading %s", url)
     with TemporaryFile() as conda:
         request_url_with_retry(url, destination=conda)
         if sha256:
@@ -324,20 +320,16 @@ def get_channel_name() -> str:
     return channel
 
 
-def _runs(executable: Path) -> bool:
-    """Report whether `executable --version` succeeds."""
-    try:
-        subprocess.check_output([executable, "--version"], stderr=subprocess.DEVNULL)
-    except (subprocess.CalledProcessError, OSError):
-        return False
-    return True
-
-
-def install_conda_exe(is_usable: Callable[[Path], bool] = _runs) -> Path:
+def install_conda_exe(
+    constraint: _VersionConstraint = None,
+    *,
+    force: bool = False,
+    probe_version: bool = True,
+) -> Path:
     """Install conda-standalone into the installation
 
-    Reuse one that is already there if it passes is_usable, by default if its
-    `--version` succeeds.
+    Recheck the cached executable under the download lock against the caller's
+    requirement. Force bypasses reuse, including after waiting for another writer.
     """
     subdir = platform_subdir()
     # Create a lock file specific to conda_exe to prevent concurrent downloads
@@ -349,12 +341,30 @@ def install_conda_exe(is_usable: Callable[[Path], bool] = _runs) -> Path:
     with lock_with_feedback(lock_path, "downloading conda"):
         # Check if the file already exists after acquiring the lock
         target_path = site_path() / dest_filename
-        if target_path.exists() and is_usable(target_path):
+        if (
+            not force
+            and is_exe(target_path)
+            and check_executable(
+                target_path,
+                "conda_standalone",
+                constraint,
+                probe_version=probe_version,
+                quiet=True,
+            )
+            is not None
+        ):
+            logger.debug(
+                "Reusing cached executable %s after acquiring the download lock",
+                target_path,
+            )
             return target_path
 
         channel = get_channel_name()
         candidates = compute_candidates(channel, subdir)
         chosen = candidates[-1]
+        logger.info(
+            "conda-standalone: selected version %s for %s", chosen.version, subdir
+        )
         url = "https:" + chosen.download_url
         path_to_written_executable = stream_conda_executable(url, chosen.sha256)
         return path_to_written_executable
@@ -364,6 +374,7 @@ def compute_candidates(channel: str, subdir: str) -> List[AnacondaPkg]:
     """Compute the candidates for the conda-standalone package"""
 
     url = f"https://api.anaconda.org/package/{channel}/conda-standalone/files"
+    logger.debug("Fetching conda-standalone metadata from %s", url)
     resp = request_url_with_retry(url)
     api_response_data: List[Dict[str, Any]] = resp.json()
 
@@ -398,10 +409,9 @@ def compute_candidates(channel: str, subdir: str) -> List[AnacondaPkg]:
         try:
             Version(info.version)
         except InvalidVersion:
-            print(
+            logger.warning(
                 f"Skipping conda-standalone {info.version} for {subdir}: "
-                "not a valid version",
-                file=sys.stderr,
+                "not a valid version"
             )
             continue
         candidates.append(info)
@@ -420,11 +430,16 @@ def compute_candidates(channel: str, subdir: str) -> List[AnacondaPkg]:
     return candidates
 
 
-def install_micromamba(is_usable: Callable[[Path], bool] = _runs) -> Path:
+def install_micromamba(
+    constraint: _VersionConstraint = None,
+    *,
+    force: bool = False,
+    probe_version: bool = True,
+) -> Path:
     """Install micromamba into the installation
 
-    Reuse one that is already there if it passes is_usable, by default if its
-    `--version` succeeds.
+    Recheck the cached executable under the download lock against the caller's
+    requirement. Force bypasses reuse, including after waiting for another writer.
     """
     subdir = platform_subdir()
     # Create a lock file specific to micromamba to prevent concurrent downloads
@@ -436,9 +451,25 @@ def install_micromamba(is_usable: Callable[[Path], bool] = _runs) -> Path:
     with lock_with_feedback(lock_path, "downloading micromamba"):
         # Check if the file already exists after acquiring the lock
         target_path = site_path() / dest_filename
-        if target_path.exists() and is_usable(target_path):
+        if (
+            not force
+            and is_exe(target_path)
+            and check_executable(
+                target_path,
+                "micromamba",
+                constraint,
+                probe_version=probe_version,
+                quiet=True,
+            )
+            is not None
+        ):
+            logger.debug(
+                "Reusing cached executable %s after acquiring the download lock",
+                target_path,
+            )
             return target_path
 
+        logger.info("micromamba: downloading latest for %s", subdir)
         url = f"https://micro.mamba.pm/api/micromamba/{subdir}/latest"
         try:
             resp = request_url_with_retry(url)

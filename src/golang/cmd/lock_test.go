@@ -482,6 +482,39 @@ func TestInstallersReuseUsableInstall(t *testing.T) {
 	}
 }
 
+func TestInstallersDoNotRepeatSearchRejections(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the stand-ins for micromamba and conda-standalone are shell scripts")
+	}
+	for _, tt := range []struct {
+		name, exeName, version string
+		install                func() (string, error)
+	}{
+		{"micromamba", "micromamba", "0.1.0", func() (string, error) {
+			return installMicromamba("https://micro.mamba.pm/api/micromamba/linux-64/latest", false)
+		}},
+		{"conda-standalone", "conda_standalone", "conda 0.1.0", InstallCondaStandalone},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			useSitePath(t)
+			refuseDownloads(t)
+			target := targetExeFilename(tt.exeName)
+			if err := os.WriteFile(target, []byte("#!/bin/sh\necho "+tt.version+"\n"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			messages := captureLog(t)
+			if _, err := tt.install(); err == nil {
+				t.Fatal("the install succeeded, want the refused download to fail")
+			}
+			for len(messages) > 0 {
+				if message := <-messages; strings.Contains(message, "Rejected") {
+					t.Errorf("the locked recheck logged %q at the default verbosity", message)
+				}
+			}
+		})
+	}
+}
+
 // refuseDownloads answers every request of the shared HTTP client with a 404,
 // and returns the number of requests made.
 func refuseDownloads(t *testing.T) *atomic.Int32 {

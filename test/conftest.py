@@ -1,6 +1,6 @@
 import os
 import sys
-from typing import Optional
+from typing import Callable, Optional
 
 import docker
 import pytest
@@ -30,3 +30,19 @@ def docker_client(can_i_docker: bool) -> Optional[docker.client.DockerClient]:
     if can_i_docker:
         return docker.from_env()
     return None
+
+
+@pytest.fixture
+def log_messages(caplog: pytest.LogCaptureFixture) -> Callable[[], str]:
+    """Read and clear ensureconda's diagnostic messages, without logger prefixes."""
+
+    def read() -> str:
+        messages = [
+            record.getMessage()
+            for record in caplog.records
+            if record.name.startswith("ensureconda")
+        ]
+        caplog.clear()
+        return "".join(message + "\n" for message in messages)
+
+    return read

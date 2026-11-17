@@ -1,10 +1,11 @@
 import hashlib
 import io
 import json
+import logging
 import sys
 import tarfile
 from pathlib import Path
-from typing import IO, List, Optional
+from typing import IO, Callable, List, Optional
 from unittest.mock import Mock
 
 import filelock
@@ -13,7 +14,7 @@ import requests
 from click.testing import CliRunner
 from packaging.version import Version
 
-from ensureconda import api, cli, installer
+from ensureconda import _versions, api, cli, installer
 from ensureconda.resolve import UnsupportedPlatformError, is_windows
 
 
@@ -45,7 +46,7 @@ def test_force_install_replaces_fresh_cache(
     target.chmod(0o755)
     monkeypatch.setattr(installer, "site_path", lambda: tmp_path)
     monkeypatch.setattr(
-        api,
+        _versions,
         "_probe_version",
         lambda path, flavor: Version(
             "1.5" if path.read_bytes() == b"old executable" else "25.1"
@@ -136,9 +137,11 @@ def test_normal_install_reuses_usable_cache(
         if tool == "micromamba"
         else installer.install_conda_exe
     )
-    is_usable = Mock(return_value=True)
-    assert install(is_usable) == target
-    is_usable.assert_called_once_with(target)
+    target.chmod(0o755)
+    probe = Mock(return_value=Version("2.0"))
+    monkeypatch.setattr(_versions, "_probe_version", probe)
+    assert install(Version("1.0")) == target
+    probe.assert_called_once_with(target, tool)
     assert target.read_bytes() == b"existing executable"
 
 
@@ -206,14 +209,16 @@ def test_force_standalone_rejects_archive_without_replacing_cache(
 @pytest.mark.usefixtures("no_discovery")
 def test_force_install_checks_version_constraints(
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    log_messages: Callable[[], str],
 ) -> None:
     install = Mock(return_value=Path("micromamba"))
     monkeypatch.setattr(api, "install_micromamba", install)
-    monkeypatch.setattr(api, "_probe_version", lambda path, flavor: Version("1.0"))
+    monkeypatch.setattr(
+        _versions, "_probe_version", lambda path, flavor: Version("1.0")
+    )
     assert api.ensure(["micromamba>=2"], install="force", probe_version=False) is None
     install.assert_called_once()
-    assert capsys.readouterr().err == "Rejected micromamba 1.0: requires >=2\n"
+    assert log_messages() == "Rejected micromamba 1.0: requires >=2\n"
 
 
 @pytest.mark.usefixtures("no_discovery")
@@ -242,7 +247,9 @@ def test_force_cli_keeps_version_minimums(
     monkeypatch.setattr(
         api, "install_micromamba" if micro else "install_conda_exe", install
     )
-    monkeypatch.setattr(api, "_probe_version", lambda path, flavor: Version(version))
+    monkeypatch.setattr(
+        _versions, "_probe_version", lambda path, flavor: Version(version)
+    )
     args = ["--force-install", "--no-conda-exe" if micro else "--no-micromamba"]
     if minimum is not None:
         args.extend(
@@ -267,24 +274,26 @@ def test_force_cli_keeps_version_minimums(
 def test_force_reports_version_rejection_before_fallback(
     entry_point: str,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    log_messages: Callable[[], str],
 ) -> None:
-    monkeypatch.setattr(api, "install_micromamba", lambda _: Path("micromamba"))
     monkeypatch.setattr(
-        api,
+        api, "install_micromamba", lambda *args, **kwargs: Path("micromamba")
+    )
+    monkeypatch.setattr(
+        _versions,
         "_probe_version",
         lambda path, flavor: Version("2.3.0" if flavor == "micromamba" else "25.1"),
     )
 
-    def standalone(is_usable: object) -> Path:
-        print("Downloading conda-standalone", file=sys.stderr)
+    def standalone(constraint: object, **kwargs: object) -> Path:
+        logging.getLogger("ensureconda.test").warning("Downloading conda-standalone")
         return Path("conda_standalone")
 
     monkeypatch.setattr(api, "install_conda_exe", standalone)
     if entry_point == "api":
         result = api.ensure(["micromamba>=3", "conda_standalone"], install="force")
         assert result is not None and result.path == Path("conda_standalone")
-        output = capsys.readouterr().err
+        output = log_messages()
     else:
         args = ["--force-install", "--min-mamba-version", "3"]
         if entry_point == "json-cli":
@@ -303,7 +312,7 @@ def test_force_reports_version_rejection_before_fallback(
 def test_force_install_falls_back_only_to_installable_targets(
     standalone: bool,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    log_messages: Callable[[], str],
 ) -> None:
     monkeypatch.setattr(
         api,
@@ -316,7 +325,7 @@ def test_force_install_falls_back_only_to_installable_targets(
         result = api.ensure(install="force", probe_version=False)
         assert result is not None and result.path == Path("conda_standalone")
         install.assert_called_once()
-        assert capsys.readouterr().err == (
+        assert log_messages() == (
             "micromamba is not published; trying conda-standalone instead\n"
         )
     else:
@@ -368,7 +377,9 @@ def test_force_downloads_repeated_tool_only_once(
     path = Path("micromamba")
     install = Mock(return_value=path)
     monkeypatch.setattr(api, "install_micromamba", install)
-    monkeypatch.setattr(api, "_probe_version", lambda path, flavor: Version("2.5"))
+    monkeypatch.setattr(
+        _versions, "_probe_version", lambda path, flavor: Version("2.5")
+    )
 
     result = api.ensure(["micromamba>=3", second_target], install="force")
 
@@ -384,7 +395,7 @@ def test_force_downloads_repeated_tool_only_once(
 def test_force_does_not_retry_an_unpublished_tool_for_later_constraints(
     standalone: bool,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    log_messages: Callable[[], str],
 ) -> None:
     micro = Mock(side_effect=installer.NotPublishedError("micromamba is not published"))
     conda = Mock(return_value=Path("conda_standalone"))
@@ -396,12 +407,12 @@ def test_force_does_not_retry_an_unpublished_tool_for_later_constraints(
         result = api.ensure(targets, install="force", probe_version=False)
         assert result is not None and result.path == Path("conda_standalone")
         conda.assert_called_once()
-        assert capsys.readouterr().err == (
+        assert log_messages() == (
             "micromamba is not published; trying conda-standalone instead\n"
         )
     else:
         with pytest.raises(installer.NotPublishedError):
             api.ensure(targets, install="force")
         conda.assert_not_called()
-        assert capsys.readouterr().err == ""
+        assert log_messages() == ""
     micro.assert_called_once()
