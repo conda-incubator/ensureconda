@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -235,8 +236,16 @@ func selectCandidates(data []AnacondaPkg, subdir string) []AnacondaPkg {
 			// Ignore onedir packages as workaround for
 			// <https://github.com/conda/conda-standalone/issues/182>
 			strings.Contains(datum.Attrs.Build, "_onedir_") ||
-			// Builds marked as broken lose the "main" label.
-			(datum.Labels != nil && !slices.Contains(datum.Labels, "main")) {
+			// Builds marked as broken get the "broken" label and may keep "main".
+			(datum.Labels != nil && (!slices.Contains(datum.Labels, "main") || slices.Contains(datum.Labels, "broken"))) {
+			continue
+		}
+		artifact, err := url.Parse(datum.DownloadUrl)
+		if err != nil {
+			log.Warnf("Skipping conda-standalone %s for %s: invalid download URL", datum.Version, subdir)
+			continue
+		}
+		if !(strings.HasSuffix(artifact.Path, ".tar.bz2") || strings.HasSuffix(artifact.Path, ".conda")) {
 			continue
 		}
 		// Skip unparseable versions with a warning, to avoid crashes on new formats

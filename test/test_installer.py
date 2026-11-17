@@ -317,8 +317,10 @@ def test_compute_candidates_skips_broken_and_invalid_versions(
         monkeypatch,
         [
             file_info("1.0", labels=["main"]),
-            # conda-forge moves builds it marks as broken to the "broken" label.
+            # conda-forge labels builds it marks as broken "broken", and
+            # some of them keep "main".
             file_info("3.0", labels=["broken"]),
+            file_info("2.5", labels=["main", "broken"]),
             file_info("not a version", labels=["main"]),
             # Entries without labels, or with null labels, are kept.
             file_info("2.0"),
@@ -330,6 +332,26 @@ def test_compute_candidates_skips_broken_and_invalid_versions(
 
     assert [candidate.version for candidate in candidates] == ["1.0", "2.0", "2.1"]
     assert "Skipping conda-standalone not a version" in log_messages()
+
+
+def test_compute_candidates_skips_unusable_download_urls(
+    monkeypatch: pytest.MonkeyPatch, log_messages: Callable[[], str]
+) -> None:
+    serve_file_listing(
+        monkeypatch,
+        [
+            file_info("1.0", download_url="//[broken"),
+            file_info("1.5", download_url="//example.invalid/conda-standalone.zip"),
+            file_info("2.0"),
+        ],
+    )
+
+    candidates = installer.compute_candidates("conda-forge", "linux-64")
+
+    assert [candidate.version for candidate in candidates] == ["2.0"]
+    messages = log_messages()
+    assert "Skipping conda-standalone 1.0" in messages
+    assert "invalid download URL" in messages
 
 
 def test_micromamba_is_extracted_while_holding_the_download_lock(
