@@ -15,9 +15,10 @@ import filelock
 import pytest
 import requests
 from conda_package_streaming.create import conda_builder
+from packaging.version import Version
 from urllib3.response import HTTPResponse
 
-from ensureconda import installer
+from ensureconda import determine_versions, installer
 from ensureconda.resolve import UnsupportedPlatformError
 
 
@@ -359,7 +360,7 @@ def test_micromamba_is_extracted_while_holding_the_download_lock(
 )
 @pytest.mark.parametrize("usable", [True, False], ids=["usable", "unusable"])
 def test_install_reuses_an_executable_only_if_it_is_usable(
-    install: Callable[[Callable[[Path], bool]], Optional[Path]],
+    install: Callable[..., Path],
     name: str,
     usable: bool,
     tmp_path: Path,
@@ -367,12 +368,22 @@ def test_install_reuses_an_executable_only_if_it_is_usable(
 ) -> None:
     existing = tmp_path / (name + installer.exe_suffix())
     existing.write_bytes(b"existing executable")
+    existing.chmod(0o755)
     checked: List[Path] = []
     urls: List[str] = []
 
-    def is_usable(path: Path) -> bool:
+    def probe(path: Path, flavor: str) -> Version:
+        lock_name = (
+            "micromamba_install.lock"
+            if name == "micromamba"
+            else "conda_exe_install.lock"
+        )
+        with pytest.raises(filelock.Timeout):
+            filelock.FileLock(str(tmp_path / lock_name)).acquire(timeout=0)
         checked.append(path)
-        return usable
+        return Version("2" if usable else "1")
+
+    monkeypatch.setattr(determine_versions, "_probe_version", probe)
 
     def request(url: str, **kwargs: Any) -> requests.Response:
         urls.append(url)
@@ -382,11 +393,11 @@ def test_install_reuses_an_executable_only_if_it_is_usable(
     monkeypatch.setattr(installer, "request_url_with_retry", request)
 
     if usable:
-        assert install(is_usable) == existing
+        assert install(Version("2")) == existing
         assert urls == []
     else:
         with pytest.raises(requests.ConnectionError):
-            install(is_usable)
+            install(Version("2"))
         assert len(urls) == 1
     assert checked == [existing]
 
@@ -414,16 +425,17 @@ def test_install_reuses_an_executable_that_runs_by_default(
 ) -> None:
     existing = tmp_path / (name + installer.exe_suffix())
     existing.write_bytes(b"existing executable")
+    existing.chmod(0o755)
     modified = time.time() - age_sec
     os.utime(existing, (modified, modified))
     commands: List[List[Any]] = []
     urls: List[str] = []
 
-    def check_output(args: List[Any], **kwargs: Any) -> bytes:
+    def check_output(args: List[Any], **kwargs: Any) -> str:
         commands.append(args)
         if not runs:
             raise OSError(8, "Exec format error")
-        return b"2.0.0\n"
+        return "2.0.0\n"
 
     def request(url: str, **kwargs: Any) -> requests.Response:
         urls.append(url)

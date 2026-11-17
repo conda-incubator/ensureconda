@@ -136,9 +136,11 @@ def test_normal_install_reuses_usable_cache(
         if tool == "micromamba"
         else installer.install_conda_exe
     )
-    is_usable = Mock(return_value=True)
-    assert install(is_usable) == target
-    is_usable.assert_called_once_with(target)
+    target.chmod(0o755)
+    probe = Mock(return_value=Version("2.0"))
+    monkeypatch.setattr(determine_versions, "_probe_version", probe)
+    assert install(Version("1.0")) == target
+    probe.assert_called_once_with(target, tool)
     assert target.read_bytes() == b"existing executable"
 
 
@@ -273,14 +275,16 @@ def test_force_reports_version_rejection_before_fallback(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(api, "install_micromamba", lambda _: Path("micromamba"))
+    monkeypatch.setattr(
+        api, "install_micromamba", lambda *args, **kwargs: Path("micromamba")
+    )
     monkeypatch.setattr(
         determine_versions,
         "_probe_version",
         lambda path, flavor: Version("2.3.0" if flavor == "micromamba" else "25.1"),
     )
 
-    def standalone(is_usable: object) -> Path:
+    def standalone(constraint: object, **kwargs: object) -> Path:
         print("Downloading conda-standalone", file=sys.stderr)
         return Path("conda_standalone")
 

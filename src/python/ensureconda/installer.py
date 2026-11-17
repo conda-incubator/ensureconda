@@ -4,7 +4,6 @@ import io
 import os
 import shutil
 import stat
-import subprocess
 import sys
 import tarfile
 import time
@@ -17,7 +16,6 @@ from tempfile import TemporaryFile
 from typing import (
     IO,
     Any,
-    Callable,
     Dict,
     Generator,
     List,
@@ -32,7 +30,8 @@ import requests
 from conda_package_streaming.package_streaming import stream_conda_component
 from packaging.version import InvalidVersion, Version
 
-from ensureconda.resolve import is_windows, platform_subdir, site_path
+from ensureconda.determine_versions import _VersionConstraint, check_executable
+from ensureconda.resolve import is_exe, is_windows, platform_subdir, site_path
 
 LOCK_NOTIFICATION_INTERVAL_SEC = 5
 """Seconds between lock acquisition attempts and waiting notifications."""
@@ -324,20 +323,16 @@ def get_channel_name() -> str:
     return channel
 
 
-def _runs(executable: Path) -> bool:
-    """Report whether `executable --version` succeeds."""
-    try:
-        subprocess.check_output([executable, "--version"], stderr=subprocess.DEVNULL)
-    except (subprocess.CalledProcessError, OSError):
-        return False
-    return True
-
-
-def install_conda_exe(is_usable: Callable[[Path], bool] = _runs) -> Path:
+def install_conda_exe(
+    constraint: _VersionConstraint = None,
+    *,
+    force: bool = False,
+    probe_version: bool = True,
+) -> Path:
     """Install conda-standalone into the installation
 
-    Reuse one that is already there if it passes is_usable, by default if its
-    `--version` succeeds.
+    Recheck the cached executable under the download lock against the caller's
+    requirement. Force bypasses reuse, including after waiting for another writer.
     """
     subdir = platform_subdir()
     # Create a lock file specific to conda_exe to prevent concurrent downloads
@@ -349,7 +344,18 @@ def install_conda_exe(is_usable: Callable[[Path], bool] = _runs) -> Path:
     with lock_with_feedback(lock_path, "downloading conda"):
         # Check if the file already exists after acquiring the lock
         target_path = site_path() / dest_filename
-        if target_path.exists() and is_usable(target_path):
+        if (
+            not force
+            and is_exe(target_path)
+            and check_executable(
+                target_path,
+                "conda_standalone",
+                constraint,
+                probe_version=probe_version,
+                quiet=True,
+            )
+            is not None
+        ):
             return target_path
 
         channel = get_channel_name()
@@ -420,11 +426,16 @@ def compute_candidates(channel: str, subdir: str) -> List[AnacondaPkg]:
     return candidates
 
 
-def install_micromamba(is_usable: Callable[[Path], bool] = _runs) -> Path:
+def install_micromamba(
+    constraint: _VersionConstraint = None,
+    *,
+    force: bool = False,
+    probe_version: bool = True,
+) -> Path:
     """Install micromamba into the installation
 
-    Reuse one that is already there if it passes is_usable, by default if its
-    `--version` succeeds.
+    Recheck the cached executable under the download lock against the caller's
+    requirement. Force bypasses reuse, including after waiting for another writer.
     """
     subdir = platform_subdir()
     # Create a lock file specific to micromamba to prevent concurrent downloads
@@ -436,7 +447,18 @@ def install_micromamba(is_usable: Callable[[Path], bool] = _runs) -> Path:
     with lock_with_feedback(lock_path, "downloading micromamba"):
         # Check if the file already exists after acquiring the lock
         target_path = site_path() / dest_filename
-        if target_path.exists() and is_usable(target_path):
+        if (
+            not force
+            and is_exe(target_path)
+            and check_executable(
+                target_path,
+                "micromamba",
+                constraint,
+                probe_version=probe_version,
+                quiet=True,
+            )
+            is not None
+        ):
             return target_path
 
         url = f"https://micro.mamba.pm/api/micromamba/{subdir}/latest"
