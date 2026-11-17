@@ -8,7 +8,7 @@ import pytest
 from click.testing import CliRunner
 from packaging.version import InvalidVersion, Version
 
-from ensureconda import api, cli, ensure
+from ensureconda import _versions, api, cli, ensure
 from ensureconda.api import CondaExecutable, Flavor, ensureconda, identify
 
 MICROMAMBA = Path("data", "micromamba")
@@ -47,7 +47,7 @@ def test_probe_version_rejects_unknown_flavor_without_running_it(
     calls = fake_version_outputs(monkeypatch, {})
 
     with pytest.raises(ValueError, match="Unknown executable flavor"):
-        api._probe_version(Path("tool"), cast(Flavor, flavor))
+        _versions._probe_version(Path("tool"), cast(Flavor, flavor))
     assert calls == []
 
 
@@ -168,7 +168,7 @@ def test_identify_still_reports_unknown_version_after_probe_failure(
         raise error
 
     executable = executable_file(tmp_path / "micromamba")
-    monkeypatch.setattr(api, "determine_micromamba_version", broken_version)
+    monkeypatch.setattr(_versions, "determine_micromamba_version", broken_version)
 
     assert identify(executable) == CondaExecutable(executable, "micromamba", None)
     assert capsys.readouterr().err == ""

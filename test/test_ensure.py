@@ -10,7 +10,7 @@ import requests
 from click.testing import CliRunner
 from packaging.version import InvalidVersion, Version
 
-from ensureconda import CondaExecutable, api, cli, ensure, ensureconda
+from ensureconda import CondaExecutable, _versions, api, cli, ensure, ensureconda
 from ensureconda.api import Flavor, InstallPolicy
 from ensureconda.installer import NotPublishedError
 from ensureconda.resolve import UnsupportedPlatformError
@@ -160,7 +160,7 @@ def test_unconstrained_probe_errors(
     def broken_version(executable: object) -> Version:
         raise error
 
-    monkeypatch.setattr(api, "determine_micromamba_version", broken_version)
+    monkeypatch.setattr(_versions, "determine_micromamba_version", broken_version)
     if installed:
         monkeypatch.setattr(api, "micromamba_executables", lambda: iter([MICROMAMBA]))
     else:

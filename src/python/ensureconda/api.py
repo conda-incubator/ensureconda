@@ -4,18 +4,14 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import (
-    TYPE_CHECKING,
     Callable,
     Dict,
     Iterator,
     List,
-    Literal,
-    NamedTuple,
     Optional,
     Sequence,
     Set,
     Tuple,
-    Union,
 )
 
 from packaging.requirements import InvalidRequirement, Requirement
@@ -23,6 +19,20 @@ from packaging.specifiers import SpecifierSet
 from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
 
+from ensureconda._versions import CondaExecutable as CondaExecutable
+from ensureconda._versions import Flavor as Flavor
+from ensureconda._versions import InstallPolicy as InstallPolicy
+from ensureconda._versions import (
+    _probe_version,
+    _StrPath,
+    _VersionConstraint,
+    check_executable,
+)
+from ensureconda._versions import determine_conda_version as determine_conda_version
+from ensureconda._versions import determine_mamba_version as determine_mamba_version
+from ensureconda._versions import (
+    determine_micromamba_version as determine_micromamba_version,
+)
 from ensureconda.installer import (
     NotPublishedError,
     install_conda_exe,
@@ -38,81 +48,6 @@ from ensureconda.resolve import (
     platform_subdir,
 )
 
-if TYPE_CHECKING or sys.version_info >= (3, 9):
-    _StrPath = Union[str, os.PathLike[str]]
-else:
-    # PathLike is not subscriptable at runtime on Python 3.8.
-    _StrPath = Union[str, os.PathLike]
-
-
-# The old version helpers use 0.0.0 as a sentinel for unrecognized output.
-# Keep their return values compatible; new API probes translate it to None.
-_LEGACY_UNKNOWN_VERSION = Version("0.0.0")
-
-
-def determine_mamba_version(exe: _StrPath) -> Version:
-    """Determine the version of mamba on the given executable.
-
-    Typical output of `mamba --version` for v1 is:
-    ```
-    mamba 1.4.7
-    conda 23.5.0
-    ```
-
-    Typical output of `mamba --version` for v2 is identical to micromamba:
-    ```
-    2.0.8
-    ```
-    """
-    out = subprocess.check_output([exe, "--version"], encoding="utf-8").strip()
-    for line in out.splitlines(keepends=False):
-        if line.startswith("mamba"):
-            return Version(line.split()[-1])
-    # Not v1 style output, so fall back to micromamba version detection
-    return determine_micromamba_version(exe)
-
-
-def determine_micromamba_version(exe: _StrPath) -> Version:
-    out = subprocess.check_output([exe, "--version"], encoding="utf-8").strip()
-    for line in out.splitlines(keepends=False):
-        return Version(line.split()[-1])
-    return _LEGACY_UNKNOWN_VERSION
-
-
-def determine_conda_version(exe: _StrPath) -> Version:
-    out = subprocess.check_output([exe, "--version"], encoding="utf-8").strip()
-    for line in out.splitlines(keepends=False):
-        if line.startswith("conda"):
-            return Version(line.split()[-1])
-    return _LEGACY_UNKNOWN_VERSION
-
-
-Flavor = Literal["mamba", "micromamba", "conda", "conda_standalone"]
-InstallPolicy = Literal["never", "fallback", "per-target", "force"]
-# Version is an old-API minimum; SpecifierSet is a new-API constraint.
-_VersionConstraint = Optional[Union[Version, SpecifierSet]]
-
-
-class CondaExecutable(NamedTuple):
-    """An executable that ensureconda found, installed, or identified.
-
-    Later releases may add fields.
-    """
-
-    path: Path
-    flavor: Flavor
-    # None when unmeasured, or when `--version` fails or has no known version.
-    version: Optional[Version]
-
-    def to_json(self) -> Dict[str, Optional[str]]:
-        """Return a JSON-serializable dict, as printed by ``ensureconda --json``."""
-        return {
-            "path": str(self.path),
-            "flavor": self.flavor,
-            "version": None if self.version is None else str(self.version),
-        }
-
-
 _FLAVORS: Tuple[Flavor, ...] = ("mamba", "micromamba", "conda", "conda_standalone")
 _TARGET_FLAVORS = {canonicalize_name(flavor): flavor for flavor in _FLAVORS}
 _INSTALL_POLICIES: Tuple[InstallPolicy, ...] = (
@@ -121,18 +56,6 @@ _INSTALL_POLICIES: Tuple[InstallPolicy, ...] = (
     "per-target",
     "force",
 )
-
-
-def _probe_version(executable: _StrPath, flavor: Flavor) -> Optional[Version]:
-    if flavor == "mamba":
-        version = determine_mamba_version(executable)
-    elif flavor == "micromamba":
-        version = determine_micromamba_version(executable)
-    elif flavor in ("conda", "conda_standalone"):
-        version = determine_conda_version(executable)
-    else:
-        raise ValueError(f"Unknown executable flavor: {flavor!r}")
-    return None if version == _LEGACY_UNKNOWN_VERSION else version
 
 
 def _flavor_from_name(executable: _StrPath) -> Optional[Flavor]:
@@ -348,67 +271,16 @@ def _ensure(
 
     report_rejections = install == "force"
 
-    def compatible(
-        path: Path,
-        flavor: Flavor,
-        constraint: _VersionConstraint,
-        *,
-        quiet: bool = False,
-    ) -> Optional[CondaExecutable]:
-        version = None
-        if constraint is not None or probe_version:
-            try:
-                version = _probe_version(path, flavor)
-            except (
-                subprocess.CalledProcessError,
-                OSError,
-                InvalidVersion,
-                UnicodeDecodeError,
-            ) as error:
-                # Unknown metadata is acceptable without a constraint, but a
-                # command that cannot run must never pass a requested probe.
-                if constraint is not None or isinstance(
-                    error, (subprocess.CalledProcessError, OSError)
-                ):
-                    reason = (
-                        f"`--version` exited with status {error.returncode}"
-                        if isinstance(error, subprocess.CalledProcessError)
-                        else str(error)
-                    )
-                    if not quiet:
-                        print(
-                            f"Skipping {path}: could not determine its version ({reason})",
-                            file=sys.stderr,
-                        )
-                    return None
-        requirement = None
-        if isinstance(constraint, Version):
-            # Only the old API compares unknown output as version 0.0.0.
-            comparison_version = (
-                version if version is not None else _LEGACY_UNKNOWN_VERSION
-            )
-            if comparison_version < constraint:
-                requirement = f">={constraint}"
-        elif constraint is not None:
-            if version is None or not constraint.contains(version, prereleases=True):
-                requirement = str(constraint)
-        if requirement is not None:
-            if report_rejections and not quiet:
-                found_version = version if version is not None else "unknown version"
-                print(
-                    f"Rejected {path} {found_version}: requires {requirement}",
-                    file=sys.stderr,
-                )
-            return None
-        return CondaExecutable(path, flavor, version)
-
     def usable(
         flavor: Flavor, constraint: _VersionConstraint
     ) -> Callable[[Path], bool]:
         """Return the check that the search applies to a candidate for a target."""
         return lambda path: (
             is_exe(path)
-            and compatible(path, flavor, constraint, quiet=True) is not None
+            and check_executable(
+                path, flavor, constraint, probe_version=probe_version, quiet=True
+            )
+            is not None
         )
 
     # A missing download mapping need not prevent using an installed tool.
@@ -474,7 +346,13 @@ def _ensure(
         else:
             candidates = finders[flavor]()
         for path in candidates:
-            result = compatible(path, flavor, constraint)
+            result = check_executable(
+                path,
+                flavor,
+                constraint,
+                probe_version=probe_version,
+                report_rejections=report_rejections,
+            )
             if result is not None:
                 return result
     if unsupported_platform is not None:
