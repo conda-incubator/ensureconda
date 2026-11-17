@@ -8,7 +8,7 @@ import pytest
 import requests
 from packaging.version import InvalidVersion, Version
 
-from ensureconda import api, resolve
+from ensureconda import api, determine_versions, resolve
 from ensureconda.installer import NotPublishedError
 from ensureconda.resolve import UnsupportedPlatformError
 
@@ -38,9 +38,11 @@ def test_skip_candidate_whose_version_check_fails(
     monkeypatch.setattr(
         api, "micromamba_executables", lambda: iter([WORKING_MICROMAMBA])
     )
-    monkeypatch.setattr(api, "determine_mamba_version", broken_version)
+    monkeypatch.setattr(determine_versions, "determine_mamba_version", broken_version)
     monkeypatch.setattr(
-        api, "determine_micromamba_version", lambda executable: Version("2.0.0")
+        determine_versions,
+        "determine_micromamba_version",
+        lambda executable: Version("2.0.0"),
     )
 
     executable = api.ensureconda(
@@ -117,7 +119,9 @@ def test_install_replaces_a_new_executable_that_the_search_rejected(
     monkeypatch.setattr("ensureconda.installer.site_path", lambda: tmp_path)
     monkeypatch.setattr("ensureconda.installer.request_url_with_retry", download)
     monkeypatch.setattr("ensureconda.installer.extract_files_from_tar_bz2", extract)
-    monkeypatch.setattr(api, "determine_micromamba_version", determine_version)
+    monkeypatch.setattr(
+        determine_versions, "determine_micromamba_version", determine_version
+    )
 
     result = api.ensureconda(
         mamba=False, conda=False, conda_exe=False, min_mamba_version=minimum
