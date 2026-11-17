@@ -43,8 +43,10 @@ def retry_clock(monkeypatch: pytest.MonkeyPatch) -> FakeClock:
 def test_lock_with_feedback_preserves_body_timeout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    log_messages: Callable[[], str],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    caplog.set_level("INFO", logger="ensureconda")
     lock_path = tmp_path / "outer.lock"
     lock = filelock.FileLock(str(lock_path))
     other_lock = filelock.FileLock(str(lock_path))
@@ -61,7 +63,7 @@ def test_lock_with_feedback_preserves_body_timeout(
 
     assert error.value is body_error
     acquire.assert_called_once()
-    assert "Waiting for lock" not in capsys.readouterr().err
+    assert "Waiting for lock" not in log_messages()
     assert not lock.is_locked
     with other_lock.acquire(timeout=0):
         pass
@@ -71,8 +73,10 @@ def test_lock_with_feedback_retries_acquisition_timeouts(
     tmp_path: Path,
     retry_clock: FakeClock,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    log_messages: Callable[[], str],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    caplog.set_level("INFO", logger="ensureconda")
     lock_path = tmp_path / "outer.lock"
     lock = filelock.FileLock(str(lock_path))
     retry_clock.now_sec = 100.0
@@ -91,7 +95,7 @@ def test_lock_with_feedback_retries_acquisition_timeouts(
         assert lock.is_locked
         assert acquire.call_count == 3
 
-    assert capsys.readouterr().err.splitlines() == [
+    assert log_messages().splitlines() == [
         "Waiting for lock for outer lock to be released by another process... (5.0s)",
         "Waiting for lock for outer lock to be released by another process... (10.0s)",
         "Lock for outer lock acquired after waiting 10.0 seconds",
@@ -307,7 +311,7 @@ def test_compute_candidates_without_a_build_for_the_platform(
 
 
 def test_compute_candidates_skips_broken_and_invalid_versions(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, log_messages: Callable[[], str]
 ) -> None:
     serve_file_listing(
         monkeypatch,
@@ -325,7 +329,7 @@ def test_compute_candidates_skips_broken_and_invalid_versions(
     candidates = installer.compute_candidates("conda-forge", "linux-64")
 
     assert [candidate.version for candidate in candidates] == ["1.0", "2.0", "2.1"]
-    assert "Skipping conda-standalone not a version" in capsys.readouterr().err
+    assert "Skipping conda-standalone not a version" in log_messages()
 
 
 def test_micromamba_is_extracted_while_holding_the_download_lock(
@@ -584,7 +588,7 @@ def test_download_respects_retry_after(
     expected_sources: List[bool],
     retry_clock: FakeClock,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    log_messages: Callable[[], str],
 ) -> None:
     attempts = 0
     delays_sec = retry_clock.delays_sec
@@ -614,7 +618,7 @@ def test_download_respects_retry_after(
         assert (archive.read() if to_file else response.content) == payload
     assert attempts == 3
     assert delays_sec == expected_delays_sec
-    lines = capsys.readouterr().err.splitlines()
+    lines = log_messages().splitlines()
     assert len(lines) == 2
     for line, delay_sec, from_header in zip(
         lines, expected_delays_sec, expected_sources
@@ -690,7 +694,7 @@ def test_download_bounds_scheduled_retry_time(
     expected_stop: Optional[str],
     retry_clock: FakeClock,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    log_messages: Callable[[], str],
 ) -> None:
     attempts = 0
     delays_sec = retry_clock.delays_sec
@@ -736,7 +740,7 @@ def test_download_bounds_scheduled_retry_time(
     assert all(
         response.raw.closed for response in responses if response.status_code != 200
     )
-    lines = capsys.readouterr().err.splitlines()
+    lines = log_messages().splitlines()
     if not recover:
         assert expected_stop is not None
         expected_stop = expected_stop.format(status=status)
@@ -931,7 +935,7 @@ def test_download_logs_each_failure_with_details(
     failure: Union[str, int],
     retry_clock: FakeClock,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    log_messages: Callable[[], str],
 ) -> None:
     url = "https://example.invalid/package.conda"
     attempts = 0
@@ -956,7 +960,7 @@ def test_download_logs_each_failure_with_details(
     with pytest.raises(requests.RequestException) as error:
         installer.request_url_with_retry(url)
 
-    lines = capsys.readouterr().err.splitlines()
+    lines = log_messages().splitlines()
     retryable = failure != 404
     assert attempts == len(lines) == (2 if retryable else 1)
     assert delays_sec == ([1] if retryable else [])

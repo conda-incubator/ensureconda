@@ -1,9 +1,11 @@
 import json
+import logging
 import sys
 import time
+from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
-from typing import Any, Optional, Union
+from typing import Any, Iterator, Optional, Union
 
 import click
 import requests
@@ -38,6 +40,28 @@ class VersionNumber(click.ParamType):  # type: ignore[type-arg, unused-ignore]
             return _as_loose_version(value)
         except InvalidVersion:
             self.fail(f"{value!r} is not a valid version", param, ctx)
+
+
+@contextmanager
+def _cli_logging(verbosity: int) -> Iterator[None]:
+    logger = logging.getLogger("ensureconda")
+    previous = logger.level, logger.handlers, logger.propagate
+    handler = logging.StreamHandler(sys.stderr)
+    handler.setFormatter(logging.Formatter("%(message)s"))
+    logger.handlers = [handler]
+    logger.setLevel(
+        logging.WARNING
+        if verbosity == 0
+        else logging.INFO if verbosity == 1 else logging.DEBUG
+    )
+    logger.propagate = False
+    try:
+        yield
+    finally:
+        logger.setLevel(previous[0])
+        logger.handlers = previous[1]
+        logger.propagate = previous[2]
+        handler.close()
 
 
 @click.command(help="Ensures that a conda/mamba is installed.")
@@ -81,6 +105,14 @@ class VersionNumber(click.ParamType):  # type: ignore[type-arg, unused-ignore]
     is_flag=True,
     help="print the executable's path, flavor and version as JSON",
 )
+@click.option(
+    "--verbosity",
+    "-v",
+    type=click.IntRange(0, 3),
+    default=1,
+    show_default=True,
+    help="0: warnings; 1: decisions; 2-3: debug details",
+)
 def ensureconda_cli(
     mamba: bool,
     micromamba: bool,
@@ -91,73 +123,83 @@ def ensureconda_cli(
     min_conda_version: Optional[Version],
     min_mamba_version: Optional[Version],
     as_json: bool,
+    verbosity: int,
 ) -> None:
-    if force_install and no_install:
-        raise click.UsageError("--force-install cannot be combined with --no-install")
-    if force_install and not (micromamba or conda_exe):
-        raise click.UsageError("--force-install requires --micromamba or --conda-exe")
+    with _cli_logging(verbosity):
+        if force_install and no_install:
+            raise click.UsageError(
+                "--force-install cannot be combined with --no-install"
+            )
+        if force_install and not (micromamba or conda_exe):
+            raise click.UsageError(
+                "--force-install requires --micromamba or --conda-exe"
+            )
 
-    exe: Union[CondaExecutable, Path, None]
-    try:
-        if as_json or force_install:
-            # Keep old-API minimums when calling the resolver directly.
-            targets = _legacy_targets(
-                mamba=mamba,
-                micromamba=micromamba,
-                conda=conda,
-                conda_exe=conda_exe,
-                min_conda_version=min_conda_version,
-                min_mamba_version=min_mamba_version,
-            )
-            exe = _ensure(
-                targets,
-                install=(
-                    "force" if force_install else "never" if no_install else "fallback"
-                ),
-                probe_version=as_json,
-            )
-            if exe is not None and not as_json:
-                exe = exe.path
+        exe: Union[CondaExecutable, Path, None]
+        try:
+            if as_json or force_install:
+                # Keep old-API minimums when calling the resolver directly.
+                targets = _legacy_targets(
+                    mamba=mamba,
+                    micromamba=micromamba,
+                    conda=conda,
+                    conda_exe=conda_exe,
+                    min_conda_version=min_conda_version,
+                    min_mamba_version=min_mamba_version,
+                )
+                exe = _ensure(
+                    targets,
+                    install=(
+                        "force"
+                        if force_install
+                        else "never" if no_install else "fallback"
+                    ),
+                    probe_version=as_json,
+                )
+                if exe is not None and not as_json:
+                    exe = exe.path
+            else:
+                find = partial(
+                    ensureconda,
+                    mamba=mamba,
+                    micromamba=micromamba,
+                    conda=conda,
+                    conda_exe=conda_exe,
+                    min_mamba_version=min_mamba_version,
+                    min_conda_version=min_conda_version,
+                )
+                # Preserve the CLI's preference for installed executables.
+                exe = find(no_install=True)
+                if not exe and not no_install:
+                    exe = find(no_install=False)
+        except requests.RequestException as error:
+            # Each attempt has already been reported on stderr, so end with
+            # one line instead of a traceback.
+            detail = str(error)
+            reason = type(error).__name__
+            if detail:
+                reason += f": {detail}"
+            raise click.ClickException(f"download failed: {reason}")
+        except (
+            ExecutableReplacementError,
+            NotPublishedError,
+            UnsupportedPlatformError,
+        ) as error:
+            raise click.ClickException(str(error))
+        if exe:
+            logging.getLogger("ensureconda.cli").info("Found compatible executable")
+            # silly thing to force correct output order
+            time.sleep(0.01)
+            if isinstance(exe, CondaExecutable):
+                print(json.dumps(exe.to_json()), flush=True)
+            else:
+                print(str(exe), flush=True)
+            sys.exit(0)
         else:
-            find = partial(
-                ensureconda,
-                mamba=mamba,
-                micromamba=micromamba,
-                conda=conda,
-                conda_exe=conda_exe,
-                min_mamba_version=min_mamba_version,
-                min_conda_version=min_conda_version,
+            logging.getLogger("ensureconda.cli").error(
+                "Could not find compatible executable"
             )
-            # Preserve the CLI's preference for installed executables.
-            exe = find(no_install=True)
-            if not exe and not no_install:
-                exe = find(no_install=False)
-    except requests.RequestException as error:
-        # Each attempt has already been reported on stderr, so end with
-        # one line instead of a traceback.
-        detail = str(error)
-        reason = type(error).__name__
-        if detail:
-            reason += f": {detail}"
-        raise click.ClickException(f"download failed: {reason}")
-    except (
-        ExecutableReplacementError,
-        NotPublishedError,
-        UnsupportedPlatformError,
-    ) as error:
-        raise click.ClickException(str(error))
-    if exe:
-        print("Found compatible executable", file=sys.stderr, flush=True)
-        # silly thing to force correct output order
-        time.sleep(0.01)
-        if isinstance(exe, CondaExecutable):
-            print(json.dumps(exe.to_json()), flush=True)
-        else:
-            print(str(exe), flush=True)
-        sys.exit(0)
-    else:
-        print("Could not find compatible executable", file=sys.stderr)
-        sys.exit(1)
+            sys.exit(1)
 
 
 if __name__ == "__main__":

@@ -1,7 +1,7 @@
 import errno
+import logging
 import os
 import subprocess
-import sys
 from pathlib import Path
 from typing import (
     Callable,
@@ -46,6 +46,8 @@ from ensureconda.resolve import (
     micromamba_executables,
     platform_subdir,
 )
+
+logger = logging.getLogger(__name__)
 
 _FLAVORS: Tuple[Flavor, ...] = ("mamba", "micromamba", "conda", "conda_standalone")
 _TARGET_FLAVORS = {canonicalize_name(flavor): flavor for flavor in _FLAVORS}
@@ -210,8 +212,8 @@ def ensure(
       tool at most once per call. Requires at least one installable target.
 
     Return the path, flavor, and version, or None if no compatible executable
-    is found. If --version cannot start or exits unsuccessfully, report the
-    failure on stderr and skip the candidate, including after installation.
+    is found. If --version cannot start or exits unsuccessfully, log a warning
+    and skip the candidate, including after installation.
     Successful commands with unparseable or undecodable output can satisfy
     unconstrained targets, with version=None.
 
@@ -328,10 +330,7 @@ def _ensure(
                 )
                 if not remaining:
                     raise
-                print(
-                    f"{error}; trying {' or '.join(remaining)} instead",
-                    file=sys.stderr,
-                )
+                logger.warning(f"{error}; trying {' or '.join(remaining)} instead")
                 continue
             candidates = iter([installed_path])
         else:

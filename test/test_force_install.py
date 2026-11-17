@@ -1,10 +1,11 @@
 import hashlib
 import io
 import json
+import logging
 import sys
 import tarfile
 from pathlib import Path
-from typing import IO, List, Optional
+from typing import IO, Callable, List, Optional
 from unittest.mock import Mock
 
 import filelock
@@ -208,7 +209,7 @@ def test_force_standalone_rejects_archive_without_replacing_cache(
 @pytest.mark.usefixtures("no_discovery")
 def test_force_install_checks_version_constraints(
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    log_messages: Callable[[], str],
 ) -> None:
     install = Mock(return_value=Path("micromamba"))
     monkeypatch.setattr(api, "install_micromamba", install)
@@ -217,7 +218,7 @@ def test_force_install_checks_version_constraints(
     )
     assert api.ensure(["micromamba>=2"], install="force", probe_version=False) is None
     install.assert_called_once()
-    assert capsys.readouterr().err == "Rejected micromamba 1.0: requires >=2\n"
+    assert log_messages() == "Rejected micromamba 1.0: requires >=2\n"
 
 
 @pytest.mark.usefixtures("no_discovery")
@@ -273,7 +274,7 @@ def test_force_cli_keeps_version_minimums(
 def test_force_reports_version_rejection_before_fallback(
     entry_point: str,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    log_messages: Callable[[], str],
 ) -> None:
     monkeypatch.setattr(
         api, "install_micromamba", lambda *args, **kwargs: Path("micromamba")
@@ -285,14 +286,14 @@ def test_force_reports_version_rejection_before_fallback(
     )
 
     def standalone(constraint: object, **kwargs: object) -> Path:
-        print("Downloading conda-standalone", file=sys.stderr)
+        logging.getLogger("ensureconda.test").warning("Downloading conda-standalone")
         return Path("conda_standalone")
 
     monkeypatch.setattr(api, "install_conda_exe", standalone)
     if entry_point == "api":
         result = api.ensure(["micromamba>=3", "conda_standalone"], install="force")
         assert result is not None and result.path == Path("conda_standalone")
-        output = capsys.readouterr().err
+        output = log_messages()
     else:
         args = ["--force-install", "--min-mamba-version", "3"]
         if entry_point == "json-cli":
@@ -311,7 +312,7 @@ def test_force_reports_version_rejection_before_fallback(
 def test_force_install_falls_back_only_to_installable_targets(
     standalone: bool,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    log_messages: Callable[[], str],
 ) -> None:
     monkeypatch.setattr(
         api,
@@ -324,7 +325,7 @@ def test_force_install_falls_back_only_to_installable_targets(
         result = api.ensure(install="force", probe_version=False)
         assert result is not None and result.path == Path("conda_standalone")
         install.assert_called_once()
-        assert capsys.readouterr().err == (
+        assert log_messages() == (
             "micromamba is not published; trying conda-standalone instead\n"
         )
     else:
@@ -394,7 +395,7 @@ def test_force_downloads_repeated_tool_only_once(
 def test_force_does_not_retry_an_unpublished_tool_for_later_constraints(
     standalone: bool,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    log_messages: Callable[[], str],
 ) -> None:
     micro = Mock(side_effect=installer.NotPublishedError("micromamba is not published"))
     conda = Mock(return_value=Path("conda_standalone"))
@@ -406,12 +407,12 @@ def test_force_does_not_retry_an_unpublished_tool_for_later_constraints(
         result = api.ensure(targets, install="force", probe_version=False)
         assert result is not None and result.path == Path("conda_standalone")
         conda.assert_called_once()
-        assert capsys.readouterr().err == (
+        assert log_messages() == (
             "micromamba is not published; trying conda-standalone instead\n"
         )
     else:
         with pytest.raises(installer.NotPublishedError):
             api.ensure(targets, install="force")
         conda.assert_not_called()
-        assert capsys.readouterr().err == ""
+        assert log_messages() == ""
     micro.assert_called_once()

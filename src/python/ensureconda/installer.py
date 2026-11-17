@@ -1,10 +1,10 @@
 import contextlib
 import hashlib
 import io
+import logging
 import os
 import shutil
 import stat
-import sys
 import tarfile
 import time
 import uuid
@@ -32,6 +32,8 @@ from packaging.version import InvalidVersion, Version
 
 from ensureconda._versions import _VersionConstraint, check_executable
 from ensureconda.resolve import is_exe, is_windows, platform_subdir, site_path
+
+logger = logging.getLogger(__name__)
 
 LOCK_NOTIFICATION_INTERVAL_SEC = 5
 """Seconds between lock acquisition attempts and waiting notifications."""
@@ -174,7 +176,7 @@ def request_url_with_retry(
                 f"attempt {attempt}"
             )
             if not retryable:
-                print(f"{failure}; not retrying", file=sys.stderr)
+                logger.warning(f"{failure}; not retrying")
                 raise
 
             delay_sec = backoff_sec
@@ -190,17 +192,13 @@ def request_url_with_retry(
                     )
             remaining_sec = max(0.0, deadline_sec - time.monotonic())
             if delay_sec > remaining_sec:
-                print(
+                logger.warning(
                     f"{failure}; retrying again would exceed the remaining time budget "
-                    f"({remaining_sec:.1f}s remaining, {delay_sec:g}s required){delay_source}",
-                    file=sys.stderr,
+                    f"({remaining_sec:.1f}s remaining, {delay_sec:g}s required){delay_source}"
                 )
                 raise
 
-            print(
-                f"{failure}; retrying in {delay_sec:g}s{delay_source}",
-                file=sys.stderr,
-            )
+            logger.warning(f"{failure}; retrying in {delay_sec:g}s{delay_source}")
             time.sleep(delay_sec)
             backoff_sec *= 2
 
@@ -243,10 +241,9 @@ def lock_with_feedback(
             lock.acquire(timeout=LOCK_NOTIFICATION_INTERVAL_SEC)
         except filelock.Timeout:
             total_wait_time = time.monotonic() - lock_start
-            print(
+            logger.info(
                 f"Waiting for lock for {lock_name} to be released by another process... "
-                f"({total_wait_time:.1f}s)",
-                file=sys.stderr,
+                f"({total_wait_time:.1f}s)"
             )
         else:
             break
@@ -255,9 +252,8 @@ def lock_with_feedback(
         # Success! Now report total wait time if we had to wait
         total_wait_time = time.monotonic() - lock_start
         if total_wait_time > 0.1:
-            print(
-                f"Lock for {lock_name} acquired after waiting {total_wait_time:.1f} seconds",
-                file=sys.stderr,
+            logger.info(
+                f"Lock for {lock_name} acquired after waiting {total_wait_time:.1f} seconds"
             )
         # Yield control back to the caller
         yield
@@ -404,10 +400,9 @@ def compute_candidates(channel: str, subdir: str) -> List[AnacondaPkg]:
         try:
             Version(info.version)
         except InvalidVersion:
-            print(
+            logger.warning(
                 f"Skipping conda-standalone {info.version} for {subdir}: "
-                "not a valid version",
-                file=sys.stderr,
+                "not a valid version"
             )
             continue
         candidates.append(info)

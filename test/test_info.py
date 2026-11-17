@@ -2,7 +2,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any, Dict, List, cast
+from typing import Any, Callable, Dict, List, cast
 
 import pytest
 from click.testing import CliRunner
@@ -77,12 +77,12 @@ def test_ensure_reports_flavor_and_version(
 @pytest.mark.usefixtures("only_micromamba")
 @pytest.mark.parametrize("output", ["garbage", ""])
 def test_ensure_reports_unknown_version(
-    output: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    output: str, monkeypatch: pytest.MonkeyPatch, log_messages: Callable[[], str]
 ) -> None:
     fake_version_outputs(monkeypatch, {"micromamba": output})
 
     assert ensure(install="never") == CondaExecutable(MICROMAMBA, "micromamba", None)
-    assert capsys.readouterr().err == ""
+    assert log_messages() == ""
 
 
 @pytest.mark.usefixtures("only_micromamba")
@@ -162,7 +162,7 @@ def test_identify_still_reports_unknown_version_after_probe_failure(
     error: Exception,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    log_messages: Callable[[], str],
 ) -> None:
     def broken_version(executable: object) -> Version:
         raise error
@@ -171,7 +171,7 @@ def test_identify_still_reports_unknown_version_after_probe_failure(
     monkeypatch.setattr(_versions, "determine_micromamba_version", broken_version)
 
     assert identify(executable) == CondaExecutable(executable, "micromamba", None)
-    assert capsys.readouterr().err == ""
+    assert log_messages() == ""
 
 
 def test_identify_rejects_missing_and_unexecutable_files(
