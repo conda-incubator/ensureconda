@@ -402,16 +402,28 @@ def compute_candidates(channel: str, subdir: str) -> List[AnacondaPkg]:
             # Older conda-forge files lack a SHA-256 digest.
             sha256=file_info.get("sha256"),
         )
-        # Builds marked as broken lose the "main" label. Keep entries whose
-        # labels are missing or null, as from a listing that omits them.
+        # Builds marked as broken get the "broken" label and may keep "main".
+        # Keep entries whose labels are missing or null, as from a listing
+        # that omits them.
         labels = file_info.get("labels")
         if not (
             info.attrs.subdir == subdir
             # Ignore onedir packages as workaround for
             # <https://github.com/conda/conda-standalone/issues/182>
             and "_onedir_" not in info.attrs.build
-            and (labels is None or "main" in labels)
+            and (labels is None or ("main" in labels and "broken" not in labels))
         ):
+            continue
+        try:
+            artifact = urlparse(info.download_url)
+        except ValueError:
+            logger.warning(
+                "Skipping conda-standalone %s for %s: invalid download URL",
+                info.version,
+                subdir,
+            )
+            continue
+        if not artifact.path.endswith((".tar.bz2", ".conda")):
             continue
         try:
             Version(info.version)
