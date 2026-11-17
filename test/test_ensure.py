@@ -3,7 +3,7 @@ import json
 import subprocess
 from pathlib import Path
 from test.test_info import fake_version_outputs
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 import pytest
 import requests
@@ -162,7 +162,7 @@ def test_unconstrained_probe_errors(
     error: Exception,
     skip: bool,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    log_messages: Callable[[], str],
 ) -> None:
     def broken_version(executable: object) -> Version:
         raise error
@@ -180,23 +180,22 @@ def test_unconstrained_probe_errors(
     result = ensure(["micromamba"], install="never" if installed else "fallback")
 
     assert result == (None if skip else CondaExecutable(MICROMAMBA, "micromamba", None))
-    captured = capsys.readouterr()
-    assert captured.out == ""
+    captured = log_messages()
     if skip:
         reason = (
             "`--version` exited with status 1"
             if isinstance(error, subprocess.CalledProcessError)
             else str(error)
         )
-        assert captured.err == (
+        assert captured == (
             f"Skipping {MICROMAMBA}: could not determine its version ({reason})\n"
         )
     else:
-        assert captured.err == ""
+        assert captured == ""
 
 
 def test_unconstrained_target_can_disable_execution_check(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, log_messages: Callable[[], str]
 ) -> None:
     monkeypatch.setattr(api, "micromamba_executables", lambda: iter([MICROMAMBA]))
     calls = fake_version_outputs(monkeypatch, {})
@@ -205,14 +204,14 @@ def test_unconstrained_target_can_disable_execution_check(
         MICROMAMBA, "micromamba", None
     )
     assert calls == []
-    assert capsys.readouterr().err == ""
+    assert log_messages() == ""
 
 
 def test_failed_probe_reports_skip_before_installation(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, log_messages: Callable[[], str]
 ) -> None:
     def install(constraint: object, **kwargs: object) -> Path:
-        assert f"Skipping {CONDA}" in capsys.readouterr().err
+        assert f"Skipping {CONDA}" in log_messages()
         return MICROMAMBA
 
     monkeypatch.setattr(api, "conda_executables", lambda: iter([CONDA]))
@@ -226,7 +225,7 @@ def test_failed_probe_reports_skip_before_installation(
 
 
 def test_failed_probe_allows_a_later_installer(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, log_messages: Callable[[], str]
 ) -> None:
     monkeypatch.setattr(api, "install_micromamba", lambda *args, **kwargs: MICROMAMBA)
     monkeypatch.setattr(api, "install_conda_exe", lambda *args, **kwargs: STANDALONE)
@@ -236,7 +235,7 @@ def test_failed_probe_allows_a_later_installer(
         STANDALONE, "conda_standalone", Version("25.1.1")
     )
     assert calls == ["micromamba", "conda_standalone"]
-    assert f"Skipping {MICROMAMBA}" in capsys.readouterr().err
+    assert f"Skipping {MICROMAMBA}" in log_messages()
 
 
 def test_never_searches_later_targets_without_installing(
@@ -454,7 +453,7 @@ def test_installed_download_must_satisfy_constraints(
 
 @pytest.mark.parametrize("flavor", ["micromamba", "conda_standalone"])
 def test_unpublished_target_falls_back_in_either_order(
-    flavor: str, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    flavor: str, monkeypatch: pytest.MonkeyPatch, log_messages: Callable[[], str]
 ) -> None:
     def unpublished(constraint: object, **kwargs: object) -> Path:
         raise NotPublishedError(f"{flavor} is not published")
@@ -482,7 +481,7 @@ def test_unpublished_target_falls_back_in_either_order(
     result = ensure([flavor, other])
 
     assert result is not None and result.path == expected
-    assert f"trying {other.replace('_', '-')} instead" in capsys.readouterr().err
+    assert f"trying {other.replace('_', '-')} instead" in log_messages()
 
 
 @pytest.mark.parametrize(

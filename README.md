@@ -70,6 +70,8 @@ Options:
                                   accept (defaults to 0.7.3)
   --json                          print the executable's path, flavor and
                                   version as JSON
+  -v, --verbosity INTEGER RANGE   0: warnings; 1: decisions; 2-3: debug
+                                  details  [default: 1; 0<=x<=3]
   --help                          Show this message and exit.
 ```
 
@@ -182,8 +184,8 @@ By default, `ensure()` runs `--version` on each candidate it considers:
   returned as metadata.
 - If it succeeds but the version cannot be parsed or the output cannot be
   decoded, an unconstrained target can still return it with `version=None`.
-- If the command cannot start or exits unsuccessfully, `ensure()` reports the
-  failure on stderr and skips the candidate. It continues with other candidates,
+- If the command cannot start or exits unsuccessfully, `ensure()` logs a
+  warning and skips the candidate. It continues with other candidates,
   later targets, and installation according to the selected search order.
 
 This check also applies to candidates returned by an installer. An installer

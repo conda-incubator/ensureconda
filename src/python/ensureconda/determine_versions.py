@@ -1,5 +1,6 @@
 """Version probes and matching shared by discovery and installation."""
 
+import logging
 import os
 import subprocess
 import sys
@@ -8,6 +9,8 @@ from typing import TYPE_CHECKING, Dict, Literal, NamedTuple, Optional, Union
 
 from packaging.specifiers import SpecifierSet
 from packaging.version import InvalidVersion, Version
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING or sys.version_info >= (3, 9):
     _StrPath = Union[str, os.PathLike[str]]
@@ -131,9 +134,10 @@ def check_executable(
                     else str(error)
                 )
                 if not quiet:
-                    print(
-                        f"Skipping {path}: could not determine its version ({reason})",
-                        file=sys.stderr,
+                    logger.warning(
+                        "Skipping %s: could not determine its version (%s)",
+                        path,
+                        reason,
                     )
                 return None
     requirement = None
@@ -148,9 +152,8 @@ def check_executable(
     if requirement is not None:
         if report_rejections and not quiet:
             found_version = version if version is not None else "unknown version"
-            print(
-                f"Rejected {path} {found_version}: requires {requirement}",
-                file=sys.stderr,
+            logger.warning(
+                "Rejected %s %s: requires %s", path, found_version, requirement
             )
         return None
     return CondaExecutable(path, flavor, version)

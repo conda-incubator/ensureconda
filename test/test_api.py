@@ -2,7 +2,7 @@ import os
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import Callable, List, Optional, Union
 
 import pytest
 import requests
@@ -29,7 +29,7 @@ WORKING_MICROMAMBA = Path("working", "micromamba")
 def test_skip_candidate_whose_version_check_fails(
     error: Exception,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    log_messages: Callable[[], str],
 ) -> None:
     def broken_version(executable: object) -> Version:
         raise error
@@ -53,7 +53,7 @@ def test_skip_candidate_whose_version_check_fails(
     )
 
     assert executable == WORKING_MICROMAMBA
-    assert f"Skipping {BROKEN_MAMBA}" in capsys.readouterr().err
+    assert f"Skipping {BROKEN_MAMBA}" in log_messages()
 
 
 def test_search_without_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -88,7 +88,7 @@ def test_install_replaces_a_new_executable_that_the_search_rejected(
     minimum: Optional[Version],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    log_messages: Callable[[], str],
 ) -> None:
     executable = tmp_path / ("micromamba.exe" if resolve.is_windows else "micromamba")
     executable.write_bytes(b"micromamba")
@@ -131,7 +131,7 @@ def test_install_replaces_a_new_executable_that_the_search_rejected(
     assert len(downloads) == 1
     skipped = 1 if isinstance(version, Exception) else 0
     # On Windows, the search spells the extension as in PATHEXT (".EXE").
-    err = os.path.normcase(capsys.readouterr().err)
+    err = os.path.normcase(log_messages())
     assert err.count(os.path.normcase(f"Skipping {executable}")) == skipped
 
 
@@ -160,7 +160,7 @@ NOT_PUBLISHED = "micromamba is not published for linux-s390x"
 
 @pytest.mark.usefixtures("nothing_installed")
 def test_unpublished_micromamba_falls_back_to_conda_standalone(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, log_messages: Callable[[], str]
 ) -> None:
     conda_standalone = Path("data", "conda_standalone")
     failing_micromamba_install(monkeypatch, NotPublishedError(NOT_PUBLISHED))
@@ -169,21 +169,21 @@ def test_unpublished_micromamba_falls_back_to_conda_standalone(
     )
 
     assert api.ensureconda() == conda_standalone
-    assert capsys.readouterr().err == (
+    assert log_messages() == (
         f"{NOT_PUBLISHED}; trying conda or conda-standalone instead\n"
     )
 
 
 @pytest.mark.usefixtures("nothing_installed")
 def test_unpublished_micromamba_falls_back_to_conda(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, log_messages: Callable[[], str]
 ) -> None:
     conda = Path("opt", "conda", "bin", "conda")
     failing_micromamba_install(monkeypatch, NotPublishedError(NOT_PUBLISHED))
     monkeypatch.setattr(api, "conda_executables", lambda: iter([conda]))
 
     assert api.ensureconda(conda_exe=False) == conda
-    assert capsys.readouterr().err == f"{NOT_PUBLISHED}; trying conda instead\n"
+    assert log_messages() == f"{NOT_PUBLISHED}; trying conda instead\n"
 
 
 @pytest.mark.usefixtures("nothing_installed")
