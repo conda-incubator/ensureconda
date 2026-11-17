@@ -233,6 +233,12 @@ func ensureCondaWithMetadata(mamba, micromamba, conda, condaStandalone, noInstal
 		}
 		if !noInstall {
 			exe, err := installCondaStandalone(forceInstall)
+			var noCompatible *noCompatibleVersionError
+			if errors.As(err, &noCompatible) {
+				log.StandardLogger().Log(rejectionLevel, err)
+				return nil, nil
+			}
+
 			if err != nil {
 				return nil, err
 			}
