@@ -38,8 +38,11 @@ from ensureconda.resolve import (
     platform_subdir,
 )
 
-if TYPE_CHECKING:
-    from _typeshed import StrPath
+if TYPE_CHECKING or sys.version_info >= (3, 9):
+    _StrPath = Union[str, os.PathLike[str]]
+else:
+    # PathLike is not subscriptable at runtime on Python 3.8.
+    _StrPath = Union[str, os.PathLike]
 
 
 # The old version helpers use 0.0.0 as a sentinel for unrecognized output.
@@ -47,7 +50,7 @@ if TYPE_CHECKING:
 _LEGACY_UNKNOWN_VERSION = Version("0.0.0")
 
 
-def determine_mamba_version(exe: "StrPath") -> Version:
+def determine_mamba_version(exe: _StrPath) -> Version:
     """Determine the version of mamba on the given executable.
 
     Typical output of `mamba --version` for v1 is:
@@ -69,14 +72,14 @@ def determine_mamba_version(exe: "StrPath") -> Version:
     return determine_micromamba_version(exe)
 
 
-def determine_micromamba_version(exe: "StrPath") -> Version:
+def determine_micromamba_version(exe: _StrPath) -> Version:
     out = subprocess.check_output([exe, "--version"], encoding="utf-8").strip()
     for line in out.splitlines(keepends=False):
         return Version(line.split()[-1])
     return _LEGACY_UNKNOWN_VERSION
 
 
-def determine_conda_version(exe: "StrPath") -> Version:
+def determine_conda_version(exe: _StrPath) -> Version:
     out = subprocess.check_output([exe, "--version"], encoding="utf-8").strip()
     for line in out.splitlines(keepends=False):
         if line.startswith("conda"):
@@ -120,7 +123,7 @@ _INSTALL_POLICIES: Tuple[InstallPolicy, ...] = (
 )
 
 
-def _probe_version(executable: "StrPath", flavor: Flavor) -> Optional[Version]:
+def _probe_version(executable: _StrPath, flavor: Flavor) -> Optional[Version]:
     if flavor == "mamba":
         version = determine_mamba_version(executable)
     elif flavor == "micromamba":
@@ -132,7 +135,7 @@ def _probe_version(executable: "StrPath", flavor: Flavor) -> Optional[Version]:
     return None if version == _LEGACY_UNKNOWN_VERSION else version
 
 
-def _flavor_from_name(executable: "StrPath") -> Optional[Flavor]:
+def _flavor_from_name(executable: _StrPath) -> Optional[Flavor]:
     name = Path(executable).name.lower()
     for suffix in (".exe", ".bat", ".cmd"):
         if name.endswith(suffix):
@@ -147,7 +150,7 @@ def _flavor_from_name(executable: "StrPath") -> Optional[Flavor]:
     return flavors.get(name)
 
 
-def _probe_flavor(executable: "StrPath") -> Optional[Flavor]:
+def _probe_flavor(executable: _StrPath) -> Optional[Flavor]:
     try:
         output = subprocess.check_output([executable, "--version"], encoding="utf-8")
     except (subprocess.CalledProcessError, OSError, UnicodeDecodeError):
@@ -333,7 +336,7 @@ def _ensure(
         "conda": conda_executables,
         "conda_standalone": conda_standalone_executables,
     }
-    installers: Dict[Flavor, Callable[[Callable[[Path], bool]], Optional[Path]]] = {
+    installers: Dict[Flavor, Callable[[Callable[[Path], bool]], Path]] = {
         "micromamba": install_micromamba,
         "conda_standalone": install_conda_exe,
     }
@@ -435,7 +438,7 @@ def _ensure(
             if flavor in installers
         )
 
-    refreshed: Dict[Flavor, Optional[Path]] = {}
+    refreshed: Dict[Flavor, Path] = {}
     unpublished: Set[Flavor] = set()
     for index, (flavor, constraint, installing) in enumerate(steps):
         if flavor in unpublished:
@@ -467,9 +470,7 @@ def _ensure(
                     file=sys.stderr,
                 )
                 continue
-            candidates = (
-                iter([installed_path]) if installed_path is not None else iter([])
-            )
+            candidates = iter([installed_path])
         else:
             candidates = finders[flavor]()
         for path in candidates:
@@ -481,7 +482,7 @@ def _ensure(
     return None
 
 
-def identify(executable: "StrPath") -> CondaExecutable:
+def identify(executable: _StrPath) -> CondaExecutable:
     """Describe a conda, mamba, micromamba, or conda-standalone executable.
 
     The flavor comes from the file name, as for the executables that

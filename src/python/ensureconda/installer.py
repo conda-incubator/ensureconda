@@ -333,7 +333,7 @@ def _runs(executable: Path) -> bool:
     return True
 
 
-def install_conda_exe(is_usable: Callable[[Path], bool] = _runs) -> Optional[Path]:
+def install_conda_exe(is_usable: Callable[[Path], bool] = _runs) -> Path:
     """Install conda-standalone into the installation
 
     Reuse one that is already there if it passes is_usable, by default if its
@@ -420,7 +420,7 @@ def compute_candidates(channel: str, subdir: str) -> List[AnacondaPkg]:
     return candidates
 
 
-def install_micromamba(is_usable: Callable[[Path], bool] = _runs) -> Optional[Path]:
+def install_micromamba(is_usable: Callable[[Path], bool] = _runs) -> Path:
     """Install micromamba into the installation
 
     Reuse one that is already there if it passes is_usable, by default if its
