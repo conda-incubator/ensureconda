@@ -144,6 +144,31 @@ func TestFindExecutable(t *testing.T) {
 	}
 }
 
+func TestResolveExecutableDataDirectoryWithPathSeparator(t *testing.T) {
+	t.Setenv("PATHEXT", ".EXE")
+	dir := filepath.Join(t.TempDir(), "with"+string(os.PathListSeparator)+"separator")
+	if err := os.Mkdir(dir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	pathDir := t.TempDir()
+	t.Setenv("PATH", pathDir)
+	fileName := "tool"
+	if runtime.GOOS == "windows" {
+		fileName += ".EXE"
+	}
+	// The data directory still takes precedence over a candidate on PATH.
+	for _, parent := range []string{dir, pathDir} {
+		if err := os.WriteFile(filepath.Join(parent, fileName), nil, 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := filepath.Join(dir, fileName)
+	got, err := ResolveExecutable("tool", dir, acceptAny)
+	if err != nil || got != want {
+		t.Fatalf("ResolveExecutable() = %q, %v; want %q", got, err, want)
+	}
+}
+
 func TestFindExecutableSkipsNonExecutable(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows has no executable permission bits")
