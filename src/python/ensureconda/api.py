@@ -334,6 +334,15 @@ def _ensure(
                 continue
             candidates = iter([installed_path])
         else:
+            logger.debug(
+                "Searching for %s matching %s",
+                flavor,
+                (
+                    f">={constraint}"
+                    if isinstance(constraint, Version)
+                    else constraint or "any version"
+                ),
+            )
             candidates = finders[flavor]()
         for path in candidates:
             result = check_executable(
@@ -344,6 +353,10 @@ def _ensure(
                 report_rejections=report_rejections,
             )
             if result is not None:
+                if result.version is None:
+                    logger.info("Selected %s at %s", flavor, path)
+                else:
+                    logger.info("Selected %s %s at %s", flavor, result.version, path)
                 return result
     if unsupported_platform is not None:
         raise unsupported_platform

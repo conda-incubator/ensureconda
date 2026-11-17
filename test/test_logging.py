@@ -51,5 +51,66 @@ def test_cli_logs_to_stderr_and_restores_application_logger(
         "version": "2",
     }
     assert ("Found compatible executable" in result.stderr) == (verbosity >= 1)
+    assert ("Rejected old 1: requires >=2" in result.stderr) == (verbosity >= 1)
+    assert ("Selected micromamba 2 at new" in result.stderr) == (verbosity >= 1)
+    assert ("Searching for micromamba" in result.stderr) == (verbosity >= 2)
     assert (logger.level, logger.handlers, logger.propagate) == previous
     assert (root.level, root.handlers) == previous_root
+
+
+def test_library_decisions_are_available_to_application_logging(
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(api, "micromamba_executables", lambda: iter([Path("old")]))
+    monkeypatch.setattr(_versions, "_probe_version", lambda path, flavor: Version("1"))
+    with caplog.at_level(logging.INFO, logger="ensureconda"):
+        assert api.ensure(["micromamba>=2"], install="never") is None
+    assert caplog.messages == ["Rejected old 1: requires >=2"]
+    assert capsys.readouterr().out == ""
+
+
+def test_cli_reports_no_failure_before_installing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    for finder in [
+        "mamba_executables",
+        "micromamba_executables",
+        "conda_executables",
+        "conda_standalone_executables",
+    ]:
+        monkeypatch.setattr(api, finder, lambda: iter([]))
+    monkeypatch.setattr(
+        api, "install_micromamba", lambda *args, **kwargs: Path("micromamba")
+    )
+    monkeypatch.setattr(_versions, "_probe_version", lambda path, flavor: Version("2"))
+    runner_options: Dict[str, Any] = {}
+    if "mix_stderr" in inspect.signature(CliRunner).parameters:
+        runner_options["mix_stderr"] = False
+
+    result = CliRunner(**runner_options).invoke(cli.ensureconda_cli, [])
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout == "micromamba\n"
+    assert result.stderr == (
+        "Selected micromamba 2 at micromamba\nFound compatible executable\n"
+    )
+
+
+@pytest.mark.parametrize("probe_version", [True, False])
+def test_selection_without_a_known_version(
+    probe_version: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(
+        api, "micromamba_executables", lambda: iter([Path("micromamba")])
+    )
+    monkeypatch.setattr(_versions, "_probe_version", lambda path, flavor: None)
+    with caplog.at_level(logging.INFO, logger="ensureconda"):
+        result = api.ensure(
+            ["micromamba"], install="never", probe_version=probe_version
+        )
+    assert result == api.CondaExecutable(Path("micromamba"), "micromamba", None)
+    assert caplog.messages == ["Selected micromamba at micromamba"]

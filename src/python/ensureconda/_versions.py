@@ -143,8 +143,11 @@ def check_executable(
         if version is None or not constraint.contains(version, prereleases=True):
             requirement = str(constraint)
     if requirement is not None:
-        if report_rejections and not quiet:
+        if not quiet:
             found_version = version if version is not None else "unknown version"
-            logger.warning(f"Rejected {path} {found_version}: requires {requirement}")
+            logger.log(
+                logging.WARNING if report_rejections else logging.INFO,
+                f"Rejected {path} {found_version}: requires {requirement}",
+            )
         return None
     return CondaExecutable(path, flavor, version)
