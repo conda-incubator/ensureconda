@@ -1,11 +1,11 @@
 import contextlib
 import hashlib
 import io
+import logging
 import os
 import shutil
 import stat
 import subprocess
-import sys
 import tarfile
 import time
 import uuid
@@ -17,22 +17,32 @@ from tempfile import TemporaryFile
 from typing import (
     IO,
     Any,
-    Callable,
     Dict,
     Generator,
     List,
     NamedTuple,
     Optional,
+    Tuple,
     Union,
 )
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import filelock
 import requests
 from conda_package_streaming.package_streaming import stream_conda_component
 from packaging.version import InvalidVersion, Version
 
-from ensureconda.resolve import is_windows, platform_subdir, site_path
+from ensureconda import _versions
+from ensureconda._versions import (
+    Flavor,
+    _VersionConstraint,
+    check_executable,
+    requirement_text,
+    version_satisfies,
+)
+from ensureconda.resolve import is_exe, is_windows, platform_subdir, site_path
+
+logger = logging.getLogger(__name__)
 
 LOCK_NOTIFICATION_INTERVAL_SEC = 5
 """Seconds between lock acquisition attempts and waiting notifications."""
@@ -46,30 +56,23 @@ READ_TIMEOUT_SEC = 60
 RETRY_TIME_BUDGET_SEC = 70
 """Elapsed seconds allowed for scheduling retries; active downloads may finish."""
 
-# Keep this in step with micromambaSubdirs in src/golang/cmd/install.go.
-MICROMAMBA_SUBDIRS = frozenset(
-    {
-        "linux-64",
-        "linux-aarch64",
-        "linux-ppc64le",
-        "linux-riscv64",
-        "osx-64",
-        "osx-arm64",
-        "win-64",
-        "win-arm64",
-    }
-)
-"""Platforms that micromamba is published for.
-
-This is `conda_platforms` in
-<https://api.anaconda.org/package/conda-forge/micromamba>. It only decides what
-a 404 from micro.mamba.pm means, so a platform that is missing here still gets
-micromamba as soon as one is published.
-"""
-
 
 class NotPublishedError(RuntimeError):
     """Nothing that could be installed is published for this platform."""
+
+
+class NoCompatibleVersionError(RuntimeError):
+    """Packages exist for the platform, but none satisfies this target."""
+
+
+class DownloadedExecutableError(RuntimeError):
+    """The downloaded executable cannot run or fails the requested requirement."""
+
+
+class DownloadValidation(NamedTuple):
+    flavor: Flavor
+    constraint: _VersionConstraint
+    expected_version: Version
 
 
 class ExecutableReplacementError(OSError, RuntimeError):
@@ -116,8 +119,15 @@ def _retry_after_delay(value: str) -> Optional[float]:
         return None
 
 
+class _HeadersOnlySession(requests.Session):
+    def get_redirect_target(self, resp: requests.Response) -> Optional[str]:
+        # Even with allow_redirects=False, Requests normally consumes a
+        # redirect body to prepare Response.next. We only need its headers.
+        return None
+
+
 def request_url_with_retry(
-    url: str, *, destination: Optional[IO[bytes]] = None
+    url: str, *, destination: Optional[IO[bytes]] = None, follow_redirects: bool = True
 ) -> requests.Response:
     """Retrieve a URL, retrying transient failures during the entire download.
 
@@ -125,6 +135,9 @@ def request_url_with_retry(
     provided, stream the body there instead, replacing its contents on each
     attempt and rewinding it on success. The caller owns the destination;
     the returned response's body has already been consumed in this mode.
+
+    With follow_redirects=False, return headers without reading the body, and
+    return a 404 instead of raising; the latest-version lookup expects both.
 
     Retry-After on retryable HTTP responses can extend an individual wait.
     Schedule retries only within RETRY_TIME_BUDGET_SEC seconds of the initial
@@ -141,10 +154,19 @@ def request_url_with_retry(
             destination.seek(0)
             destination.truncate()
         try:
-            with requests.get(
-                url, stream=True, timeout=(CONNECT_TIMEOUT_SEC, READ_TIMEOUT_SEC)
+            session_type = requests.Session if follow_redirects else _HeadersOnlySession
+            with session_type() as session, session.get(
+                url,
+                stream=True,
+                timeout=(CONNECT_TIMEOUT_SEC, READ_TIMEOUT_SEC),
+                allow_redirects=follow_redirects,
             ) as response:
+                if not follow_redirects and response.status_code == 404:
+                    return response
                 response.raise_for_status()
+                if not follow_redirects:
+                    # Inspect headers only, even if the endpoint unexpectedly returns 200.
+                    return response
                 # urllib3 1.x otherwise accepts bodies shorter than Content-Length.
                 response.raw.enforce_content_length = True
                 if destination is None:
@@ -175,7 +197,7 @@ def request_url_with_retry(
                 f"attempt {attempt}"
             )
             if not retryable:
-                print(f"{failure}; not retrying", file=sys.stderr)
+                logger.warning(f"{failure}; not retrying")
                 raise
 
             delay_sec = backoff_sec
@@ -191,36 +213,43 @@ def request_url_with_retry(
                     )
             remaining_sec = max(0.0, deadline_sec - time.monotonic())
             if delay_sec > remaining_sec:
-                print(
+                logger.warning(
                     f"{failure}; retrying again would exceed the remaining time budget "
-                    f"({remaining_sec:.1f}s remaining, {delay_sec:g}s required){delay_source}",
-                    file=sys.stderr,
+                    f"({remaining_sec:.1f}s remaining, {delay_sec:g}s required){delay_source}"
                 )
                 raise
 
-            print(
-                f"{failure}; retrying in {delay_sec:g}s{delay_source}",
-                file=sys.stderr,
-            )
+            logger.warning(f"{failure}; retrying in {delay_sec:g}s{delay_source}")
             time.sleep(delay_sec)
             backoff_sec *= 2
 
 
 def extract_files_from_tar_bz2(
-    tarball: io.BytesIO, filename: str, dest_filename: str
+    tarball: io.BytesIO,
+    filename: str,
+    dest_filename: str,
+    *,
+    validation: Optional[DownloadValidation] = None,
 ) -> Path:
     tarball.seek(0)
     with tarfile.open(mode="r:bz2", fileobj=tarball) as tf:
         fo = tf.extractfile(filename)
         if fo is None:
             raise RuntimeError("Could not extract executable!")
-        return write_executable_from_file_object(fo, dest_filename)
+        return write_executable_from_file_object(
+            fo, dest_filename, validation=validation
+        )
 
 
-def write_executable_from_file_object(fo: IO[bytes], dest_filename: str) -> Path:
+def write_executable_from_file_object(
+    fo: IO[bytes],
+    dest_filename: str,
+    *,
+    validation: Optional[DownloadValidation] = None,
+) -> Path:
     site_path().mkdir(parents=True, exist_ok=True)
     target_path = site_path() / dest_filename
-    with new_executable(target_path) as exe_fo:
+    with new_executable(target_path, validation=validation) as exe_fo:
         shutil.copyfileobj(fo, exe_fo, length=1024 * 1024)
     return target_path
 
@@ -244,10 +273,9 @@ def lock_with_feedback(
             lock.acquire(timeout=LOCK_NOTIFICATION_INTERVAL_SEC)
         except filelock.Timeout:
             total_wait_time = time.monotonic() - lock_start
-            print(
+            logger.info(
                 f"Waiting for lock for {lock_name} to be released by another process... "
-                f"({total_wait_time:.1f}s)",
-                file=sys.stderr,
+                f"({total_wait_time:.1f}s)"
             )
         else:
             break
@@ -256,9 +284,8 @@ def lock_with_feedback(
         # Success! Now report total wait time if we had to wait
         total_wait_time = time.monotonic() - lock_start
         if total_wait_time > 0.1:
-            print(
-                f"Lock for {lock_name} acquired after waiting {total_wait_time:.1f} seconds",
-                file=sys.stderr,
+            logger.info(
+                f"Lock for {lock_name} acquired after waiting {total_wait_time:.1f} seconds"
             )
         # Yield control back to the caller
         yield
@@ -280,7 +307,12 @@ def verify_sha256(fileobj: IO[bytes], expected: str, url: str) -> None:
         )
 
 
-def stream_conda_executable(url: str, sha256: Optional[str] = None) -> Path:
+def stream_conda_executable(
+    url: str,
+    sha256: Optional[str] = None,
+    *,
+    validation: Optional[DownloadValidation] = None,
+) -> Path:
     """Extract `conda.exe` from the conda-standalone package at the given URL.
 
     This is roughly a more modern version of `extract_files_from_tar_bz2`
@@ -293,6 +325,7 @@ def stream_conda_executable(url: str, sha256: Optional[str] = None) -> Path:
     dest_filename = f"conda_standalone{exe_suffix()}"
 
     filename = urlparse(url).path.rsplit("/", 1)[-1]
+    logger.info("conda-standalone: downloading %s", url)
     with TemporaryFile() as conda:
         request_url_with_retry(url, destination=conda)
         if sha256:
@@ -307,7 +340,9 @@ def stream_conda_executable(url: str, sha256: Optional[str] = None) -> Path:
                         raise RuntimeError(
                             f"Could not extract executable {member.name} from {url}!"
                         )
-                    conda_exe = write_executable_from_file_object(fo, dest_filename)
+                    conda_exe = write_executable_from_file_object(
+                        fo, dest_filename, validation=validation
+                    )
                     return conda_exe
         raise RuntimeError("Could not find conda.exe in the conda-standalone package")
 
@@ -324,20 +359,16 @@ def get_channel_name() -> str:
     return channel
 
 
-def _runs(executable: Path) -> bool:
-    """Report whether `executable --version` succeeds."""
-    try:
-        subprocess.check_output([executable, "--version"], stderr=subprocess.DEVNULL)
-    except (subprocess.CalledProcessError, OSError):
-        return False
-    return True
-
-
-def install_conda_exe(is_usable: Callable[[Path], bool] = _runs) -> Path:
+def install_conda_exe(
+    constraint: _VersionConstraint = None,
+    *,
+    force: bool = False,
+    probe_version: bool = True,
+) -> Path:
     """Install conda-standalone into the installation
 
-    Reuse one that is already there if it passes is_usable, by default if its
-    `--version` succeeds.
+    Recheck the cached executable under the download lock against the caller's
+    requirement. Force bypasses reuse, including after waiting for another writer.
     """
     subdir = platform_subdir()
     # Create a lock file specific to conda_exe to prevent concurrent downloads
@@ -349,21 +380,48 @@ def install_conda_exe(is_usable: Callable[[Path], bool] = _runs) -> Path:
     with lock_with_feedback(lock_path, "downloading conda"):
         # Check if the file already exists after acquiring the lock
         target_path = site_path() / dest_filename
-        if target_path.exists() and is_usable(target_path):
+        if (
+            not force
+            and is_exe(target_path)
+            and check_executable(
+                target_path,
+                "conda_standalone",
+                constraint,
+                probe_version=probe_version,
+                quiet=True,
+            )
+            is not None
+        ):
+            logger.debug(
+                "Reusing cached executable %s after acquiring the download lock",
+                target_path,
+            )
             return target_path
 
         channel = get_channel_name()
         candidates = compute_candidates(channel, subdir)
-        chosen = candidates[-1]
+        chosen = select_candidate(candidates, constraint, "conda-standalone", subdir)
+        logger.info(
+            "conda-standalone: selected version %s for %s", chosen.version, subdir
+        )
         url = "https:" + chosen.download_url
-        path_to_written_executable = stream_conda_executable(url, chosen.sha256)
+        path_to_written_executable = stream_conda_executable(
+            url,
+            chosen.sha256,
+            validation=DownloadValidation(
+                "conda_standalone", constraint, Version(chosen.version)
+            ),
+        )
         return path_to_written_executable
 
 
-def compute_candidates(channel: str, subdir: str) -> List[AnacondaPkg]:
-    """Compute the candidates for the conda-standalone package"""
+def compute_candidates(
+    channel: str, subdir: str, package: str = "conda-standalone"
+) -> List[AnacondaPkg]:
+    """List supported builds for the package, sorted by version/build/time."""
 
-    url = f"https://api.anaconda.org/package/{channel}/conda-standalone/files"
+    url = f"https://api.anaconda.org/package/{channel}/{package}/files"
+    logger.debug("Fetching %s metadata from %s", package, url)
     resp = request_url_with_retry(url)
     api_response_data: List[Dict[str, Any]] = resp.json()
 
@@ -384,24 +442,36 @@ def compute_candidates(channel: str, subdir: str) -> List[AnacondaPkg]:
             # Older conda-forge files lack a SHA-256 digest.
             sha256=file_info.get("sha256"),
         )
-        # Builds marked as broken lose the "main" label. Keep entries whose
-        # labels are missing or null, as from a listing that omits them.
+        # Builds marked as broken get the "broken" label and may keep "main".
+        # Keep entries whose labels are missing or null, as from a listing
+        # that omits them.
         labels = file_info.get("labels")
         if not (
             info.attrs.subdir == subdir
             # Ignore onedir packages as workaround for
             # <https://github.com/conda/conda-standalone/issues/182>
-            and "_onedir_" not in info.attrs.build
-            and (labels is None or "main" in labels)
+            and (package != "conda-standalone" or "_onedir_" not in info.attrs.build)
+            and (labels is None or ("main" in labels and "broken" not in labels))
         ):
+            continue
+        try:
+            artifact = urlparse(info.download_url)
+        except ValueError:
+            logger.warning(
+                "Skipping %s %s for %s: invalid download URL",
+                package,
+                info.version,
+                subdir,
+            )
+            continue
+        if not artifact.path.endswith((".tar.bz2", ".conda")):
             continue
         try:
             Version(info.version)
         except InvalidVersion:
-            print(
-                f"Skipping conda-standalone {info.version} for {subdir}: "
-                "not a valid version",
-                file=sys.stderr,
+            logger.warning(
+                f"Skipping {package} {info.version} for {subdir}: "
+                "not a valid version"
             )
             continue
         candidates.append(info)
@@ -414,17 +484,24 @@ def compute_candidates(channel: str, subdir: str) -> List[AnacondaPkg]:
         )
     )
     if len(candidates) == 0:
+        if package == "micromamba":
+            raise NotPublishedError(f"micromamba is not published for {subdir}")
         raise NotPublishedError(
-            f"No conda-standalone package found for {subdir} in channel {channel}"
+            f"No {package} package found for {subdir} in channel {channel}"
         )
     return candidates
 
 
-def install_micromamba(is_usable: Callable[[Path], bool] = _runs) -> Path:
+def install_micromamba(
+    constraint: _VersionConstraint = None,
+    *,
+    force: bool = False,
+    probe_version: bool = True,
+) -> Path:
     """Install micromamba into the installation
 
-    Reuse one that is already there if it passes is_usable, by default if its
-    `--version` succeeds.
+    Recheck the cached executable under the download lock against the caller's
+    requirement. Force bypasses reuse, including after waiting for another writer.
     """
     subdir = platform_subdir()
     # Create a lock file specific to micromamba to prevent concurrent downloads
@@ -436,36 +513,122 @@ def install_micromamba(is_usable: Callable[[Path], bool] = _runs) -> Path:
     with lock_with_feedback(lock_path, "downloading micromamba"):
         # Check if the file already exists after acquiring the lock
         target_path = site_path() / dest_filename
-        if target_path.exists() and is_usable(target_path):
+        if (
+            not force
+            and is_exe(target_path)
+            and check_executable(
+                target_path,
+                "micromamba",
+                constraint,
+                probe_version=probe_version,
+                quiet=True,
+            )
+            is not None
+        ):
+            logger.debug(
+                "Reusing cached executable %s after acquiring the download lock",
+                target_path,
+            )
             return target_path
 
-        url = f"https://micro.mamba.pm/api/micromamba/{subdir}/latest"
-        try:
-            resp = request_url_with_retry(url)
-        except requests.HTTPError as error:
-            # micro.mamba.pm answers 404 when it has no build of a version for
-            # a platform. That can also be a release that conda-forge hasn't
-            # finished uploading, so for a platform that micromamba is
-            # published for, a 404 remains an error.
-            if (
-                error.response is not None
-                and error.response.status_code == 404
-                and subdir not in MICROMAMBA_SUBDIRS
-            ):
-                raise NotPublishedError(
-                    f"micromamba is not published for {subdir}"
-                ) from error
-            raise
-
+        url, version, sha256 = select_micromamba(subdir, constraint)
+        logger.info("micromamba: downloading version %s for %s", version, subdir)
+        validation = DownloadValidation("micromamba", constraint, version)
+        resp = request_url_with_retry(url)
         tarball = io.BytesIO(resp.content)
-        if is_windows:
-            filename = "Library/bin/micromamba.exe"
-        else:
-            filename = "bin/micromamba"
-
+        if sha256:
+            verify_sha256(tarball, sha256, url)
+        filename = "Library/bin/micromamba.exe" if is_windows else "bin/micromamba"
+        if urlparse(url).path.endswith(".conda"):
+            with closing(
+                stream_conda_component(
+                    urlparse(url).path.rsplit("/", 1)[-1], tarball, component="pkg"
+                )
+            ) as stream:
+                for tar, member in stream:
+                    if member.name == filename:
+                        fo = tar.extractfile(member)
+                        if fo is not None:
+                            return write_executable_from_file_object(
+                                fo, dest_filename, validation=validation
+                            )
+            raise RuntimeError("Could not find micromamba in the package")
         return extract_files_from_tar_bz2(
-            tarball=tarball, filename=filename, dest_filename=dest_filename
+            tarball=tarball,
+            filename=filename,
+            dest_filename=dest_filename,
+            validation=validation,
         )
+
+
+def select_candidate(
+    candidates: List[AnacondaPkg],
+    constraint: _VersionConstraint,
+    package: str,
+    subdir: str,
+) -> AnacondaPkg:
+    for candidate in reversed(candidates):
+        if version_satisfies(Version(candidate.version), constraint):
+            return candidate
+    raise NoCompatibleVersionError(
+        f"{package}: no published version for {subdir} satisfies {requirement_text(constraint)}; "
+        f"newest available is {candidates[-1].version}"
+    )
+
+
+def select_micromamba(
+    subdir: str, constraint: _VersionConstraint
+) -> Tuple[str, Version, Optional[str]]:
+    latest = f"https://micro.mamba.pm/api/micromamba/{subdir}/latest"
+    logger.debug("Checking latest micromamba at %s", latest)
+    response = request_url_with_retry(latest, follow_redirects=False)
+    if response.status_code == 404:
+        logger.info(
+            "micromamba: latest artifact unavailable; checking release metadata"
+        )
+    else:
+        version = None
+        try:
+            artifact = urljoin(latest, response.headers.get("Location", ""))
+            parsed = urlparse(artifact)
+            prefix = f"/conda-forge/{subdir}/micromamba-"
+            if (
+                response.status_code in (301, 302, 303, 307, 308)
+                and parsed.scheme == "https"
+                and parsed.netloc == "conda.anaconda.org"
+                and parsed.path.startswith(prefix)
+                and parsed.path.endswith(".tar.bz2")
+                and not parsed.query
+                and not parsed.fragment
+            ):
+                package_version, build = parsed.path[
+                    len(prefix) : -len(".tar.bz2")
+                ].rsplit("-", 1)
+                if build:
+                    version = Version(package_version)
+        except ValueError:
+            # A malformed redirect URL or package filename cannot identify
+            # the release; the full metadata can still provide a usable build.
+            pass
+        if version is not None:
+            if version_satisfies(version, constraint):
+                logger.info(
+                    "micromamba: selected latest version %s for %s", version, subdir
+                )
+                return artifact, version, None
+            logger.info(
+                "micromamba: latest version %s does not satisfy %s; checking release metadata",
+                version,
+                requirement_text(constraint),
+            )
+        else:
+            logger.info(
+                "micromamba: latest response did not identify a release; checking release metadata"
+            )
+    candidates = compute_candidates("conda-forge", subdir, "micromamba")
+    chosen = select_candidate(candidates, constraint, "micromamba", subdir)
+    logger.info("micromamba: selected version %s for %s", chosen.version, subdir)
+    return "https:" + chosen.download_url, Version(chosen.version), chosen.sha256
 
 
 def exe_suffix() -> str:
@@ -473,7 +636,9 @@ def exe_suffix() -> str:
 
 
 @contextlib.contextmanager
-def new_executable(target_filename: "Path") -> Generator[IO[bytes], None, None]:
+def new_executable(
+    target_filename: "Path", *, validation: Optional[DownloadValidation] = None
+) -> Generator[IO[bytes], None, None]:
     """Create a new executable that can be written to.
 
     Care is take to both prevent concurrent writes as well as guarding against
@@ -481,12 +646,16 @@ def new_executable(target_filename: "Path") -> Generator[IO[bytes], None, None]:
     """
     lock_path = f"{str(target_filename)}.lock"
     with lock_with_feedback(lock_path, f"file write ({target_filename})"):
-        temp_filename = target_filename.with_name(uuid.uuid4().hex)
+        temp_filename = target_filename.with_name(
+            uuid.uuid4().hex + (".exe" if is_windows else "")
+        )
         try:
             with open(temp_filename, "wb") as fo:
                 yield fo
             st = os.stat(temp_filename)
             os.chmod(temp_filename, st.st_mode | stat.S_IXUSR)
+            if validation is not None:
+                validate_download(temp_filename, validation)
             try:
                 os.replace(temp_filename, target_filename)
             except OSError as error:
@@ -510,3 +679,33 @@ def new_executable(target_filename: "Path") -> Generator[IO[bytes], None, None]:
             with contextlib.suppress(OSError):
                 temp_filename.unlink()
             raise
+
+
+def validate_download(path: Path, validation: DownloadValidation) -> None:
+    tool = validation.flavor.replace("_", "-")
+    try:
+        version = _versions._probe_version(path, validation.flavor)
+    except (OSError, subprocess.CalledProcessError) as error:
+        raise DownloadedExecutableError(
+            f"{tool}: downloaded executable failed its version check: {error}"
+        ) from error
+    except (InvalidVersion, UnicodeDecodeError):
+        version = None
+    if version is None and validation.constraint is None:
+        logger.info(
+            "%s: downloaded executable ran but reported no recognizable version (package version %s)",
+            tool,
+            validation.expected_version,
+        )
+        return
+    if version is None or not version_satisfies(version, validation.constraint):
+        raise DownloadedExecutableError(
+            f"{tool}: downloaded executable reports {version or 'unknown version'}, "
+            f"expected {validation.expected_version} satisfying {requirement_text(validation.constraint)}"
+        )
+    logger.info(
+        "%s: validated executable version %s (package version %s)",
+        tool,
+        version,
+        validation.expected_version,
+    )

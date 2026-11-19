@@ -15,9 +15,11 @@ import filelock
 import pytest
 import requests
 from conda_package_streaming.create import conda_builder
+from packaging.specifiers import SpecifierSet
+from packaging.version import Version
 from urllib3.response import HTTPResponse
 
-from ensureconda import installer
+from ensureconda import _versions, installer
 from ensureconda.resolve import UnsupportedPlatformError
 
 
@@ -42,8 +44,10 @@ def retry_clock(monkeypatch: pytest.MonkeyPatch) -> FakeClock:
 def test_lock_with_feedback_preserves_body_timeout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    log_messages: Callable[[], str],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    caplog.set_level("INFO", logger="ensureconda")
     lock_path = tmp_path / "outer.lock"
     lock = filelock.FileLock(str(lock_path))
     other_lock = filelock.FileLock(str(lock_path))
@@ -60,7 +64,7 @@ def test_lock_with_feedback_preserves_body_timeout(
 
     assert error.value is body_error
     acquire.assert_called_once()
-    assert "Waiting for lock" not in capsys.readouterr().err
+    assert "Waiting for lock" not in log_messages()
     assert not lock.is_locked
     with other_lock.acquire(timeout=0):
         pass
@@ -70,8 +74,10 @@ def test_lock_with_feedback_retries_acquisition_timeouts(
     tmp_path: Path,
     retry_clock: FakeClock,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    log_messages: Callable[[], str],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    caplog.set_level("INFO", logger="ensureconda")
     lock_path = tmp_path / "outer.lock"
     lock = filelock.FileLock(str(lock_path))
     retry_clock.now_sec = 100.0
@@ -90,7 +96,7 @@ def test_lock_with_feedback_retries_acquisition_timeouts(
         assert lock.is_locked
         assert acquire.call_count == 3
 
-    assert capsys.readouterr().err.splitlines() == [
+    assert log_messages().splitlines() == [
         "Waiting for lock for outer lock to be released by another process... (5.0s)",
         "Waiting for lock for outer lock to be released by another process... (10.0s)",
         "Lock for outer lock acquired after waiting 10.0 seconds",
@@ -306,14 +312,16 @@ def test_compute_candidates_without_a_build_for_the_platform(
 
 
 def test_compute_candidates_skips_broken_and_invalid_versions(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, log_messages: Callable[[], str]
 ) -> None:
     serve_file_listing(
         monkeypatch,
         [
             file_info("1.0", labels=["main"]),
-            # conda-forge moves builds it marks as broken to the "broken" label.
+            # conda-forge labels builds it marks as broken "broken", and
+            # some of them keep "main".
             file_info("3.0", labels=["broken"]),
+            file_info("2.5", labels=["main", "broken"]),
             file_info("not a version", labels=["main"]),
             # Entries without labels, or with null labels, are kept.
             file_info("2.0"),
@@ -324,7 +332,60 @@ def test_compute_candidates_skips_broken_and_invalid_versions(
     candidates = installer.compute_candidates("conda-forge", "linux-64")
 
     assert [candidate.version for candidate in candidates] == ["1.0", "2.0", "2.1"]
-    assert "Skipping conda-standalone not a version" in capsys.readouterr().err
+    assert "Skipping conda-standalone not a version" in log_messages()
+
+
+def test_compute_candidates_skips_unusable_download_urls(
+    monkeypatch: pytest.MonkeyPatch, log_messages: Callable[[], str]
+) -> None:
+    serve_file_listing(
+        monkeypatch,
+        [
+            file_info("1.0", download_url="//[broken"),
+            file_info("1.5", download_url="//example.invalid/conda-standalone.zip"),
+            file_info("2.0"),
+        ],
+    )
+
+    candidates = installer.compute_candidates("conda-forge", "linux-64")
+
+    assert [candidate.version for candidate in candidates] == ["2.0"]
+    messages = log_messages()
+    assert "Skipping conda-standalone 1.0" in messages
+    assert "invalid download URL" in messages
+
+
+def test_conda_standalone_selects_newest_matching_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(installer, "site_path", lambda: tmp_path)
+    monkeypatch.setattr(installer, "platform_subdir", lambda: "linux-64")
+    packages = [
+        installer.AnacondaPkg(
+            0,
+            installer.AnacondaPkgAttr("linux-64", "0", 0, 0),
+            "conda",
+            version,
+            f"//example.invalid/conda-standalone-{version}-0.tar.bz2",
+        )
+        for version in ["24.1", "25.1"]
+    ]
+    monkeypatch.setattr(installer, "compute_candidates", lambda *args: packages)
+    urls: List[str] = []
+
+    def stream(url: str, sha256: Optional[str] = None, **kwargs: object) -> Path:
+        urls.append(url)
+        return tmp_path / "conda_standalone"
+
+    monkeypatch.setattr(installer, "stream_conda_executable", stream)
+
+    installer.install_conda_exe(SpecifierSet("<25"), force=True)
+    assert urls == ["https://example.invalid/conda-standalone-24.1-0.tar.bz2"]
+    with pytest.raises(
+        installer.NoCompatibleVersionError, match="newest available is 25.1"
+    ):
+        installer.install_conda_exe(SpecifierSet(">=26"), force=True)
+    assert len(urls) == 1
 
 
 def test_micromamba_is_extracted_while_holding_the_download_lock(
@@ -334,7 +395,9 @@ def test_micromamba_is_extracted_while_holding_the_download_lock(
     response = requests.Response()
     response._content = b"tarball"
 
-    def extract(tarball: io.BytesIO, filename: str, dest_filename: str) -> Path:
+    def extract(
+        tarball: io.BytesIO, filename: str, dest_filename: str, **kwargs: object
+    ) -> Path:
         # Another process must still be unable to take the download lock.
         with pytest.raises(filelock.Timeout):
             filelock.FileLock(str(lock_path)).acquire(timeout=0)
@@ -342,6 +405,15 @@ def test_micromamba_is_extracted_while_holding_the_download_lock(
 
     monkeypatch.setattr(installer, "site_path", lambda: tmp_path)
     monkeypatch.setattr(installer, "request_url_with_retry", lambda url: response)
+    monkeypatch.setattr(
+        installer,
+        "select_micromamba",
+        lambda *args: (
+            "https://example.invalid/micromamba.tar.bz2",
+            Version("2"),
+            None,
+        ),
+    )
     monkeypatch.setattr(installer, "extract_files_from_tar_bz2", extract)
 
     executable = installer.install_micromamba()
@@ -359,7 +431,7 @@ def test_micromamba_is_extracted_while_holding_the_download_lock(
 )
 @pytest.mark.parametrize("usable", [True, False], ids=["usable", "unusable"])
 def test_install_reuses_an_executable_only_if_it_is_usable(
-    install: Callable[[Callable[[Path], bool]], Optional[Path]],
+    install: Callable[..., Path],
     name: str,
     usable: bool,
     tmp_path: Path,
@@ -367,12 +439,22 @@ def test_install_reuses_an_executable_only_if_it_is_usable(
 ) -> None:
     existing = tmp_path / (name + installer.exe_suffix())
     existing.write_bytes(b"existing executable")
+    existing.chmod(0o755)
     checked: List[Path] = []
     urls: List[str] = []
 
-    def is_usable(path: Path) -> bool:
+    def probe(path: Path, flavor: str) -> Version:
+        lock_name = (
+            "micromamba_install.lock"
+            if name == "micromamba"
+            else "conda_exe_install.lock"
+        )
+        with pytest.raises(filelock.Timeout):
+            filelock.FileLock(str(tmp_path / lock_name)).acquire(timeout=0)
         checked.append(path)
-        return usable
+        return Version("2" if usable else "1")
+
+    monkeypatch.setattr(_versions, "_probe_version", probe)
 
     def request(url: str, **kwargs: Any) -> requests.Response:
         urls.append(url)
@@ -382,11 +464,11 @@ def test_install_reuses_an_executable_only_if_it_is_usable(
     monkeypatch.setattr(installer, "request_url_with_retry", request)
 
     if usable:
-        assert install(is_usable) == existing
+        assert install(Version("2")) == existing
         assert urls == []
     else:
         with pytest.raises(requests.ConnectionError):
-            install(is_usable)
+            install(Version("2"))
         assert len(urls) == 1
     assert checked == [existing]
 
@@ -414,16 +496,17 @@ def test_install_reuses_an_executable_that_runs_by_default(
 ) -> None:
     existing = tmp_path / (name + installer.exe_suffix())
     existing.write_bytes(b"existing executable")
+    existing.chmod(0o755)
     modified = time.time() - age_sec
     os.utime(existing, (modified, modified))
     commands: List[List[Any]] = []
     urls: List[str] = []
 
-    def check_output(args: List[Any], **kwargs: Any) -> bytes:
+    def check_output(args: List[Any], **kwargs: Any) -> str:
         commands.append(args)
         if not runs:
             raise OSError(8, "Exec format error")
-        return b"2.0.0\n"
+        return "2.0.0\n"
 
     def request(url: str, **kwargs: Any) -> requests.Response:
         urls.append(url)
@@ -572,7 +655,7 @@ def test_download_respects_retry_after(
     expected_sources: List[bool],
     retry_clock: FakeClock,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    log_messages: Callable[[], str],
 ) -> None:
     attempts = 0
     delays_sec = retry_clock.delays_sec
@@ -602,7 +685,7 @@ def test_download_respects_retry_after(
         assert (archive.read() if to_file else response.content) == payload
     assert attempts == 3
     assert delays_sec == expected_delays_sec
-    lines = capsys.readouterr().err.splitlines()
+    lines = log_messages().splitlines()
     assert len(lines) == 2
     for line, delay_sec, from_header in zip(
         lines, expected_delays_sec, expected_sources
@@ -678,7 +761,7 @@ def test_download_bounds_scheduled_retry_time(
     expected_stop: Optional[str],
     retry_clock: FakeClock,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    log_messages: Callable[[], str],
 ) -> None:
     attempts = 0
     delays_sec = retry_clock.delays_sec
@@ -724,7 +807,7 @@ def test_download_bounds_scheduled_retry_time(
     assert all(
         response.raw.closed for response in responses if response.status_code != 200
     )
-    lines = capsys.readouterr().err.splitlines()
+    lines = log_messages().splitlines()
     if not recover:
         assert expected_stop is not None
         expected_stop = expected_stop.format(status=status)
@@ -919,7 +1002,7 @@ def test_download_logs_each_failure_with_details(
     failure: Union[str, int],
     retry_clock: FakeClock,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    log_messages: Callable[[], str],
 ) -> None:
     url = "https://example.invalid/package.conda"
     attempts = 0
@@ -944,7 +1027,7 @@ def test_download_logs_each_failure_with_details(
     with pytest.raises(requests.RequestException) as error:
         installer.request_url_with_retry(url)
 
-    lines = capsys.readouterr().err.splitlines()
+    lines = log_messages().splitlines()
     retryable = failure != 404
     assert attempts == len(lines) == (2 if retryable else 1)
     assert delays_sec == ([1] if retryable else [])
@@ -1038,10 +1121,13 @@ def request_micromamba(
     def get(
         session: requests.Session, method: str, url: str, **kwargs: Any
     ) -> requests.Response:
-        assert url == f"https://micro.mamba.pm/api/micromamba/{subdir}/latest"
         response = requests.Response()
-        response.status_code = status
         response.raw = io.BytesIO()
+        if url.endswith("/files") and subdir == "linux-s390x":
+            response.status_code = 200
+            response._content = b"[]"
+            return response
+        response.status_code = status
         return response
 
     monkeypatch.setattr(requests.Session, "request", get)
@@ -1058,13 +1144,13 @@ def test_micromamba_not_published_for_the_platform(
     ) as error:
         request_micromamba("linux-s390x", 404, tmp_path, monkeypatch)
 
-    assert isinstance(error.value.__cause__, requests.HTTPError)
+    assert error.value.__cause__ is None
 
 
 @pytest.mark.parametrize(
     "subdir, status",
     [
-        # A release that hasn't been uploaded for this platform yet.
+        # The release metadata consulted after a 404 from latest fails too.
         ("linux-64", 404),
         ("linux-s390x", 403),
     ],

@@ -68,7 +68,7 @@ func fileNames(t *testing.T, dir string) []string {
 func TestExtractTarFilesReleasesLock(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "tool")
 
-	got, err := extractTarFiles(tarWith(t, "bin/tool", []byte("binary")), map[string]string{"bin/tool": target})
+	got, err := extractTarFiles(tarWith(t, "bin/tool", []byte("binary")), map[string]string{"bin/tool": target}, nil)
 	if err != nil {
 		t.Fatalf("extractTarFiles() error = %v", err)
 	}
@@ -104,7 +104,7 @@ func TestExtractTarFilesRemovesTemporaryFileOnError(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "tool")
 
-	_, err := extractTarFiles(tar.NewReader(&buf), map[string]string{"bin/tool": target})
+	_, err := extractTarFiles(tar.NewReader(&buf), map[string]string{"bin/tool": target}, nil)
 
 	if err == nil {
 		t.Fatal("extractTarFiles() succeeded on a truncated archive")
@@ -127,7 +127,7 @@ func TestExtractTarFilesReportsReplacementFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := extractTarFiles(tarWith(t, "bin/tool", []byte("binary")), map[string]string{"bin/tool": target})
+	_, err := extractTarFiles(tarWith(t, "bin/tool", []byte("binary")), map[string]string{"bin/tool": target}, nil)
 	if err == nil || !strings.Contains(err.Error(), "could not replace executable "+target) {
 		t.Fatalf("replacement error = %v, want context naming the executable", err)
 	}
@@ -156,7 +156,7 @@ func TestExtractTarFilesLeavesOtherTemporaryFilesAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := extractTarFiles(tarWith(t, "bin/tool", []byte("binary")), map[string]string{"bin/tool": target}); err != nil {
+	if _, err := extractTarFiles(tarWith(t, "bin/tool", []byte("binary")), map[string]string{"bin/tool": target}, nil); err != nil {
 		t.Fatalf("extractTarFiles() error = %v", err)
 	}
 
@@ -177,7 +177,7 @@ func TestExtractTarFilesRemovesLeftoverTemporaryFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := extractTarFiles(tarWith(t, "bin/tool", []byte("binary")), map[string]string{"bin/tool": target}); err != nil {
+	if _, err := extractTarFiles(tarWith(t, "bin/tool", []byte("binary")), map[string]string{"bin/tool": target}, nil); err != nil {
 		t.Fatalf("extractTarFiles() error = %v", err)
 	}
 
@@ -293,7 +293,7 @@ func TestExtractTarFilesReportsWaitingForLock(t *testing.T) {
 	archive := tarWith(t, "bin/tool", []byte("binary"))
 	done := make(chan error, 1)
 	go func() {
-		_, err := extractTarFiles(archive, map[string]string{"bin/tool": target})
+		_, err := extractTarFiles(archive, map[string]string{"bin/tool": target}, nil)
 		done <- err
 	}()
 	if message := messages.next(t); !strings.Contains(message, "waiting for another process to finish writing tool") {
@@ -482,6 +482,39 @@ func TestInstallersReuseUsableInstall(t *testing.T) {
 	}
 }
 
+func TestInstallersDoNotRepeatSearchRejections(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the stand-ins for micromamba and conda-standalone are shell scripts")
+	}
+	for _, tt := range []struct {
+		name, exeName, version string
+		install                func() (string, error)
+	}{
+		{"micromamba", "micromamba", "0.1.0", func() (string, error) {
+			return installMicromamba("https://micro.mamba.pm/api/micromamba/linux-64/latest", false)
+		}},
+		{"conda-standalone", "conda_standalone", "conda 0.1.0", InstallCondaStandalone},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			useSitePath(t)
+			refuseDownloads(t)
+			target := targetExeFilename(tt.exeName)
+			if err := os.WriteFile(target, []byte("#!/bin/sh\necho "+tt.version+"\n"), 0755); err != nil {
+				t.Fatal(err)
+			}
+			messages := captureLog(t)
+			if _, err := tt.install(); err == nil {
+				t.Fatal("the install succeeded, want the refused download to fail")
+			}
+			for len(messages) > 0 {
+				if message := <-messages; strings.Contains(message, "Rejected") {
+					t.Errorf("the locked recheck logged %q at the default verbosity", message)
+				}
+			}
+		})
+	}
+}
+
 // refuseDownloads answers every request of the shared HTTP client with a 404,
 // and returns the number of requests made.
 func refuseDownloads(t *testing.T) *atomic.Int32 {
@@ -539,8 +572,12 @@ func TestEnsureCondaReplacesUnusableInstall(t *testing.T) {
 			if err == nil {
 				t.Error("EnsureConda() succeeded, want the refused download to fail")
 			}
-			if n := requests.Load(); n != 1 {
-				t.Errorf("made %d requests, want 1 to replace the executable", n)
+			wantRequests := int32(1)
+			if tt.exeName == "micromamba" {
+				wantRequests = 2
+			}
+			if n := requests.Load(); n != wantRequests {
+				t.Errorf("made %d requests, want %d to replace the executable", n, wantRequests)
 			}
 		})
 	}

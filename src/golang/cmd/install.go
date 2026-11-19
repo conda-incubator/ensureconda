@@ -12,7 +12,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -37,20 +39,6 @@ func targetExeFilename(exeName string) string {
 	return targetFileName
 }
 
-// micromambaSubdirs are the platforms that micromamba is published for. Keep
-// it in step with MICROMAMBA_SUBDIRS in src/python/ensureconda/installer.py.
-// It is a variable so that tests can change it.
-var micromambaSubdirs = map[string]bool{
-	"linux-64":      true,
-	"linux-aarch64": true,
-	"linux-ppc64le": true,
-	"linux-riscv64": true,
-	"osx-64":        true,
-	"osx-arm64":     true,
-	"win-64":        true,
-	"win-arm64":     true,
-}
-
 // notPublishedError means that nothing to install is published for the platform.
 type notPublishedError struct {
 	message string
@@ -68,19 +56,7 @@ func installMicromambaForPlatform(forceInstall bool) (string, error) {
 		return "", err
 	}
 	url := fmt.Sprintf("https://micro.mamba.pm/api/micromamba/%s/latest", subdir)
-	exe, err := installMicromamba(url, forceInstall)
-	return exe, micromambaInstallError(err, subdir)
-}
-
-// micromambaInstallError turns a 404 into a notPublishedError, unless
-// micromamba is published for the platform: micro.mamba.pm also answers 404
-// for a release that hasn't been uploaded for a platform yet.
-func micromambaInstallError(err error, subdir string) error {
-	var status *httpStatusError
-	if errors.As(err, &status) && status.statusCode == 404 && !micromambaSubdirs[subdir] {
-		return &notPublishedError{fmt.Sprintf("micromamba is not published for %s", subdir)}
-	}
-	return err
+	return installMicromamba(url, forceInstall)
 }
 
 type AnacondaPkgAttr struct {
@@ -169,9 +145,17 @@ func installCondaStandalone(forceInstall bool) (string, error) {
 	}
 
 	target := targetExeFilename("conda_standalone")
-	return installUnlessUsable("conda_exe_install.lock", target, forceInstall, usableCondaVersion, func() (string, error) {
-		return downloadCondaStandalone(channel, subdir, target)
-	})
+	unlock, err := lockInstall("conda_exe_install.lock")
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+	if !forceInstall {
+		if version, _ := checkExecutableMinVersion(target, pep440.MustParse(DefaultMinCondaVersion), log.DebugLevel, "conda"); version != nil {
+			return target, nil
+		}
+	}
+	return downloadCondaStandalone(channel, subdir, target)
 }
 
 // downloadCondaStandalone installs the latest conda-standalone for subdir from
@@ -182,16 +166,24 @@ func downloadCondaStandalone(channel string, subdir string, target string) (stri
 	if err != nil {
 		return "", fmt.Errorf("listing conda-standalone candidates: %w", err)
 	}
-	chosen := candidates[len(candidates)-1]
+	chosen, err := newestCompatible(candidates, pep440.MustParse(DefaultMinCondaVersion), "conda-standalone", subdir)
+	if err != nil {
+		return "", err
+	}
+	log.Infof("conda-standalone: selected version %s for %s", chosen.Version, subdir)
 
 	downloadUrl := "https:" + chosen.DownloadUrl
 	log.WithFields(log.Fields{"url": downloadUrl}).Info("downloading conda-standalone")
 	installedExe, err := downloadAndUnpackArchive(
 		downloadUrl, chosen.Sha256, map[string]string{
 			"standalone_conda/conda.exe": target,
-		})
+		}, &downloadValidation{flavor: "conda-standalone", minimum: pep440.MustParse(DefaultMinCondaVersion), expected: pep440.MustParse(chosen.Version)})
 
 	if err != nil {
+		var invalid *downloadedExecutableError
+		if errors.As(err, &invalid) {
+			return "", err
+		}
 		return "", fmt.Errorf("downloading or unpacking conda-standalone: %w", err)
 	}
 	return installedExe, nil
@@ -200,7 +192,11 @@ func downloadCondaStandalone(channel string, subdir string, target string) (stri
 // computeCandidates returns the sorted list of available conda-standalone
 // packages for the given channel and subdir (ascending by version/build/timestamp).
 func computeCandidates(channel string, subdir string) ([]AnacondaPkg, error) {
-	url := fmt.Sprintf("%s/package/%s/conda-standalone/files", anacondaAPIBaseURL, channel)
+	return computePackageCandidates(channel, subdir, "conda-standalone")
+}
+
+func computePackageCandidates(channel, subdir, packageName string) ([]AnacondaPkg, error) {
+	url := fmt.Sprintf("%s/package/%s/%s/files", anacondaAPIBaseURL, channel, packageName)
 	resp, err := requestURLWithRetry(url)
 	if err != nil {
 		return nil, fmt.Errorf("GET candidates: %w", err)
@@ -210,24 +206,35 @@ func computeCandidates(channel string, subdir string) ([]AnacondaPkg, error) {
 		return nil, fmt.Errorf("decoding candidates from %s: %w", url, err)
 	}
 
-	candidates := selectCandidates(data, subdir)
+	candidates := selectCandidates(data, subdir, packageName)
 	if len(candidates) == 0 {
-		return nil, fmt.Errorf("no conda-standalone package found for %s in channel %s", subdir, channel)
+		if packageName == "micromamba" {
+			return nil, &notPublishedError{fmt.Sprintf("micromamba is not published for %s", subdir)}
+		}
+		return nil, &notPublishedError{fmt.Sprintf("no %s package found for %s in channel %s", packageName, subdir, channel)}
 	}
 	sort.Sort(AnacondaPkgs(candidates))
 	return candidates, nil
 }
 
 // selectCandidates returns the packages in data that are suitable for subdir.
-func selectCandidates(data []AnacondaPkg, subdir string) []AnacondaPkg {
+func selectCandidates(data []AnacondaPkg, subdir, packageName string) []AnacondaPkg {
 	candidates := make([]AnacondaPkg, 0)
 	for _, datum := range data {
 		if datum.Attrs.Subdir != subdir ||
 			// Ignore onedir packages as workaround for
 			// <https://github.com/conda/conda-standalone/issues/182>
-			strings.Contains(datum.Attrs.Build, "_onedir_") ||
-			// Builds marked as broken lose the "main" label.
-			(datum.Labels != nil && !slices.Contains(datum.Labels, "main")) {
+			(packageName == "conda-standalone" && strings.Contains(datum.Attrs.Build, "_onedir_")) ||
+			// Builds marked as broken get the "broken" label and may keep "main".
+			(datum.Labels != nil && (!slices.Contains(datum.Labels, "main") || slices.Contains(datum.Labels, "broken"))) {
+			continue
+		}
+		artifact, err := url.Parse(datum.DownloadUrl)
+		if err != nil {
+			log.Warnf("Skipping %s %s for %s: invalid download URL", packageName, datum.Version, subdir)
+			continue
+		}
+		if !(strings.HasSuffix(artifact.Path, ".tar.bz2") || strings.HasSuffix(artifact.Path, ".conda")) {
 			continue
 		}
 		// Skip unparseable versions with a warning, to avoid crashes on new formats
@@ -235,7 +242,7 @@ func selectCandidates(data []AnacondaPkg, subdir string) []AnacondaPkg {
 			log.WithFields(log.Fields{
 				"version": datum.Version,
 				"subdir":  datum.Attrs.Subdir,
-			}).Warn("skipping unparseable conda-standalone version")
+			}).Warnf("skipping unparseable %s version", packageName)
 			continue
 		}
 		candidates = append(candidates, datum)
@@ -243,10 +250,15 @@ func selectCandidates(data []AnacondaPkg, subdir string) []AnacondaPkg {
 	return candidates
 }
 
-func inferArchiveTypeFromUrl(url string) ArchiveType {
-	if strings.HasSuffix(url, "/latest") || strings.HasSuffix(url, ".tar.bz2") {
+func inferArchiveTypeFromUrl(rawURL string) ArchiveType {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return UnrecognizedArchive
+	}
+	path := parsed.Path
+	if strings.HasSuffix(path, ".tar.bz2") {
 		return TarBz2Archive
-	} else if strings.HasSuffix(url, ".conda") {
+	} else if strings.HasSuffix(path, ".conda") {
 		return CondaArchive
 	}
 	return UnrecognizedArchive
@@ -255,7 +267,7 @@ func inferArchiveTypeFromUrl(url string) ArchiveType {
 // downloadAndUnpackArchive extracts the files in fileNameMap from the archive
 // at url. If expectedSha256 is not empty, the whole archive is verified
 // against it before anything is extracted.
-func downloadAndUnpackArchive(url string, expectedSha256 string, fileNameMap map[string]string) (string, error) {
+func downloadAndUnpackArchive(url string, expectedSha256 string, fileNameMap map[string]string, validation *downloadValidation) (string, error) {
 	archiveType := inferArchiveTypeFromUrl(url)
 	if archiveType == UnrecognizedArchive {
 		return "", fmt.Errorf("unrecognized archive type for URL: %s", url)
@@ -272,9 +284,9 @@ func downloadAndUnpackArchive(url string, expectedSha256 string, fileNameMap map
 		}
 	}
 	if archiveType == TarBz2Archive {
-		return unpackTarBz2(bytes.NewReader(archive), fileNameMap)
+		return unpackTarBz2(bytes.NewReader(archive), fileNameMap, validation)
 	}
-	return unpackConda(archive, fileNameMap)
+	return unpackConda(archive, fileNameMap, validation)
 }
 
 // verifySha256 returns an error unless data has the expected hex digest.
@@ -286,21 +298,21 @@ func verifySha256(data []byte, expected string) error {
 	return nil
 }
 
-func unpackTarBz2(archive io.Reader, fileNameMap map[string]string) (string, error) {
+func unpackTarBz2(archive io.Reader, fileNameMap map[string]string, validation *downloadValidation) (string, error) {
 	bzf := bzip2.NewReader(archive)
 	tarReader := tar.NewReader(bzf)
-	file, err := extractTarFiles(tarReader, fileNameMap)
+	file, err := extractTarFiles(tarReader, fileNameMap, validation)
 	return file, err
 }
 
-func unpackConda(archive []byte, fileNameMap map[string]string) (string, error) {
+func unpackConda(archive []byte, fileNameMap map[string]string, validation *downloadValidation) (string, error) {
 	zipReader, err := zip.NewReader(bytes.NewReader(archive), int64(len(archive)))
 	if err != nil {
 		return "", err
 	}
 
 	for _, f := range zipReader.File {
-		if strings.HasPrefix(f.Name, "pkg-conda-standalone") && strings.HasSuffix(f.Name, ".tar.zst") {
+		if strings.HasPrefix(f.Name, "pkg-") && strings.HasSuffix(f.Name, ".tar.zst") {
 			rc, err := f.Open()
 			if err != nil {
 				return "", err
@@ -314,7 +326,7 @@ func unpackConda(archive []byte, fileNameMap map[string]string) (string, error) 
 			defer zstReader.Close()
 
 			tarReader := tar.NewReader(zstReader)
-			file, err := extractTarFiles(tarReader, fileNameMap)
+			file, err := extractTarFiles(tarReader, fileNameMap, validation)
 			return file, err
 		}
 	}
@@ -325,34 +337,29 @@ func unpackConda(archive []byte, fileNameMap map[string]string) (string, error) 
 // has just installed one that can be used. forceInstall always downloads again.
 func installMicromamba(url string, forceInstall bool) (string, error) {
 	target := targetExeFilename("micromamba")
-	return installUnlessUsable("micromamba_install.lock", target, forceInstall, usableMicromambaVersion, func() (string, error) {
-		// micro.mamba.pm publishes no digest to verify against.
-		return downloadAndUnpackArchive(
-			url, "", map[string]string{
-				"Library/bin/micromamba.exe": target,
-				"bin/micromamba":             target,
-			})
-	})
-}
-
-// installUnlessUsable calls download while holding the named download lock,
-// unless target passes checkVersion once the lock is held. forceInstall skips that
-// check and always downloads again.
-func installUnlessUsable(lockName string, target string, forceInstall bool, checkVersion versionCheck, download func() (string, error)) (string, error) {
-	unlock, err := lockInstall(lockName)
+	unlock, err := lockInstall("micromamba_install.lock")
 	if err != nil {
 		return "", err
 	}
 	defer unlock()
-
 	if !forceInstall {
-		// A concurrent process may have installed a usable executable while
-		// this one waited for the lock.
-		if version, _ := checkVersion(target); version != nil {
+		if version, _ := checkExecutableMinVersion(target, pep440.MustParse(DefaultMinMambaVersion), log.DebugLevel, ""); version != nil {
 			return target, nil
 		}
 	}
-	return download()
+	subdir, err := PlatformSubdir()
+	if err != nil {
+		return "", err
+	}
+	chosen, err := selectMicromamba(url, subdir, pep440.MustParse(DefaultMinMambaVersion))
+	if err != nil {
+		return "", err
+	}
+	log.Infof("micromamba: downloading version %s for %s", chosen.Version, subdir)
+	return downloadAndUnpackArchive(chosen.DownloadUrl, chosen.Sha256, map[string]string{
+		"Library/bin/micromamba.exe": target,
+		"bin/micromamba":             target,
+	}, &downloadValidation{flavor: "micromamba", minimum: pep440.MustParse(DefaultMinMambaVersion), expected: pep440.MustParse(chosen.Version)})
 }
 
 // lockInstall takes the named download lock in the site path, so that
@@ -415,7 +422,7 @@ func isBeingDeleted(goos string, err error) bool {
 	return goos == "windows" && (errors.Is(err, os.ErrPermission) || errors.Is(err, windowsSharingViolation))
 }
 
-func extractTarFiles(tarReader *tar.Reader, fileNameMap map[string]string) (string, error) {
+func extractTarFiles(tarReader *tar.Reader, fileNameMap map[string]string, validation *downloadValidation) (string, error) {
 	for {
 		header, err := tarReader.Next()
 
@@ -429,7 +436,7 @@ func extractTarFiles(tarReader *tar.Reader, fileNameMap map[string]string) (stri
 		switch header.Typeflag {
 		case tar.TypeReg:
 			if targetFileName := fileNameMap[header.Name]; targetFileName != "" {
-				if err := extractTarFile(header, targetFileName, tarReader); err != nil {
+				if err := extractTarFile(header, targetFileName, tarReader, validation); err != nil {
 					return "", err
 				}
 				return targetFileName, nil
@@ -444,11 +451,14 @@ func extractTarFiles(tarReader *tar.Reader, fileNameMap map[string]string) (stri
 // holding a lock on the target, the same lock the Python implementation uses,
 // so that concurrent writers don't interfere. The temporary file is removed if
 // anything fails.
-func extractTarFile(header *tar.Header, targetFileName string, tarReader *tar.Reader) error {
+func extractTarFile(header *tar.Header, targetFileName string, tarReader *tar.Reader, validation *downloadValidation) error {
 	// A name of its own, as in the Python implementation. A writer that doesn't
 	// take the lock below, such as an older release, then can't write to the
 	// same file.
 	tmpFileName := fmt.Sprintf("%s.%s.tmp", targetFileName, rand.Text())
+	if runtime.GOOS == "windows" && validation != nil {
+		tmpFileName += ".exe"
+	}
 	log.WithFields(log.Fields{
 		"srcPath": header.Name,
 		"dstPath": tmpFileName,
@@ -465,6 +475,9 @@ func extractTarFile(header *tar.Header, targetFileName string, tarReader *tar.Re
 	removeTemporaryFiles(targetFileName)
 
 	err = writeExecutable(tmpFileName, header, tarReader)
+	if err == nil && validation != nil {
+		err = validateDownload(tmpFileName, *validation)
+	}
 	if err == nil {
 		err = os.Rename(tmpFileName, targetFileName)
 		if err != nil {
@@ -489,7 +502,9 @@ func removeTemporaryFiles(targetFileName string) {
 	dir, name := filepath.Split(targetFileName)
 	entries, _ := os.ReadDir(dir)
 	for _, entry := range entries {
-		if isTemporary, _ := filepath.Match(name+".*.tmp", entry.Name()); isTemporary {
+		isTemporary, _ := filepath.Match(name+".*.tmp", entry.Name())
+		isWindowsTemporary, _ := filepath.Match(name+".*.tmp.exe", entry.Name())
+		if isTemporary || isWindowsTemporary {
 			_ = os.Remove(filepath.Join(dir, entry.Name()))
 		}
 	}
@@ -519,4 +534,105 @@ func writeExecutable(fileName string, header *tar.Header, tarReader *tar.Reader)
 		return fmt.Errorf("stat temp file: %w", err)
 	}
 	return os.Chmod(fileName, st.Mode()|syscall.S_IXUSR)
+}
+
+// A constraint miss belongs to a target, not to the entire tool or platform.
+type noCompatibleVersionError struct{ message string }
+
+func (e *noCompatibleVersionError) Error() string { return e.message }
+
+func newestCompatible(candidates []AnacondaPkg, minimum pep440.Version, tool, subdir string) (AnacondaPkg, error) {
+	for i := len(candidates) - 1; i >= 0; i-- {
+		if !pep440.MustParse(candidates[i].Version).LessThan(minimum) {
+			return candidates[i], nil
+		}
+	}
+	return AnacondaPkg{}, &noCompatibleVersionError{fmt.Sprintf("%s: no published version for %s satisfies >=%s; newest available is %s", tool, subdir, minimum.String(), candidates[len(candidates)-1].Version)}
+}
+
+func selectMicromamba(latest, subdir string, minimum pep440.Version) (AnacondaPkg, error) {
+	resp, err := requestURLWithRetryMode(latest, true)
+	if err != nil {
+		return AnacondaPkg{}, err
+	}
+	if resp.statusCode == 404 {
+		log.Info("micromamba: latest artifact unavailable; checking release metadata")
+	} else {
+		latestURL, _ := url.Parse(latest)
+		redirect, parseErr := url.Parse(resp.header.Get("Location"))
+		var artifact *url.URL
+		var version *pep440.Version
+		if parseErr == nil && latestURL != nil && resp.statusCode >= 300 && resp.statusCode < 400 {
+			artifact = latestURL.ResolveReference(redirect)
+			prefix := "/conda-forge/" + subdir + "/micromamba-"
+			if artifact.Scheme == "https" && artifact.Host == "conda.anaconda.org" && artifact.RawQuery == "" && artifact.Fragment == "" && strings.HasPrefix(artifact.Path, prefix) && strings.HasSuffix(artifact.Path, ".tar.bz2") {
+				name := strings.TrimSuffix(strings.TrimPrefix(artifact.Path, prefix), ".tar.bz2")
+				if split := strings.LastIndex(name, "-"); split > 0 && split < len(name)-1 {
+					if parsed, err := pep440.Parse(name[:split]); err == nil {
+						version = &parsed
+					}
+				}
+			}
+		}
+		if version == nil {
+			log.Info("micromamba: latest response did not identify a release; checking release metadata")
+		} else if version.LessThan(minimum) {
+			log.Infof("micromamba: latest version %s does not satisfy >=%s; checking release metadata", version.String(), minimum.String())
+		} else {
+			log.Infof("micromamba: selected latest version %s for %s", version.String(), subdir)
+			return AnacondaPkg{Version: version.String(), DownloadUrl: artifact.String()}, nil
+		}
+	}
+	candidates, err := computePackageCandidates("conda-forge", subdir, "micromamba")
+	if err != nil {
+		return AnacondaPkg{}, err
+	}
+	chosen, err := newestCompatible(candidates, minimum, "micromamba", subdir)
+	if err != nil {
+		return AnacondaPkg{}, err
+	}
+	chosen.DownloadUrl = "https:" + chosen.DownloadUrl
+	log.Infof("micromamba: selected version %s for %s", chosen.Version, subdir)
+	return chosen, nil
+}
+
+type downloadValidation struct {
+	flavor            string
+	minimum, expected pep440.Version
+}
+
+// downloadedExecutableError means that a download failed its version check.
+type downloadedExecutableError struct {
+	tool string
+	err  error
+}
+
+func (e *downloadedExecutableError) Error() string {
+	return e.tool + ": downloaded executable " + e.err.Error()
+}
+
+func (e *downloadedExecutableError) Unwrap() error { return e.err }
+
+func validateDownload(path string, validation downloadValidation) error {
+	output, err := exec.Command(path, "--version").Output()
+	if err != nil {
+		return &downloadedExecutableError{validation.flavor, fmt.Errorf("failed its version check: %w", err)}
+	}
+	prefix := ""
+	if validation.flavor == "conda-standalone" {
+		prefix = "conda"
+	}
+	version, err := parseExecutableVersion(string(output), prefix)
+	if err != nil {
+		return &downloadedExecutableError{validation.flavor, fmt.Errorf("failed its version check: %w", err)}
+	}
+	if version == nil || version.LessThan(validation.minimum) {
+		reported := "unknown version"
+		if version != nil {
+			reported = version.String()
+		}
+		return &downloadedExecutableError{validation.flavor, fmt.Errorf("reports %s, expected %s satisfying >=%s", reported, validation.expected.String(), validation.minimum.String())}
+	}
+	log.Infof("%s: validated executable version %s (package version %s)", validation.flavor, version.String(), validation.expected.String())
+	return nil
 }

@@ -70,6 +70,8 @@ Options:
                                   accept (defaults to 0.7.3)
   --json                          print the executable's path, flavor and
                                   version as JSON
+  -v, --verbosity INTEGER RANGE   0: warnings; 1: decisions; 2-3: debug
+                                  details  [default: 1; 0<=x<=3]
   --help                          Show this message and exit.
 ```
 
@@ -79,10 +81,13 @@ and Go CLIs support this option. Downloads still hold the usual installation
 lock, and every forced invocation downloads again. To refresh conda-standalone
 instead of micromamba, use `ensureconda --force-install --no-micromamba`.
 `--force-install` cannot be combined with `--no-install`, and requires at least
-one of micromamba or conda-standalone to be enabled. Version requirements are
-checked after the downloaded executable replaces the cached copy. If the new
-executable fails the version or execution check, the old copy is not restored,
-even if it was compatible.
+one of micromamba or conda-standalone to be enabled.
+
+When installing, both CLIs download the newest release that meets the minimum
+version and run the downloaded executable's `--version` before it replaces the
+cached copy. If that check fails, the command keeps the cached copy and tries
+the remaining tools. If none work, it reports the failed check. The Go CLI has
+no `--min-*-version` options and always uses the default minimums.
 
 With `--json`, both the Python and Go CLIs print the executable's path, flavor
 and version instead of just its path:
@@ -155,15 +160,35 @@ it raises
 `ensureconda.resolve.UnsupportedPlatformError` instead of returning `None`.
 With `install="force"`, it raises immediately without searching.
 
-Version constraints use Python packaging's version-specifier syntax. Downloads
-fetch the latest available build: constraints filter the result, but do not
-select an older release to download. An unpublished build allows trying the
-next target; other download failures propagate.
+Version constraints use Python packaging's version-specifier syntax. Python
+selects the newest published build whose package version satisfies the target,
+including older releases when an upper bound or pin excludes the latest.
+Micromamba first inspects the `/latest` redirect without downloading its body.
+If that version is unsuitable, the redirect cannot be interpreted, or the
+endpoint returns 404, it consults the full release metadata. Conda-standalone
+already uses release metadata and filters it before downloading.
 
-With `install="force"`, the cache is replaced before checking the new
-executable's version or ability to run. A rejected executable does not restore
-the old copy. For example, refreshing `"micromamba<2"` with a latest release of
-2.x replaces a cached 1.x copy, then returns `None` if no later target matches.
+A target with no compatible published version is skipped, allowing a later
+requirement for the same tool to succeed. When no build is published for the
+platform, ensureconda also tries any remaining targets. If none succeed and no
+download failed validation (below), `ensure()` returns `None`, unless the last
+attempt was a download with no build published for the platform, which raises
+`NotPublishedError`. Transient request failures retain their retries and
+propagate when exhausted.
+
+Downloads are staged and checked with `--version` before replacing the cached
+executable, including with `install="force"` or `probe_version=False`. The
+command must exit successfully. When a target has a version requirement, the
+reported version must be recognizable and satisfy it. Without a requirement, a
+successful command with unreadable output is accepted with `version=None`.
+Package versions sometimes include packaging revisions absent from executable
+versions (for example, `26.9.4.post1` versus `26.9.4`); diagnostics show both. A
+download that fails this check preserves the old cache and is skipped with a
+warning. If the remaining targets yield no match, `ensure()` raises the last
+`DownloadedExecutableError`. A metadata constraint miss also leaves the cache
+untouched. For example, forcing `"micromamba<2"` downloads a compatible 1.x
+release when one is published; it never replaces the cache with an excluded 2.x
+release.
 
 Later releases may add fields to the result or keys to `ensureconda --json`.
 
@@ -176,27 +201,30 @@ ensureconda saves downloaded conda-standalone executables as `conda_standalone`
 (`conda_standalone.exe` on Windows), so that filename is used when searching
 for an existing standalone installation.
 
-By default, `ensure()` runs `--version` on each candidate it considers:
+By default, `ensure()` runs `--version` on each installed candidate it considers:
 
 - If the command succeeds and reports a recognized version, that version is
   returned as metadata.
 - If it succeeds but the version cannot be parsed or the output cannot be
   decoded, an unconstrained target can still return it with `version=None`.
-- If the command cannot start or exits unsuccessfully, `ensure()` reports the
-  failure on stderr and skips the candidate. It continues with other candidates,
+- If the command cannot start or exits unsuccessfully, `ensure()` logs a
+  warning and skips the candidate. It continues with other candidates,
   later targets, and installation according to the selected search order.
 
-This check also applies to candidates returned by an installer. An installer
-reuses an executable already in ensureconda's data directory only if it passes
-the same check, and otherwise downloads a new one.
+An installer reuses an executable already in ensureconda's data directory only
+if it passes the same check, and otherwise selects a compatible download. Newly
+downloaded executables always undergo the validation described above before
+replacing the cached copy.
 Use `install="force"` to replace even a usable cached executable.
-Set `probe_version=False` to run `--version` only when a target's constraints
-require it. For an unconstrained target, this also disables checking that the
-executable runs, and the returned version is `None`.
+Set `probe_version=False` to probe existing executables only when a target's
+constraints require it. For an unconstrained existing target, this disables
+checking that the executable runs. Unconstrained results have version `None`;
+new downloads are still validated before replacement.
 
 `ensureconda()`, the old API, keeps its boolean options, minimum-version
 arguments, path-or-None result, and original search and installation order.
-It runs version probes only when a minimum is specified. In particular, it
+It probes existing executables only when a minimum is specified; new downloads
+are always validated. In particular, it
 may install micromamba before looking for an installed conda. The CLI continues
 to prefer installed executables, both with and without `--json`, unless
 `--force-install` is set. For forced installation from Python, use
@@ -207,6 +235,20 @@ to prefer installed executables, both with and without `--json`, unless
 conda-standalone; those are reported as `"micromamba"` and `"conda"`. It raises
 `FileNotFoundError` or `PermissionError` for a path that doesn't exist or isn't
 executable, and `ValueError` for an executable it doesn't recognize.
+
+### Diagnostics
+
+Both command lines write diagnostic messages to stderr and reserve stdout for
+an executable path or `--json` result. `--verbosity 1` (the default) explains
+version rejections, download selection, lock waits and the final result.
+Use `--verbosity 0` for warnings and errors, or `--verbosity 2` for detailed
+search and cache diagnostics.
+
+The Python API emits records under the `ensureconda` logger and does not
+configure application logging. To see its decisions, configure your application's
+logging at INFO level, for example `logging.basicConfig(level=logging.INFO)`.
+The Python CLI temporarily configures that logger and restores its previous
+configuration when the invocation ends.
 
 ### Cache location
 
