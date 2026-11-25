@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	pep440 "github.com/aquasecurity/go-pep440-version"
+	log "github.com/sirupsen/logrus"
 	"github.com/spf13/cobra"
 )
 
@@ -233,7 +234,7 @@ func TestResolveExecutableWithVersionSkipsRejectedCandidates(t *testing.T) {
 			}
 			dir := t.TempDir()
 			t.Setenv("PATH", dir)
-			check := executableWithMinVersion(pep440.MustParse(DefaultMinMambaVersion), false, "")
+			check := executableWithMinVersion(pep440.MustParse(DefaultMinMambaVersion), log.InfoLevel, "")
 			if got, err := resolveExecutableWithVersion("micromamba", sitePath(), check); got != nil || err == nil {
 				t.Fatalf("rejected candidate returned %v, %v", got, err)
 			}

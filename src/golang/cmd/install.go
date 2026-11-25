@@ -169,9 +169,17 @@ func installCondaStandalone(forceInstall bool) (string, error) {
 	}
 
 	target := targetExeFilename("conda_standalone")
-	return installUnlessUsable("conda_exe_install.lock", target, forceInstall, usableCondaVersion, func() (string, error) {
-		return downloadCondaStandalone(channel, subdir, target)
-	})
+	unlock, err := lockInstall("conda_exe_install.lock")
+	if err != nil {
+		return "", err
+	}
+	defer unlock()
+	if !forceInstall {
+		if version, _ := checkExecutableMinVersion(target, pep440.MustParse(DefaultMinCondaVersion), log.DebugLevel, "conda"); version != nil {
+			return target, nil
+		}
+	}
+	return downloadCondaStandalone(channel, subdir, target)
 }
 
 // downloadCondaStandalone installs the latest conda-standalone for subdir from
@@ -183,6 +191,7 @@ func downloadCondaStandalone(channel string, subdir string, target string) (stri
 		return "", fmt.Errorf("listing conda-standalone candidates: %w", err)
 	}
 	chosen := candidates[len(candidates)-1]
+	log.Infof("conda-standalone: selected version %s for %s", chosen.Version, subdir)
 
 	downloadUrl := "https:" + chosen.DownloadUrl
 	log.WithFields(log.Fields{"url": downloadUrl}).Info("downloading conda-standalone")
@@ -325,34 +334,22 @@ func unpackConda(archive []byte, fileNameMap map[string]string) (string, error) 
 // has just installed one that can be used. forceInstall always downloads again.
 func installMicromamba(url string, forceInstall bool) (string, error) {
 	target := targetExeFilename("micromamba")
-	return installUnlessUsable("micromamba_install.lock", target, forceInstall, usableMicromambaVersion, func() (string, error) {
-		// micro.mamba.pm publishes no digest to verify against.
-		return downloadAndUnpackArchive(
-			url, "", map[string]string{
-				"Library/bin/micromamba.exe": target,
-				"bin/micromamba":             target,
-			})
-	})
-}
-
-// installUnlessUsable calls download while holding the named download lock,
-// unless target passes checkVersion once the lock is held. forceInstall skips that
-// check and always downloads again.
-func installUnlessUsable(lockName string, target string, forceInstall bool, checkVersion versionCheck, download func() (string, error)) (string, error) {
-	unlock, err := lockInstall(lockName)
+	unlock, err := lockInstall("micromamba_install.lock")
 	if err != nil {
 		return "", err
 	}
 	defer unlock()
-
 	if !forceInstall {
-		// A concurrent process may have installed a usable executable while
-		// this one waited for the lock.
-		if version, _ := checkVersion(target); version != nil {
+		if version, _ := checkExecutableMinVersion(target, pep440.MustParse(DefaultMinMambaVersion), log.DebugLevel, ""); version != nil {
 			return target, nil
 		}
 	}
-	return download()
+	log.Info("micromamba: downloading latest")
+	// micro.mamba.pm publishes no digest to verify against.
+	return downloadAndUnpackArchive(url, "", map[string]string{
+		"Library/bin/micromamba.exe": target,
+		"bin/micromamba":             target,
+	})
 }
 
 // lockInstall takes the named download lock in the site path, so that

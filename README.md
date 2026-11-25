@@ -70,6 +70,8 @@ Options:
                                   accept (defaults to 0.7.3)
   --json                          print the executable's path, flavor and
                                   version as JSON
+  -v, --verbosity INTEGER RANGE   0: warnings; 1: decisions; 2-3: debug
+                                  details  [default: 1; 0<=x<=3]
   --help                          Show this message and exit.
 ```
 
@@ -182,8 +184,8 @@ By default, `ensure()` runs `--version` on each candidate it considers:
   returned as metadata.
 - If it succeeds but the version cannot be parsed or the output cannot be
   decoded, an unconstrained target can still return it with `version=None`.
-- If the command cannot start or exits unsuccessfully, `ensure()` reports the
-  failure on stderr and skips the candidate. It continues with other candidates,
+- If the command cannot start or exits unsuccessfully, `ensure()` logs a
+  warning and skips the candidate. It continues with other candidates,
   later targets, and installation according to the selected search order.
 
 This check also applies to candidates returned by an installer. An installer
@@ -207,6 +209,18 @@ to prefer installed executables, both with and without `--json`, unless
 conda-standalone; those are reported as `"micromamba"` and `"conda"`. It raises
 `FileNotFoundError` or `PermissionError` for a path that doesn't exist or isn't
 executable, and `ValueError` for an executable it doesn't recognize.
+
+### Diagnostics
+
+Both command lines write diagnostic messages to stderr and reserve stdout for
+an executable path or `--json` result. `--verbosity 1` (the default) explains
+version rejections, download selection, lock waits and the final result.
+Use `--verbosity 0` for warnings and errors, or `--verbosity 2` for detailed
+search and cache diagnostics.
+
+The Python API logs under the `ensureconda` logger: its decisions at INFO, and
+warnings such as waiting more than 5 seconds for another process's download.
+The Python CLI configures that logger only for the duration of an invocation.
 
 ### Cache location
 

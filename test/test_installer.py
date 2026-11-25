@@ -15,9 +15,10 @@ import filelock
 import pytest
 import requests
 from conda_package_streaming.create import conda_builder
+from packaging.version import Version
 from urllib3.response import HTTPResponse
 
-from ensureconda import installer
+from ensureconda import determine_versions, installer
 from ensureconda.resolve import UnsupportedPlatformError
 
 
@@ -42,8 +43,10 @@ def retry_clock(monkeypatch: pytest.MonkeyPatch) -> FakeClock:
 def test_lock_with_feedback_preserves_body_timeout(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    log_messages: Callable[[], str],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    caplog.set_level("INFO", logger="ensureconda")
     lock_path = tmp_path / "outer.lock"
     lock = filelock.FileLock(str(lock_path))
     other_lock = filelock.FileLock(str(lock_path))
@@ -60,7 +63,7 @@ def test_lock_with_feedback_preserves_body_timeout(
 
     assert error.value is body_error
     acquire.assert_called_once()
-    assert "Waiting for lock" not in capsys.readouterr().err
+    assert "Waiting for lock" not in log_messages()
     assert not lock.is_locked
     with other_lock.acquire(timeout=0):
         pass
@@ -70,8 +73,9 @@ def test_lock_with_feedback_retries_acquisition_timeouts(
     tmp_path: Path,
     retry_clock: FakeClock,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
+    caplog.set_level("INFO", logger="ensureconda")
     lock_path = tmp_path / "outer.lock"
     lock = filelock.FileLock(str(lock_path))
     retry_clock.now_sec = 100.0
@@ -90,10 +94,16 @@ def test_lock_with_feedback_retries_acquisition_timeouts(
         assert lock.is_locked
         assert acquire.call_count == 3
 
-    assert capsys.readouterr().err.splitlines() == [
-        "Waiting for lock for outer lock to be released by another process... (5.0s)",
-        "Waiting for lock for outer lock to be released by another process... (10.0s)",
-        "Lock for outer lock acquired after waiting 10.0 seconds",
+    assert [(record.levelname, record.getMessage()) for record in caplog.records] == [
+        (
+            "WARNING",
+            "Waiting for lock for outer lock to be released by another process... (5.0s)",
+        ),
+        (
+            "WARNING",
+            "Waiting for lock for outer lock to be released by another process... (10.0s)",
+        ),
+        ("INFO", "Lock for outer lock acquired after waiting 10.0 seconds"),
     ]
     assert not lock.is_locked
 
@@ -306,7 +316,7 @@ def test_compute_candidates_without_a_build_for_the_platform(
 
 
 def test_compute_candidates_skips_broken_and_invalid_versions(
-    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+    monkeypatch: pytest.MonkeyPatch, log_messages: Callable[[], str]
 ) -> None:
     serve_file_listing(
         monkeypatch,
@@ -324,7 +334,7 @@ def test_compute_candidates_skips_broken_and_invalid_versions(
     candidates = installer.compute_candidates("conda-forge", "linux-64")
 
     assert [candidate.version for candidate in candidates] == ["1.0", "2.0", "2.1"]
-    assert "Skipping conda-standalone not a version" in capsys.readouterr().err
+    assert "Skipping conda-standalone not a version" in log_messages()
 
 
 def test_micromamba_is_extracted_while_holding_the_download_lock(
@@ -359,7 +369,7 @@ def test_micromamba_is_extracted_while_holding_the_download_lock(
 )
 @pytest.mark.parametrize("usable", [True, False], ids=["usable", "unusable"])
 def test_install_reuses_an_executable_only_if_it_is_usable(
-    install: Callable[[Callable[[Path], bool]], Optional[Path]],
+    install: Callable[..., Path],
     name: str,
     usable: bool,
     tmp_path: Path,
@@ -367,12 +377,22 @@ def test_install_reuses_an_executable_only_if_it_is_usable(
 ) -> None:
     existing = tmp_path / (name + installer.exe_suffix())
     existing.write_bytes(b"existing executable")
+    existing.chmod(0o755)
     checked: List[Path] = []
     urls: List[str] = []
 
-    def is_usable(path: Path) -> bool:
+    def probe(path: Path, flavor: str) -> Version:
+        lock_name = (
+            "micromamba_install.lock"
+            if name == "micromamba"
+            else "conda_exe_install.lock"
+        )
+        with pytest.raises(filelock.Timeout):
+            filelock.FileLock(str(tmp_path / lock_name)).acquire(timeout=0)
         checked.append(path)
-        return usable
+        return Version("2" if usable else "1")
+
+    monkeypatch.setattr(determine_versions, "_probe_version", probe)
 
     def request(url: str, **kwargs: Any) -> requests.Response:
         urls.append(url)
@@ -382,11 +402,11 @@ def test_install_reuses_an_executable_only_if_it_is_usable(
     monkeypatch.setattr(installer, "request_url_with_retry", request)
 
     if usable:
-        assert install(is_usable) == existing
+        assert install(Version("2")) == existing
         assert urls == []
     else:
         with pytest.raises(requests.ConnectionError):
-            install(is_usable)
+            install(Version("2"))
         assert len(urls) == 1
     assert checked == [existing]
 
@@ -414,16 +434,17 @@ def test_install_reuses_an_executable_that_runs_by_default(
 ) -> None:
     existing = tmp_path / (name + installer.exe_suffix())
     existing.write_bytes(b"existing executable")
+    existing.chmod(0o755)
     modified = time.time() - age_sec
     os.utime(existing, (modified, modified))
     commands: List[List[Any]] = []
     urls: List[str] = []
 
-    def check_output(args: List[Any], **kwargs: Any) -> bytes:
+    def check_output(args: List[Any], **kwargs: Any) -> str:
         commands.append(args)
         if not runs:
             raise OSError(8, "Exec format error")
-        return b"2.0.0\n"
+        return "2.0.0\n"
 
     def request(url: str, **kwargs: Any) -> requests.Response:
         urls.append(url)
@@ -572,7 +593,7 @@ def test_download_respects_retry_after(
     expected_sources: List[bool],
     retry_clock: FakeClock,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    log_messages: Callable[[], str],
 ) -> None:
     attempts = 0
     delays_sec = retry_clock.delays_sec
@@ -602,7 +623,7 @@ def test_download_respects_retry_after(
         assert (archive.read() if to_file else response.content) == payload
     assert attempts == 3
     assert delays_sec == expected_delays_sec
-    lines = capsys.readouterr().err.splitlines()
+    lines = log_messages().splitlines()
     assert len(lines) == 2
     for line, delay_sec, from_header in zip(
         lines, expected_delays_sec, expected_sources
@@ -678,7 +699,7 @@ def test_download_bounds_scheduled_retry_time(
     expected_stop: Optional[str],
     retry_clock: FakeClock,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    log_messages: Callable[[], str],
 ) -> None:
     attempts = 0
     delays_sec = retry_clock.delays_sec
@@ -724,7 +745,7 @@ def test_download_bounds_scheduled_retry_time(
     assert all(
         response.raw.closed for response in responses if response.status_code != 200
     )
-    lines = capsys.readouterr().err.splitlines()
+    lines = log_messages().splitlines()
     if not recover:
         assert expected_stop is not None
         expected_stop = expected_stop.format(status=status)
@@ -919,7 +940,7 @@ def test_download_logs_each_failure_with_details(
     failure: Union[str, int],
     retry_clock: FakeClock,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    log_messages: Callable[[], str],
 ) -> None:
     url = "https://example.invalid/package.conda"
     attempts = 0
@@ -944,7 +965,7 @@ def test_download_logs_each_failure_with_details(
     with pytest.raises(requests.RequestException) as error:
         installer.request_url_with_retry(url)
 
-    lines = capsys.readouterr().err.splitlines()
+    lines = log_messages().splitlines()
     retryable = failure != 404
     assert attempts == len(lines) == (2 if retryable else 1)
     assert delays_sec == ([1] if retryable else [])

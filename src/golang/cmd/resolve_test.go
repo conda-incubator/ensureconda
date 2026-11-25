@@ -82,7 +82,7 @@ func TestExecutableVersionRejectionDiagnostics(t *testing.T) {
 				log.SetOutput(previousOutput)
 				log.SetLevel(previousLevel)
 			})
-			_, err := executableWithMinVersion(pep440.MustParse(DefaultMinMambaVersion), false, "")(path)
+			_, err := executableWithMinVersion(pep440.MustParse(DefaultMinMambaVersion), log.InfoLevel, "")(path)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("version check error = %v, want error: %v", err, tt.wantErr)
 			}
@@ -180,5 +180,23 @@ func TestFindExecutableSkipsNonExecutable(t *testing.T) {
 
 	if got, err := FindExecutable("tool", dir, acceptAny); err == nil {
 		t.Errorf("FindExecutable() = %v, want an error for a non-executable file", got)
+	}
+}
+
+func TestVersionRejectionIsVisibleAtDefaultVerbosity(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the stand-in executable is a shell script")
+	}
+	path := filepath.Join(t.TempDir(), "micromamba")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\necho 0.1.0\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	messages := captureLog(t)
+	version, err := checkExecutableMinVersion(path, pep440.MustParse(DefaultMinMambaVersion), log.InfoLevel, "")
+	if err != nil || version != nil {
+		t.Fatalf("check = %v, %v; want rejection", version, err)
+	}
+	if got := messages.next(t); !strings.Contains(got, "requires >="+DefaultMinMambaVersion) {
+		t.Fatalf("missing rejection reason: %s", got)
 	}
 }

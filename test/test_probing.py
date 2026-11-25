@@ -3,12 +3,13 @@
 import sys
 from pathlib import Path
 from test.test_info import executable_file
+from typing import Callable
 
 import pytest
 import requests
 from packaging.version import Version
 
-from ensureconda import CondaExecutable, ensure, installer, resolve
+from ensureconda import CondaExecutable, ensure, identify, installer, resolve
 
 pytestmark = pytest.mark.skipif(
     sys.platform == "win32", reason="The executable fixtures use POSIX shell scripts"
@@ -39,7 +40,7 @@ def program(path: Path, source: str) -> Path:
 
 
 def test_broken_conda_allows_a_later_installed_target(
-    isolated_tools: Path, capsys: pytest.CaptureFixture[str]
+    isolated_tools: Path, log_messages: Callable[[], str]
 ) -> None:
     conda = program(isolated_tools / "bin" / "conda", "#!/bin/sh\nexit 1\n")
     micromamba = program(
@@ -49,11 +50,11 @@ def test_broken_conda_allows_a_later_installed_target(
     assert ensure(["conda", "micromamba"]) == CondaExecutable(
         micromamba, "micromamba", Version("2.9.0")
     )
-    assert f"Skipping {conda}" in capsys.readouterr().err
+    assert f"Skipping {conda}" in log_messages()
 
 
 def test_unrunnable_cached_micromamba_allows_path_candidate(
-    isolated_tools: Path, capsys: pytest.CaptureFixture[str]
+    isolated_tools: Path, log_messages: Callable[[], str]
 ) -> None:
     broken = executable_file(isolated_tools / "data" / "micromamba")
     working = program(
@@ -63,13 +64,13 @@ def test_unrunnable_cached_micromamba_allows_path_candidate(
     assert ensure(["micromamba"]) == CondaExecutable(
         working, "micromamba", Version("2.9.0")
     )
-    assert f"Skipping {broken}" in capsys.readouterr().err
+    assert f"Skipping {broken}" in log_messages()
 
 
 def test_broken_conda_exe_allows_path_candidate(
     isolated_tools: Path,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    log_messages: Callable[[], str],
 ) -> None:
     broken = program(isolated_tools / "environment" / "conda", "#!/bin/sh\nexit 1\n")
     working = program(
@@ -78,13 +79,13 @@ def test_broken_conda_exe_allows_path_candidate(
     monkeypatch.setenv("CONDA_EXE", str(broken))
 
     assert ensure(["conda"]) == CondaExecutable(working, "conda", Version("25.1.1"))
-    assert f"Skipping {broken}" in capsys.readouterr().err
+    assert f"Skipping {broken}" in log_messages()
 
 
 def test_fresh_unrunnable_cache_is_replaced_by_installation(
     isolated_tools: Path,
     monkeypatch: pytest.MonkeyPatch,
-    capsys: pytest.CaptureFixture[str],
+    log_messages: Callable[[], str],
 ) -> None:
     cached = executable_file(isolated_tools / "data" / "micromamba")
 
@@ -99,4 +100,57 @@ def test_fresh_unrunnable_cache_is_replaced_by_installation(
     assert ensure(["micromamba"]) == CondaExecutable(
         cached, "micromamba", Version("2.9.0")
     )
-    assert capsys.readouterr().err.count(f"Skipping {cached}") == 1
+    assert log_messages().count(f"Skipping {cached}") == 1
+
+
+@pytest.mark.parametrize(
+    "name, output",
+    [("mamba", "2.9.0"), ("micromamba", "2.9.0"), ("conda", "conda 25.1.1")],
+)
+def test_search_discards_candidate_stderr(
+    name: str,
+    output: str,
+    isolated_tools: Path,
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    path = program(
+        isolated_tools / "bin" / name, f"#!/bin/sh\necho noise >&2\necho {output}\n"
+    )
+
+    result = ensure([name])
+
+    assert result is not None and result.path == path
+    assert capfd.readouterr().err == ""
+
+
+def test_identify_discards_candidate_stderr(
+    isolated_tools: Path, capfd: pytest.CaptureFixture[str]
+) -> None:
+    path = program(
+        isolated_tools / "bin" / "mm", "#!/bin/sh\necho noise >&2\necho 2.9.0\n"
+    )
+
+    assert identify(path).flavor == "micromamba"
+    assert capfd.readouterr().err == ""
+
+
+@pytest.mark.parametrize(
+    "name, output, install",
+    [
+        ("micromamba", "2.9.0", installer.install_micromamba),
+        ("conda_standalone", "conda 25.1.1", installer.install_conda_exe),
+    ],
+)
+def test_installer_discards_cached_executable_stderr(
+    name: str,
+    output: str,
+    install: Callable[[], Path],
+    isolated_tools: Path,
+    capfd: pytest.CaptureFixture[str],
+) -> None:
+    cached = program(
+        isolated_tools / "data" / name, f"#!/bin/sh\necho noise >&2\necho {output}\n"
+    )
+
+    assert install() == cached
+    assert capfd.readouterr().err == ""
