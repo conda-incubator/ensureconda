@@ -35,7 +35,9 @@ def determine_mamba_version(exe: _StrPath) -> Version:
     2.0.8
     ```
     """
-    out = subprocess.check_output([exe, "--version"], encoding="utf-8").strip()
+    out = subprocess.check_output(
+        [exe, "--version"], stderr=subprocess.DEVNULL, encoding="utf-8"
+    ).strip()
     for line in out.splitlines(keepends=False):
         if line.startswith("mamba"):
             return Version(line.split()[-1])
@@ -44,14 +46,18 @@ def determine_mamba_version(exe: _StrPath) -> Version:
 
 
 def determine_micromamba_version(exe: _StrPath) -> Version:
-    out = subprocess.check_output([exe, "--version"], encoding="utf-8").strip()
+    out = subprocess.check_output(
+        [exe, "--version"], stderr=subprocess.DEVNULL, encoding="utf-8"
+    ).strip()
     for line in out.splitlines(keepends=False):
         return Version(line.split()[-1])
     return _LEGACY_UNKNOWN_VERSION
 
 
 def determine_conda_version(exe: _StrPath) -> Version:
-    out = subprocess.check_output([exe, "--version"], encoding="utf-8").strip()
+    out = subprocess.check_output(
+        [exe, "--version"], stderr=subprocess.DEVNULL, encoding="utf-8"
+    ).strip()
     for line in out.splitlines(keepends=False):
         if line.startswith("conda"):
             return Version(line.split()[-1])

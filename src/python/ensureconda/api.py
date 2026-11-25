@@ -81,7 +81,9 @@ def _flavor_from_name(executable: _StrPath) -> Optional[Flavor]:
 
 def _probe_flavor(executable: _StrPath) -> Optional[Flavor]:
     try:
-        output = subprocess.check_output([executable, "--version"], encoding="utf-8")
+        output = subprocess.check_output(
+            [executable, "--version"], stderr=subprocess.DEVNULL, encoding="utf-8"
+        )
     except (subprocess.CalledProcessError, OSError, UnicodeDecodeError):
         return None
     lines = output.strip().splitlines()
