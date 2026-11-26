@@ -3,7 +3,6 @@ import logging
 import sys
 import time
 from contextlib import contextmanager
-from functools import partial
 from pathlib import Path
 from typing import Any, Iterator, Optional, Union
 
@@ -11,7 +10,7 @@ import click
 import requests
 from packaging.version import InvalidVersion, Version
 
-from ensureconda.api import CondaExecutable, _ensure, _legacy_targets, ensureconda
+from ensureconda.api import CondaExecutable, _ensure, _legacy_targets
 from ensureconda.installer import (
     DownloadedExecutableError,
     ExecutableReplacementError,
@@ -141,41 +140,24 @@ def ensureconda_cli(
 
         exe: Union[CondaExecutable, Path, None]
         try:
-            if as_json or force_install:
-                # Keep old-API minimums when calling the resolver directly.
-                targets = _legacy_targets(
-                    mamba=mamba,
-                    micromamba=micromamba,
-                    conda=conda,
-                    conda_exe=conda_exe,
-                    min_conda_version=min_conda_version,
-                    min_mamba_version=min_mamba_version,
-                )
-                exe = _ensure(
-                    targets,
-                    install=(
-                        "force"
-                        if force_install
-                        else "never" if no_install else "fallback"
-                    ),
-                    probe_version=as_json,
-                )
-                if exe is not None and not as_json:
-                    exe = exe.path
-            else:
-                find = partial(
-                    ensureconda,
-                    mamba=mamba,
-                    micromamba=micromamba,
-                    conda=conda,
-                    conda_exe=conda_exe,
-                    min_mamba_version=min_mamba_version,
-                    min_conda_version=min_conda_version,
-                )
-                # Preserve the CLI's preference for installed executables.
-                exe = find(no_install=True)
-                if not exe and not no_install:
-                    exe = find(no_install=False)
+            # Keep old-API minimums when calling the resolver directly.
+            targets = _legacy_targets(
+                mamba=mamba,
+                micromamba=micromamba,
+                conda=conda,
+                conda_exe=conda_exe,
+                min_conda_version=min_conda_version,
+                min_mamba_version=min_mamba_version,
+            )
+            exe = _ensure(
+                targets,
+                install=(
+                    "force" if force_install else "never" if no_install else "fallback"
+                ),
+                probe_version=as_json,
+            )
+            if exe is not None and not as_json:
+                exe = exe.path
         except requests.RequestException as error:
             # Each attempt has already been reported on stderr, so end with
             # one line instead of a traceback.

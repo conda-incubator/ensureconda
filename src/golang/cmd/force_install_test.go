@@ -189,6 +189,38 @@ func existingForceTools(t *testing.T) {
 	}
 }
 
+func TestCLIOrderSearchesOnceBeforeInstalling(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the stand-in executables are shell scripts")
+	}
+	useSitePath(t)
+	bin := t.TempDir()
+	t.Setenv("PATH", bin)
+	for tool, output := range map[string]string{"micromamba": "0.1.0", "conda": "conda 4.0.0"} {
+		if err := os.WriteFile(filepath.Join(bin, tool), []byte("#!/bin/sh\necho "+output+"\n"), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	serveForceInstall(t)
+	messages := captureLog(t)
+
+	got, err := ensureCondaPreferringInstalled(true, true, true, true, false, false)
+
+	if err != nil || got == nil || got.Flavor != "micromamba" || filepath.Dir(got.Path) != sitePath() {
+		t.Fatalf("ensureCondaPreferringInstalled() = %v, %v; want the installed micromamba", got, err)
+	}
+	entries := logged(messages)
+	rejected := 0
+	for _, message := range entries {
+		if strings.HasPrefix(message, "Rejected "+filepath.Join(bin, "micromamba")+" ") {
+			rejected++
+		}
+	}
+	if rejected != 1 {
+		t.Errorf("rejected the micromamba on PATH %d times, want once: %q", rejected, entries)
+	}
+}
+
 func TestForceInstallSkipsExistingTools(t *testing.T) {
 	for _, tool := range []string{"micromamba", "conda_standalone"} {
 		t.Run(tool, func(t *testing.T) {

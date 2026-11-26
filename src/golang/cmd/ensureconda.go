@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"unicode/utf16"
@@ -77,34 +78,16 @@ var (
 				log.SetLevel(log.InfoLevel)
 			}
 
-			var executable *condaExecutable
-			if !forceInstall {
-				executable, err = ensureCondaWithMetadata(mamba, micromamba, conda, condaExe, true, false)
-				if err != nil {
-					panic(err)
-				}
+			executable, err := ensureCondaPreferringInstalled(mamba, micromamba, conda, condaExe, noInstall, forceInstall)
+			if err != nil {
+				er(err)
 			}
-
 			if executable != nil {
 				log.Infof("Selected %s %s at %s", executable.Flavor, executable.Version, executable.Path)
 				if err := printExecutable(cmd, executable, asJSON); err != nil {
 					er(err)
 				}
 				os.Exit(0)
-			}
-			if !noInstall {
-				log.Debugf("Attempting to install")
-				executable, err = ensureCondaWithMetadata(mamba, micromamba, conda, condaExe, noInstall, forceInstall)
-				if err != nil {
-					er(err)
-				}
-				if executable != nil {
-					log.Infof("Selected %s %s at %s", executable.Flavor, executable.Version, executable.Path)
-					if err := printExecutable(cmd, executable, asJSON); err != nil {
-						er(err)
-					}
-					os.Exit(0)
-				}
 			}
 			er("Could not find compatible executable")
 		},
@@ -165,104 +148,141 @@ func validateForceInstall(micromamba, condaStandalone, noInstall, forceInstall b
 	return nil
 }
 
+// ensureCondaWithMetadata keeps EnsureConda's order: each tool is searched for
+// and, if installable, installed before the next tool is considered.
 func ensureCondaWithMetadata(mamba, micromamba, conda, condaStandalone, noInstall, forceInstall bool) (*condaExecutable, error) {
 	if err := validateForceInstall(micromamba, condaStandalone, noInstall, forceInstall); err != nil {
 		return nil, err
 	}
-	var executable *condaExecutable
-	var lastInvalidDownload error
+	var steps []resolutionStep
+	for _, flavor := range enabledFlavors(mamba, micromamba, conda, condaStandalone) {
+		if !forceInstall {
+			steps = append(steps, resolutionStep{flavor: flavor})
+		}
+		if installable(flavor) && !noInstall {
+			steps = append(steps, resolutionStep{flavor: flavor, install: true})
+		}
+	}
+	return resolveSteps(steps, forceInstall)
+}
+
+// ensureCondaPreferringInstalled searches for every enabled tool before running
+// any installer, as the command line does.
+func ensureCondaPreferringInstalled(mamba, micromamba, conda, condaStandalone, noInstall, forceInstall bool) (*condaExecutable, error) {
+	if err := validateForceInstall(micromamba, condaStandalone, noInstall, forceInstall); err != nil {
+		return nil, err
+	}
+	flavors := enabledFlavors(mamba, micromamba, conda, condaStandalone)
+	var steps []resolutionStep
+	if !forceInstall {
+		for _, flavor := range flavors {
+			steps = append(steps, resolutionStep{flavor: flavor})
+		}
+	}
+	if !noInstall {
+		for _, flavor := range flavors {
+			if installable(flavor) {
+				steps = append(steps, resolutionStep{flavor: flavor, install: true})
+			}
+		}
+	}
+	return resolveSteps(steps, forceInstall)
+}
+
+// resolutionStep searches for an installed flavor, or runs its installer.
+type resolutionStep struct {
+	flavor  string
+	install bool
+}
+
+func enabledFlavors(mamba, micromamba, conda, condaStandalone bool) []string {
+	var flavors []string
+	for _, tool := range []struct {
+		flavor  string
+		enabled bool
+	}{{"mamba", mamba}, {"micromamba", micromamba}, {"conda", conda}, {"conda_standalone", condaStandalone}} {
+		if tool.enabled {
+			flavors = append(flavors, tool.flavor)
+		}
+	}
+	return flavors
+}
+
+func installable(flavor string) bool {
+	return flavor == "micromamba" || flavor == "conda_standalone"
+}
+
+func resolveSteps(steps []resolutionStep, forceInstall bool) (*condaExecutable, error) {
 	dataDir := sitePath()
 	minMambaVersion, _ := pep440.Parse(DefaultMinMambaVersion)
-
 	rejectionLevel := log.InfoLevel
 	if forceInstall {
 		rejectionLevel = log.WarnLevel
 	}
-	microMambaVersionCheck := micromambaCheck(rejectionLevel)
-	condaVersionCheck := condaCheck(rejectionLevel)
-	mambaVersionCheck := executableWithMinVersion(minMambaVersion, log.InfoLevel, "mamba", "")
-
-	if mamba && !forceInstall {
-		log.Debug("Checking for mamba")
-		executable, _ = resolveExecutableWithVersion("mamba", dataDir, mambaVersionCheck)
-		if executable != nil {
-			return executable, nil
-		}
+	// TODO: check $CONDA_EXE when searching for conda
+	searchChecks := map[string]versionCheck{
+		"mamba":            executableWithMinVersion(minMambaVersion, log.InfoLevel, "mamba", ""),
+		"micromamba":       usableMicromambaVersion,
+		"conda":            usableCondaVersion,
+		"conda_standalone": usableCondaVersion,
 	}
-	if micromamba {
-		if !forceInstall {
-			log.Debug("Checking for micromamba")
-			executable, _ = resolveExecutableWithVersion("micromamba", dataDir, usableMicromambaVersion)
-			if executable != nil {
+	var lastInvalidDownload error
+	for i, step := range steps {
+		if !step.install {
+			log.Debugf("Checking for %s", step.flavor)
+			if executable, _ := resolveExecutableWithVersion(step.flavor, dataDir, searchChecks[step.flavor]); executable != nil {
 				return executable, nil
 			}
+			continue
 		}
-		if !noInstall {
-			exe, err := installMicromambaForPlatform(forceInstall)
-			var remaining []string
-			if conda && !forceInstall {
-				remaining = append(remaining, "conda")
+		var exe string
+		var err error
+		check := condaCheck(rejectionLevel)
+		if step.flavor == "micromamba" {
+			exe, err = installMicromambaForPlatform(forceInstall)
+			check = micromambaCheck(rejectionLevel)
+		} else {
+			exe, err = installCondaStandalone(forceInstall)
+		}
+		var noCompatible *noCompatibleVersionError
+		var notPublished *notPublishedError
+		var invalidDownload *downloadedExecutableError
+		switch {
+		case errors.As(err, &noCompatible):
+			log.StandardLogger().Log(rejectionLevel, err)
+		case errors.As(err, &notPublished) || errors.As(err, &invalidDownload):
+			if invalidDownload != nil {
+				lastInvalidDownload = err
 			}
-			if condaStandalone {
-				remaining = append(remaining, "conda-standalone")
-			}
-			var noCompatible *noCompatibleVersionError
-			var notPublished *notPublishedError
-			var invalidDownload *downloadedExecutableError
-			if errors.As(err, &noCompatible) {
-				log.StandardLogger().Log(rejectionLevel, err)
-			} else if (errors.As(err, &notPublished) || errors.As(err, &invalidDownload)) && len(remaining) > 0 {
-				if invalidDownload != nil {
-					lastInvalidDownload = err
-				}
+			if remaining := remainingTools(steps[i+1:]); len(remaining) > 0 {
 				log.Warnf("%v; trying %s instead", err, strings.Join(remaining, " or "))
-			} else if err != nil {
-				return nil, err
-			} else if version, _ := microMambaVersionCheck(exe); version != nil {
-				return newCondaExecutable(exe, "micromamba", *version), nil
-			}
-		}
-	}
-	if conda && !forceInstall {
-		log.Debug("Checking for conda")
-		// TODO: check $CONDA_EXE
-		executable, _ = resolveExecutableWithVersion("conda", dataDir, usableCondaVersion)
-		if executable != nil {
-			return executable, nil
-		}
-	}
-	if condaStandalone {
-		if !forceInstall {
-			log.Debug("Checking for conda_standalone")
-			executable, _ = resolveExecutableWithVersion("conda_standalone", dataDir, usableCondaVersion)
-			if executable != nil {
-				return executable, nil
-			}
-		}
-		if !noInstall {
-			exe, err := installCondaStandalone(forceInstall)
-			var noCompatible *noCompatibleVersionError
-			var notPublished *notPublishedError
-			if errors.As(err, &noCompatible) {
-				log.StandardLogger().Log(rejectionLevel, err)
-				return nil, lastInvalidDownload
-			}
-			if lastInvalidDownload != nil && errors.As(err, &notPublished) {
+			} else if notPublished != nil && lastInvalidDownload != nil {
 				log.Warn(err)
 				return nil, lastInvalidDownload
-			}
-
-			if err != nil {
+			} else {
 				return nil, err
 			}
-
-			if version, _ := condaVersionCheck(exe); version != nil {
-				return newCondaExecutable(exe, "conda_standalone", *version), nil
+		case err != nil:
+			return nil, err
+		default:
+			if version, _ := check(exe); version != nil {
+				return newCondaExecutable(exe, step.flavor, *version), nil
 			}
 		}
 	}
-
 	return nil, lastInvalidDownload
+}
+
+// remainingTools names the tools that later steps would try, in order.
+func remainingTools(steps []resolutionStep) []string {
+	var names []string
+	for _, step := range steps {
+		name := strings.ReplaceAll(step.flavor, "_", "-")
+		if !slices.Contains(names, name) {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 type ArchSpec struct {
