@@ -76,30 +76,17 @@ Options:
 ```
 
 Use `--force-install` to download a fresh executable into ensureconda's data
-directory, even if a compatible copy exists there or on `PATH`. Both the Python
-and Go CLIs support this option. Downloads still hold the usual installation
-lock, and every forced invocation downloads again. To refresh conda-standalone
-instead of micromamba, use `ensureconda --force-install --no-micromamba`.
-`--force-install` cannot be combined with `--no-install`, and requires at least
-one of micromamba or conda-standalone to be enabled.
+directory, even if a compatible copy exists there or on `PATH`. To refresh
+conda-standalone instead of micromamba, use
+`ensureconda --force-install --no-micromamba`.
 
-With `--json`, both the Python and Go CLIs print the executable's path, flavor
-and version instead of just its path:
+With `--json`, ensureconda prints the executable's path, flavor and version
+instead of just its path:
 
 ```console
 $ ensureconda --json
 {"path": "/home/user/.local/share/ensure-conda/micromamba", "flavor": "micromamba", "version": "2.9.0"}
 ```
-
-The flavor is the matching search branch: `mamba`, `micromamba`, `conda`, or
-`conda_standalone`. The version is the one used for the minimum-version check,
-normalized according to PEP 440. `--json` can be combined with `--no-install`
-or `--force-install`.
-Compare parsed JSON values; whitespace and escaping may differ between the CLIs.
-
-The Go CLI requires a valid UTF-8 executable path for `--json`. If the path
-contains invalid UTF-8 bytes, it exits with an error and leaves stdout empty.
-Plain output preserves the original path bytes.
 
 ### Python API
 
@@ -115,104 +102,38 @@ ensureconda.identify("/opt/conda/bin/conda")  # Describe a given executable
 ensureconda.ensureconda(micromamba=False, min_conda_version=None)
 ```
 
-`ensure()` accepts an ordered sequence of target strings. Each names `mamba`,
-`micromamba`, `conda`, or `conda_standalone`, optionally followed by version
-constraints such as `>=2,<3` or `==2.9.*`. The default order is `mamba`,
-`micromamba`, `conda`, `conda_standalone`. An empty sequence returns `None`,
-except with `install="force"`, which requires an installable target and raises
-`ValueError` for an empty sequence.
-Invalid targets raise `ValueError` before any search or installation.
-Target names are case insensitive; `conda-standalone` and `Conda.Standalone`
-also select `conda_standalone`.
+`ensure()` tries an ordered sequence of targets, by default `mamba`,
+`micromamba`, `conda` and `conda_standalone`. A target can add version
+constraints in Python packaging's version-specifier syntax, such as `>=2,<3` or
+`==2.9.*`. The result's version is `None` if the executable doesn't report one,
+and such an executable can't satisfy a constraint. Later releases may add
+fields to the result or keys to `ensureconda --json`.
 
 The `install` argument selects when installation is attempted. Only
-`micromamba` and `conda_standalone` can be installed; `mamba` and `conda`
-select existing installations.
+`micromamba` and `conda_standalone` can be installed.
 
-- `"fallback"`, the default: all targets are searched for compatible installed
-  executables before any installation is attempted. For example,
-  `["micromamba", "conda"]` uses an installed conda if micromamba is absent.
-  If nothing installed matches, the installers are tried in target order.
-- `"per-target"`: each target is searched for and, if it is absent, installed
-  before the next target is considered. With `["micromamba", "conda"]`,
-  micromamba is installed even if a conda is already present.
-- `"never"`: targets are only searched for.
-- `"force"`: existing executables are skipped and fresh downloads are tried in
-  target order, bypassing the cache. Requires at least one installable target.
-  For example, `ensureconda.ensure(["conda_standalone"], install="force")` refreshes
-  conda-standalone. Each tool is downloaded at most once per call; later targets
-  naming that tool check their constraints against the refreshed copy.
+- `"fallback"`, the default: use any installed target before installing one.
+  With `["micromamba", "conda"]`, an installed conda is used if micromamba is
+  absent.
+- `"per-target"`: search for and install each target in turn, so
+  `["micromamba", "conda"]` installs micromamba even if conda is present.
+- `"never"`: only search for installed executables.
+- `"force"`: skip installed and cached executables and download fresh copies.
 
-Any other value raises `ValueError` before any search or installation.
+When installing, ensureconda downloads the newest published release that
+satisfies the target, so `ensure(["micromamba<2"])` can install micromamba 1.x.
+A download that fails to run or doesn't satisfy the target never replaces the
+cached executable. For unconstrained targets, `probe_version=False` skips
+checking that installed executables run and returns `version=None`.
 
-Downloads are selected for a conda platform, an operating-system and
-architecture combination such as `linux-64`. If ensureconda cannot determine
-which build to download for the running Python environment, it still searches
-for installed executables. Those may work independently of the download
-mapping. If none is found and installation would otherwise have been attempted,
-it raises
-`ensureconda.resolve.UnsupportedPlatformError` instead of returning `None`.
-With `install="force"`, it raises immediately without searching.
-
-Version constraints use Python packaging's version-specifier syntax. When
-installing, ensureconda downloads the newest published release that satisfies
-the target, so `ensure(["micromamba<2"])` can install micromamba 1.x. A download
-that fails to run or doesn't satisfy the target never replaces the cached
-executable.
-
-Later releases may add fields to the result or keys to `ensureconda --json`.
-
-The result's flavor is `"mamba"`, `"micromamba"`, `"conda"`, or
-`"conda_standalone"`. Its version is `None` if `--version` doesn't report one.
-The version used to check a constraint is also returned as metadata. `ensure()`
-requires a known version to satisfy a constraint.
-
-ensureconda saves downloaded conda-standalone executables as `conda_standalone`
-(`conda_standalone.exe` on Windows), so that filename is used when searching
-for an existing standalone installation.
-
-By default, `ensure()` runs `--version` on each candidate it considers:
-
-- If the command succeeds and reports a recognized version, that version is
-  returned as metadata.
-- If it succeeds but the version cannot be parsed or the output cannot be
-  decoded, an unconstrained target can still return it with `version=None`.
-- If the command cannot start or exits unsuccessfully, `ensure()` logs a
-  warning and skips the candidate. It continues with other candidates,
-  later targets, and installation according to the selected search order.
-
-This check also applies to candidates returned by an installer. An installer
-reuses an executable already in ensureconda's data directory only if it passes
-the same check, and otherwise downloads a new one.
-Use `install="force"` to replace even a usable cached executable.
-Set `probe_version=False` to run `--version` only when a target's constraints
-require it. For an unconstrained target, this also disables checking that an
-installed executable runs, and the returned version is `None`.
-
-`ensureconda()`, the old API, keeps its boolean options, minimum-version
-arguments, path-or-None result, and original search and installation order.
-In particular, it may install micromamba before looking for an installed conda.
-The CLI continues to prefer installed executables, both with and without
-`--json`, unless `--force-install` is set. For forced installation from Python,
-use `ensure(..., install="force")`; the old API keeps its existing options.
-
-`identify()` takes the flavor from the file name, or else from the shape of the
-`--version` output, which can't tell micromamba from mamba 2, nor conda from
-conda-standalone; those are reported as `"micromamba"` and `"conda"`. It raises
-`FileNotFoundError` or `PermissionError` for a path that doesn't exist or isn't
-executable, and `ValueError` for an executable it doesn't recognize.
+`ensureconda()`, the old API, keeps its options, its path-or-`None` result and
+its original search order.
 
 ### Diagnostics
 
-Both command lines write diagnostic messages to stderr and reserve stdout for
-an executable path or `--json` result. `--verbosity 1` (the default) explains
-version rejections, download selection, lock waits and the final result.
-Use `--verbosity 0` for warnings and errors, or `--verbosity 2` for detailed
-search and cache diagnostics.
-
-The Python API logs under the `ensureconda` logger: its decisions at INFO, and
-warnings such as waiting more than 5 seconds for another process's download.
-The Python CLI configures that logger only for the duration of an invocation.
+Both command lines write diagnostics to stderr, keeping stdout for the
+executable path or `--json` result; `--verbosity` selects how much they say.
+The Python API logs its decisions at INFO under the `ensureconda` logger.
 
 ### Cache location
 
@@ -223,7 +144,7 @@ By default, ensureconda stores downloaded executables in:
 - Windows: `%LOCALAPPDATA%\ensure-conda\ensure-conda`
 
 To use a different directory, set `ENSURECONDA_DATA_DIR` to its absolute path.
-This applies to both Python and Go. An unset or empty value keeps the default.
+This applies to both Python and Go.
 
 ### Configuring conda-standalone channel
 
