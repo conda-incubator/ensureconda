@@ -73,6 +73,20 @@ def test_changed_file_runs_again(tmp_path: Path, runs: Callable[[], int]) -> Non
     assert runs() == 2
 
 
+def test_observer_does_not_cache_a_path_lookup_against_the_local_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    stand_in(tmp_path / "conda", "echo conda 4.7")
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    monkeypatch.setenv("PATH", str(bin_dir))
+    observations: _Observations = {}
+    for version in ("25.1", "25.2"):
+        stand_in(bin_dir / "conda", f"echo conda {version}")
+        assert _probe_version("conda", "conda", observations) == Version(version)
+
+
 def test_file_changed_while_probing_is_not_reused(
     tmp_path: Path, runs: Callable[[], int]
 ) -> None:
@@ -207,7 +221,7 @@ def test_observations_end_with_the_call(
     assert runs() == 2
 
 
-def test_bare_names_are_not_kept(
+def test_conda_on_path_and_in_data_directory_have_separate_observations(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     work, on_path = tmp_path / "work", tmp_path / "bin"
@@ -217,9 +231,8 @@ def test_bare_names_are_not_kept(
     stand_in(on_path / "conda", "echo conda 4.14.0")
     monkeypatch.chdir(work)
     monkeypatch.setenv("PATH", str(on_path))
-    # Found in the working directory, but run from PATH.
     monkeypatch.setenv("CONDA_EXE", "conda")
-    monkeypatch.setenv("ENSURECONDA_DATA_DIR", str(work))
+    monkeypatch.setenv("ENSURECONDA_DATA_DIR", ".")
 
     assert api.ensure(["conda>=5"], install="never") == (
         CondaExecutable(work / "conda", "conda", Version("25.1.0"))

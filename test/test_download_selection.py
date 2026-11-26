@@ -215,6 +215,36 @@ def serve_package(
 
 @pytest.mark.skipif(is_windows, reason="the stand-ins are shell scripts")
 @pytest.mark.parametrize("tool", ["micromamba", "conda_standalone"])
+def test_install_in_current_directory(
+    tool: Flavor, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", str(tmp_path / "empty"))
+    monkeypatch.setenv("ENSURECONDA_DATA_DIR", ".")
+    output = "conda 25" if tool == "conda_standalone" else "25"
+    serve_package(
+        monkeypatch, tool, version="25", content=f"#!/bin/sh\necho {output}\n".encode()
+    )
+    other = tmp_path / "other"
+    other.mkdir()
+    request = installer.request_url_with_retry
+
+    def change_directory_during_download(url: str, **kwargs: Any) -> requests.Response:
+        monkeypatch.chdir(other)
+        return request(url, **kwargs)
+
+    monkeypatch.setattr(
+        installer, "request_url_with_retry", change_directory_during_download
+    )
+
+    installed = api.ensure([tool], install="force")
+    assert installed == api.CondaExecutable(tmp_path / tool, tool, Version("25"))
+    monkeypatch.chdir(tmp_path)
+    assert api.ensure([tool], install="never") == installed
+
+
+@pytest.mark.skipif(is_windows, reason="the stand-ins are shell scripts")
+@pytest.mark.parametrize("tool", ["micromamba", "conda_standalone"])
 def test_one_call_runs_each_unchanged_file_once(
     tool: Flavor, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

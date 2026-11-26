@@ -12,7 +12,10 @@ import appdirs
 
 def ext_candidates(fpath: str) -> Iterator[str]:
     if is_windows:
-        exts = os.environ.get("PATHEXT", "").split(os.pathsep)
+        exts = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(os.pathsep)
+        if any(ext and fpath.lower().endswith(ext.lower()) for ext in exts):
+            yield fpath
+            return
     else:
         exts = ["", ".exe"]
     for ext in exts:
@@ -25,6 +28,15 @@ def is_exe(fpath: Optional[Path]) -> bool:
     return os.path.exists(fpath) and os.access(fpath, os.X_OK) and os.path.isfile(fpath)
 
 
+def absolute_path(path: Path) -> Path:
+    try:
+        return path.absolute()
+    except FileNotFoundError:
+        # A removed working directory has no absolute name, but ../tool can
+        # still name a file in its parent.
+        return path
+
+
 def which_no_shims(executable: str) -> Optional[str]:
     """Ensure that environment manager tools like pyenv don't break us
 
@@ -34,19 +46,27 @@ def which_no_shims(executable: str) -> Optional[str]:
     These executables will exist but may fail on use due to not being in the right
     pyenv execution environment.
     """
-    path_list = [
-        p
-        for p in os.environ.get("PATH", "").split(os.pathsep)
-        if os.path.join(".pyenv", "shims") not in p
-    ]
-    return shutil.which(executable, path=os.pathsep.join(path_list))
+    if os.path.dirname(executable):
+        return shutil.which(executable)
+    search_path = os.environ.get("PATH")
+    if not search_path:
+        return None
+    names = tuple(ext_candidates(executable)) if is_windows else (executable,)
+    for directory in search_path.split(os.pathsep):
+        if os.path.join(".pyenv", "shims") in directory:
+            continue
+        for name in names:
+            path = absolute_path(Path(directory) / name)
+            if is_exe(path):
+                return str(path)
+    return None
 
 
 def site_path() -> pathlib.Path:
     override = os.environ.get("ENSURECONDA_DATA_DIR")
     if override:
-        return pathlib.Path(override)
-    return pathlib.Path(appdirs.user_data_dir("ensure-conda"))
+        return absolute_path(Path(override))
+    return absolute_path(Path(appdirs.user_data_dir("ensure-conda")))
 
 
 def resolve_executable(exe_name: str) -> Iterator[Path]:
@@ -66,9 +86,13 @@ def resolve_executable(exe_name: str) -> Iterator[Path]:
 
 def conda_executables() -> Iterator[Path]:
     conda_exe_from_env = os.environ.get("CONDA_EXE")
+    # Path("./conda") loses the distinction between a path and a command name.
+    if conda_exe_from_env and not os.path.dirname(conda_exe_from_env):
+        conda_exe_from_env = which_no_shims(conda_exe_from_env)
     if conda_exe_from_env:
-        if is_exe(Path(conda_exe_from_env)):
-            yield Path(conda_exe_from_env)
+        path = absolute_path(Path(conda_exe_from_env))
+        if is_exe(path):
+            yield path
     yield from resolve_executable("conda")
 
 

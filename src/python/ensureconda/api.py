@@ -49,6 +49,7 @@ from ensureconda.installer import (
 )
 from ensureconda.resolve import (
     UnsupportedPlatformError,
+    absolute_path,
     conda_executables,
     conda_standalone_executables,
     mamba_executables,
@@ -421,17 +422,17 @@ def identify(executable: _StrPath) -> CondaExecutable:
     Raises FileNotFoundError if the executable doesn't exist, PermissionError
     if it isn't executable, and ValueError if it can't be recognized.
     """
-    path = Path(executable)
+    path = absolute_path(Path(executable))
     if not path.is_file():
         raise FileNotFoundError(errno.ENOENT, "No such executable", str(executable))
     if not os.access(path, os.X_OK):
         raise PermissionError(errno.EACCES, "Not an executable file", str(executable))
     observations: _Observations = {}
-    flavor = _flavor_from_name(executable) or _probe_flavor(executable, observations)
+    flavor = _flavor_from_name(path) or _probe_flavor(path, observations)
     if flavor is None:
         raise ValueError(f"{executable} is not a recognized conda executable")
     try:
-        version = _probe_version(executable, flavor, observations)
+        version = _probe_version(path, flavor, observations)
     except (subprocess.CalledProcessError, OSError, InvalidVersion, UnicodeDecodeError):
         version = None
     return CondaExecutable(path, flavor, version)
