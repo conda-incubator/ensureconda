@@ -81,10 +81,7 @@ and Go CLIs support this option. Downloads still hold the usual installation
 lock, and every forced invocation downloads again. To refresh conda-standalone
 instead of micromamba, use `ensureconda --force-install --no-micromamba`.
 `--force-install` cannot be combined with `--no-install`, and requires at least
-one of micromamba or conda-standalone to be enabled. Version requirements are
-checked after the downloaded executable replaces the cached copy. If the new
-executable fails the version or execution check, the old copy is not restored,
-even if it was compatible.
+one of micromamba or conda-standalone to be enabled.
 
 With `--json`, both the Python and Go CLIs print the executable's path, flavor
 and version instead of just its path:
@@ -157,15 +154,11 @@ it raises
 `ensureconda.resolve.UnsupportedPlatformError` instead of returning `None`.
 With `install="force"`, it raises immediately without searching.
 
-Version constraints use Python packaging's version-specifier syntax. Downloads
-fetch the latest available build: constraints filter the result, but do not
-select an older release to download. An unpublished build allows trying the
-next target; other download failures propagate.
-
-With `install="force"`, the cache is replaced before checking the new
-executable's version or ability to run. A rejected executable does not restore
-the old copy. For example, refreshing `"micromamba<2"` with a latest release of
-2.x replaces a cached 1.x copy, then returns `None` if no later target matches.
+Version constraints use Python packaging's version-specifier syntax. When
+installing, ensureconda downloads the newest published release that satisfies
+the target, so `ensure(["micromamba<2"])` can install micromamba 1.x. A download
+that fails to run or doesn't satisfy the target never replaces the cached
+executable.
 
 Later releases may add fields to the result or keys to `ensureconda --json`.
 
@@ -193,16 +186,15 @@ reuses an executable already in ensureconda's data directory only if it passes
 the same check, and otherwise downloads a new one.
 Use `install="force"` to replace even a usable cached executable.
 Set `probe_version=False` to run `--version` only when a target's constraints
-require it. For an unconstrained target, this also disables checking that the
-executable runs, and the returned version is `None`.
+require it. For an unconstrained target, this also disables checking that an
+installed executable runs, and the returned version is `None`.
 
 `ensureconda()`, the old API, keeps its boolean options, minimum-version
 arguments, path-or-None result, and original search and installation order.
-It runs version probes only when a minimum is specified. In particular, it
-may install micromamba before looking for an installed conda. The CLI continues
-to prefer installed executables, both with and without `--json`, unless
-`--force-install` is set. For forced installation from Python, use
-`ensure(..., install="force")`; the old API keeps its existing options.
+In particular, it may install micromamba before looking for an installed conda.
+The CLI continues to prefer installed executables, both with and without
+`--json`, unless `--force-install` is set. For forced installation from Python,
+use `ensure(..., install="force")`; the old API keeps its existing options.
 
 `identify()` takes the flavor from the file name, or else from the shape of the
 `--version` output, which can't tell micromamba from mamba 2, nor conda from
