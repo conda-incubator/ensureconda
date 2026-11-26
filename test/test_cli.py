@@ -86,13 +86,10 @@ def test_failed_installation_ends_with_one_line(
     options: List[str],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    def ensureconda(*args: Any, **kwargs: Any) -> Optional[Path]:
-        if kwargs.get("no_install"):
-            return None
+    def fail(*args: Any, **kwargs: Any) -> None:
         raise error
 
-    monkeypatch.setattr(cli, "ensureconda", ensureconda)
-    monkeypatch.setattr(cli, "_ensure", ensureconda)
+    monkeypatch.setattr(cli, "_ensure", fail)
 
     result = CliRunner().invoke(ensureconda_cli, options)
 

@@ -683,6 +683,28 @@ def test_cli_skips_a_broken_executable(
 
 
 @pytest.mark.parametrize("as_json", [False, True])
+def test_cli_searches_once_before_installing(
+    as_json: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    installed = Path("data") / "micromamba-installed"
+    monkeypatch.setattr(api, "micromamba_executables", lambda: iter([MICROMAMBA]))
+    monkeypatch.setattr(api, "conda_executables", lambda: iter([CONDA]))
+    monkeypatch.setattr(api, "install_micromamba", lambda *args, **kwargs: installed)
+    calls = fake_version_outputs(
+        monkeypatch,
+        {"micromamba": "0.1.0", "conda": "conda 4.0.0", installed.name: "2.9.0"},
+    )
+
+    result = CliRunner().invoke(cli.ensureconda_cli, ["--json"] if as_json else [])
+
+    assert result.exit_code == 0
+    output = result.stdout.splitlines()[-1]
+    assert (json.loads(output)["path"] if as_json else output) == str(installed)
+    assert calls == ["micromamba", "conda", installed.name]
+    assert result.output.count(f"Rejected {MICROMAMBA}") == 1
+
+
+@pytest.mark.parametrize("as_json", [False, True])
 @pytest.mark.parametrize("output, minimum", [("", "0"), ("2.0+local", "2.0+local")])
 def test_cli_keeps_old_minimum_semantics_in_both_output_formats(
     as_json: bool, output: str, minimum: str, monkeypatch: pytest.MonkeyPatch
