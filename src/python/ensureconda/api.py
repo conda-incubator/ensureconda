@@ -313,11 +313,15 @@ def _ensure(
 
     refreshed: Dict[Flavor, Path] = {}
     failed: Set[Flavor] = set()
+    unpublished: Set[Flavor] = set()
     last_invalid_download: Optional[DownloadedExecutableError] = None
+    exhausted: Optional[NotPublishedError] = None
     for index, (flavor, constraint, installing) in enumerate(steps):
         if flavor in failed:
             continue
         if installing:
+            if flavor in unpublished:
+                continue
             try:
                 if install == "force" and flavor in refreshed:
                     installed_path = refreshed[flavor]
@@ -342,12 +346,14 @@ def _ensure(
             except (DownloadedExecutableError, NotPublishedError) as error:
                 if isinstance(error, DownloadedExecutableError):
                     last_invalid_download = error
+                else:
+                    unpublished.add(flavor)
                 if install == "force":
                     failed.add(flavor)
                 remaining = dict.fromkeys(
                     name.replace("_", "-")
                     for name, _, _ in steps[index + 1 :]
-                    if name not in failed
+                    if name not in failed and name not in unpublished
                 )
                 if not remaining:
                     if (
@@ -356,6 +362,15 @@ def _ensure(
                     ):
                         logger.warning("%s", error)
                         break
+                    # A later target may still find an installed copy under a
+                    # different constraint, even though it cannot be downloaded.
+                    if isinstance(error, NotPublishedError) and any(
+                        not later and name not in failed
+                        for name, _, later in steps[index + 1 :]
+                    ):
+                        exhausted = error
+                        logger.warning("%s; checking installed copies instead", error)
+                        continue
                     raise
                 logger.warning("%s; trying %s instead", error, " or ".join(remaining))
                 continue
@@ -383,6 +398,8 @@ def _ensure(
         raise last_invalid_download
     if unsupported_platform is not None:
         raise unsupported_platform
+    if exhausted is not None:
+        raise exhausted
     return None
 
 
