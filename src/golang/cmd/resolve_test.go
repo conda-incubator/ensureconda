@@ -29,6 +29,11 @@ func TestParseExecutableVersion(t *testing.T) {
 		{"first micromamba line", "0.1.0\n2.9.0\n", "0.1.0", []string{""}, false},
 		{"invalid first line", "warning: something\n2.9.0\n", "", []string{""}, true},
 		{"first conda line", "conda 4.0.0\nconda 25.1.0\n", "4.0.0", []string{"conda"}, false},
+		{"zero version", "0.0.0\n", "", []string{""}, false},
+		{"conda placeholder", "conda 0.0.0.dev0+placeholder\n", "", []string{"conda"}, false},
+		{"zero with local label", "0+unknown\n", "", []string{""}, false},
+		{"nonzero patch", "0.0.1\n", "0.0.1", []string{""}, false},
+		{"nonzero fourth number", "0.0.0.1\n", "0.0.0.1", []string{""}, false},
 		{"trailing space", "2.9.0 \n", "2.9.0", []string{""}, false},
 		{"tab", "micromamba\t2.9.0\n", "2.9.0", []string{""}, false},
 		{"outer whitespace", "\n \tconda 25.1.0\t \r\n", "25.1.0", []string{"conda"}, false},
@@ -68,6 +73,7 @@ func TestExecutableVersionRejectionDiagnostics(t *testing.T) {
 		{"parse error", "echo 'warning: x'", "Skipping executable", "malformed version: x", true},
 		{"below minimum", "printf '0.1.0\\n2.9.0\\n'", "No acceptable executable version found", "version=0.1.0", false},
 		{"empty output", "exit 0", "No acceptable executable version found", "version=\"<nil>\"", false},
+		{"zero version", "echo 0.0.0.dev0+placeholder", "No acceptable executable version found", "version=\"<nil>\"", false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "micromamba")
