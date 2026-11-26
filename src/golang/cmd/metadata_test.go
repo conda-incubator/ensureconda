@@ -217,8 +217,8 @@ func TestEnsureCondaInstalledMetadata(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if string(probes) != "probe\nprobe\n" {
-					t.Errorf("version probes = %q, want staged validation and installed metadata", probes)
+				if string(probes) != "probe\n" {
+					t.Errorf("version probes = %q, want the staged validation only, reused for the installed file", probes)
 				}
 			})
 		}
@@ -237,7 +237,7 @@ func TestResolveExecutableWithVersionSkipsRejectedCandidates(t *testing.T) {
 			}
 			dir := t.TempDir()
 			t.Setenv("PATH", dir)
-			check := executableWithMinVersion(pep440.MustParse(DefaultMinMambaVersion), log.InfoLevel, "")
+			check := executableWithMinVersion(nil, pep440.MustParse(DefaultMinMambaVersion), log.InfoLevel, "")
 			if got, err := resolveExecutableWithVersion("micromamba", sitePath(), check); got != nil || err == nil {
 				t.Fatalf("rejected candidate returned %v, %v", got, err)
 			}

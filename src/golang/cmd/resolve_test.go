@@ -88,7 +88,7 @@ func TestExecutableVersionRejectionDiagnostics(t *testing.T) {
 				log.SetOutput(previousOutput)
 				log.SetLevel(previousLevel)
 			})
-			_, err := executableWithMinVersion(pep440.MustParse(DefaultMinMambaVersion), log.InfoLevel, "")(path)
+			_, err := executableWithMinVersion(nil, pep440.MustParse(DefaultMinMambaVersion), log.InfoLevel, "")(path)
 			if (err != nil) != tt.wantErr {
 				t.Fatalf("version check error = %v, want error: %v", err, tt.wantErr)
 			}
@@ -198,7 +198,7 @@ func TestVersionRejectionIsVisibleAtDefaultVerbosity(t *testing.T) {
 		t.Fatal(err)
 	}
 	messages := captureLog(t)
-	version, err := checkExecutableMinVersion(path, pep440.MustParse(DefaultMinMambaVersion), log.InfoLevel, "")
+	version, err := checkExecutableMinVersion(nil, path, pep440.MustParse(DefaultMinMambaVersion), log.InfoLevel, "")
 	if err != nil || version != nil {
 		t.Fatalf("check = %v, %v; want rejection", version, err)
 	}

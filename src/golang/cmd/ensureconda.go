@@ -109,25 +109,15 @@ func sitePath() string {
 	return appdirs.UserDataDir("ensure-conda", "", "", false)
 }
 
-// usableMicromambaVersion returns the version if executable runs and reports
-// at least the minimum micromamba version, or nil otherwise.
-func usableMicromambaVersion(executable string) (*pep440.Version, error) {
-	return micromambaCheck(log.InfoLevel)(executable)
-}
-
-func micromambaCheck(rejectionLevel log.Level) versionCheck {
+func micromambaCheck(obs *observer, rejectionLevel log.Level) versionCheck {
 	minMambaVersion, _ := pep440.Parse(DefaultMinMambaVersion)
-	return executableWithMinVersion(minMambaVersion, rejectionLevel, "")
+	return executableWithMinVersion(obs, minMambaVersion, rejectionLevel, "")
 }
 
-// usableCondaVersion applies the conda minimum to both conda and conda-standalone.
-func usableCondaVersion(executable string) (*pep440.Version, error) {
-	return condaCheck(log.InfoLevel)(executable)
-}
-
-func condaCheck(rejectionLevel log.Level) versionCheck {
+// condaCheck applies the conda minimum to both conda and conda-standalone.
+func condaCheck(obs *observer, rejectionLevel log.Level) versionCheck {
 	minCondaVersion, _ := pep440.Parse(DefaultMinCondaVersion)
-	return executableWithMinVersion(minCondaVersion, rejectionLevel, "conda")
+	return executableWithMinVersion(obs, minCondaVersion, rejectionLevel, "conda")
 }
 
 func EnsureConda(mamba bool, micromamba bool, conda bool, condaStandalone bool, noInstall bool) (string, error) {
@@ -214,6 +204,7 @@ func installable(flavor string) bool {
 
 func resolveSteps(steps []resolutionStep, forceInstall bool) (*condaExecutable, error) {
 	dataDir := sitePath()
+	obs := newObserver()
 	minMambaVersion, _ := pep440.Parse(DefaultMinMambaVersion)
 	rejectionLevel := log.InfoLevel
 	if forceInstall {
@@ -221,10 +212,10 @@ func resolveSteps(steps []resolutionStep, forceInstall bool) (*condaExecutable, 
 	}
 	// TODO: check $CONDA_EXE when searching for conda
 	searchChecks := map[string]versionCheck{
-		"mamba":            executableWithMinVersion(minMambaVersion, log.InfoLevel, "mamba", ""),
-		"micromamba":       usableMicromambaVersion,
-		"conda":            usableCondaVersion,
-		"conda_standalone": usableCondaVersion,
+		"mamba":            executableWithMinVersion(obs, minMambaVersion, log.InfoLevel, "mamba", ""),
+		"micromamba":       micromambaCheck(obs, log.InfoLevel),
+		"conda":            condaCheck(obs, log.InfoLevel),
+		"conda_standalone": condaCheck(obs, log.InfoLevel),
 	}
 	var lastInvalidDownload error
 	for i, step := range steps {
@@ -237,12 +228,12 @@ func resolveSteps(steps []resolutionStep, forceInstall bool) (*condaExecutable, 
 		}
 		var exe string
 		var err error
-		check := condaCheck(rejectionLevel)
+		check := condaCheck(obs, rejectionLevel)
 		if step.flavor == "micromamba" {
-			exe, err = installMicromambaForPlatform(forceInstall)
-			check = micromambaCheck(rejectionLevel)
+			exe, err = installMicromambaForPlatform(obs, forceInstall)
+			check = micromambaCheck(obs, rejectionLevel)
 		} else {
-			exe, err = installCondaStandalone(forceInstall)
+			exe, err = installCondaStandalone(obs, forceInstall)
 		}
 		var noCompatible *noCompatibleVersionError
 		var notPublished *notPublishedError

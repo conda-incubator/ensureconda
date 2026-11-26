@@ -14,7 +14,6 @@ import (
 	"io"
 	"net/url"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"runtime"
@@ -47,16 +46,16 @@ type notPublishedError struct {
 func (e *notPublishedError) Error() string { return e.message }
 
 func InstallMicromamba() (string, error) {
-	return installMicromambaForPlatform(false)
+	return installMicromambaForPlatform(nil, false)
 }
 
-func installMicromambaForPlatform(forceInstall bool) (string, error) {
+func installMicromambaForPlatform(obs *observer, forceInstall bool) (string, error) {
 	subdir, err := PlatformSubdir()
 	if err != nil {
 		return "", err
 	}
 	url := fmt.Sprintf("https://micro.mamba.pm/api/micromamba/%s/latest", subdir)
-	return installMicromamba(url, forceInstall)
+	return installMicromamba(obs, url, forceInstall)
 }
 
 type AnacondaPkgAttr struct {
@@ -130,10 +129,10 @@ func getChannelName() (string, error) {
 }
 
 func InstallCondaStandalone() (string, error) {
-	return installCondaStandalone(false)
+	return installCondaStandalone(nil, false)
 }
 
-func installCondaStandalone(forceInstall bool) (string, error) {
+func installCondaStandalone(obs *observer, forceInstall bool) (string, error) {
 	// Get the most recent conda-standalone
 	subdir, err := PlatformSubdir()
 	if err != nil {
@@ -151,16 +150,16 @@ func installCondaStandalone(forceInstall bool) (string, error) {
 	}
 	defer unlock()
 	if !forceInstall {
-		if version, _ := checkExecutableMinVersion(target, pep440.MustParse(DefaultMinCondaVersion), log.DebugLevel, "conda"); version != nil {
+		if version, _ := checkExecutableMinVersion(obs, target, pep440.MustParse(DefaultMinCondaVersion), log.DebugLevel, "conda"); version != nil {
 			return target, nil
 		}
 	}
-	return downloadCondaStandalone(channel, subdir, target)
+	return downloadCondaStandalone(obs, channel, subdir, target)
 }
 
 // downloadCondaStandalone installs the latest conda-standalone for subdir from
 // channel as target.
-func downloadCondaStandalone(channel string, subdir string, target string) (string, error) {
+func downloadCondaStandalone(obs *observer, channel string, subdir string, target string) (string, error) {
 	// Download and install
 	candidates, err := computeCandidates(channel, subdir)
 	if err != nil {
@@ -177,7 +176,7 @@ func downloadCondaStandalone(channel string, subdir string, target string) (stri
 	installedExe, err := downloadAndUnpackArchive(
 		downloadUrl, chosen.Sha256, map[string]string{
 			"standalone_conda/conda.exe": target,
-		}, &downloadValidation{flavor: "conda-standalone", minimum: pep440.MustParse(DefaultMinCondaVersion), expected: pep440.MustParse(chosen.Version)})
+		}, &downloadValidation{observer: obs, flavor: "conda-standalone", minimum: pep440.MustParse(DefaultMinCondaVersion), expected: pep440.MustParse(chosen.Version)})
 
 	if err != nil {
 		var invalid *downloadedExecutableError
@@ -335,7 +334,7 @@ func unpackConda(archive []byte, fileNameMap map[string]string, validation *down
 
 // installMicromamba downloads micromamba from url, unless a concurrent process
 // has just installed one that can be used. forceInstall always downloads again.
-func installMicromamba(url string, forceInstall bool) (string, error) {
+func installMicromamba(obs *observer, url string, forceInstall bool) (string, error) {
 	target := targetExeFilename("micromamba")
 	unlock, err := lockInstall("micromamba_install.lock")
 	if err != nil {
@@ -343,7 +342,7 @@ func installMicromamba(url string, forceInstall bool) (string, error) {
 	}
 	defer unlock()
 	if !forceInstall {
-		if version, _ := checkExecutableMinVersion(target, pep440.MustParse(DefaultMinMambaVersion), log.DebugLevel, ""); version != nil {
+		if version, _ := checkExecutableMinVersion(obs, target, pep440.MustParse(DefaultMinMambaVersion), log.DebugLevel, ""); version != nil {
 			return target, nil
 		}
 	}
@@ -359,7 +358,7 @@ func installMicromamba(url string, forceInstall bool) (string, error) {
 	return downloadAndUnpackArchive(chosen.DownloadUrl, chosen.Sha256, map[string]string{
 		"Library/bin/micromamba.exe": target,
 		"bin/micromamba":             target,
-	}, &downloadValidation{flavor: "micromamba", minimum: pep440.MustParse(DefaultMinMambaVersion), expected: pep440.MustParse(chosen.Version)})
+	}, &downloadValidation{observer: obs, flavor: "micromamba", minimum: pep440.MustParse(DefaultMinMambaVersion), expected: pep440.MustParse(chosen.Version)})
 }
 
 // lockInstall takes the named download lock in the site path, so that
@@ -475,8 +474,12 @@ func extractTarFile(header *tar.Header, targetFileName string, tarReader *tar.Re
 	removeTemporaryFiles(targetFileName)
 
 	err = writeExecutable(tmpFileName, header, tarReader)
+	var obs *observer
+	var validated *observation
 	if err == nil && validation != nil {
 		err = validateDownload(tmpFileName, *validation)
+		obs = validation.observer
+		validated = obs.detach(tmpFileName)
 	}
 	if err == nil {
 		err = os.Rename(tmpFileName, targetFileName)
@@ -486,6 +489,8 @@ func extractTarFile(header *tar.Header, targetFileName string, tarReader *tar.Re
 				hint = "; it may be in use; close processes using it and retry"
 			}
 			err = fmt.Errorf("could not replace executable %s: %w%s", targetFileName, err, hint)
+		} else {
+			obs.attach(targetFileName, validated)
 		}
 	}
 	if err != nil {
@@ -598,6 +603,7 @@ func selectMicromamba(latest, subdir string, minimum pep440.Version) (AnacondaPk
 }
 
 type downloadValidation struct {
+	observer          *observer
 	flavor            string
 	minimum, expected pep440.Version
 }
@@ -615,7 +621,7 @@ func (e *downloadedExecutableError) Error() string {
 func (e *downloadedExecutableError) Unwrap() error { return e.err }
 
 func validateDownload(path string, validation downloadValidation) error {
-	output, err := exec.Command(path, "--version").Output()
+	output, err := validation.observer.versionOutput(path)
 	if err != nil {
 		return &downloadedExecutableError{validation.flavor, fmt.Errorf("failed its version check: %w", err)}
 	}

@@ -5,7 +5,6 @@ import (
 	pep440 "github.com/aquasecurity/go-pep440-version"
 	log "github.com/sirupsen/logrus"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
@@ -15,14 +14,14 @@ import (
 
 type versionCheck func(executable string) (*pep440.Version, error)
 
-func executableWithMinVersion(minVersion pep440.Version, rejectionLevel log.Level, prefixes ...string) versionCheck {
+func executableWithMinVersion(obs *observer, minVersion pep440.Version, rejectionLevel log.Level, prefixes ...string) versionCheck {
 	return func(executable string) (*pep440.Version, error) {
-		return checkExecutableMinVersion(executable, minVersion, rejectionLevel, prefixes...)
+		return checkExecutableMinVersion(obs, executable, minVersion, rejectionLevel, prefixes...)
 	}
 }
 
-func checkExecutableMinVersion(executable string, minVersion pep440.Version, rejectionLevel log.Level, prefixes ...string) (*pep440.Version, error) {
-	stdout, err := exec.Command(executable, "--version").Output()
+func checkExecutableMinVersion(obs *observer, executable string, minVersion pep440.Version, rejectionLevel log.Level, prefixes ...string) (*pep440.Version, error) {
+	stdout, err := obs.versionOutput(executable)
 	entry := log.WithFields(log.Fields{
 		"executable":    executable,
 		"versionOutput": string(stdout),
