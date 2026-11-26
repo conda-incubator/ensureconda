@@ -35,6 +35,7 @@ from packaging.version import InvalidVersion, Version
 from ensureconda import determine_versions
 from ensureconda.determine_versions import (
     Flavor,
+    _Observations,
     _VersionConstraint,
     check_executable,
     requirement_text,
@@ -73,6 +74,7 @@ class DownloadValidation(NamedTuple):
     flavor: Flavor
     constraint: _VersionConstraint
     expected_version: Version
+    observations: Optional[_Observations] = None
 
 
 class ExecutableReplacementError(OSError, RuntimeError):
@@ -371,6 +373,7 @@ def install_conda_exe(
     *,
     force: bool = False,
     probe_version: bool = True,
+    observations: Optional[_Observations] = None,
 ) -> Path:
     """Install conda-standalone into the installation
 
@@ -394,6 +397,7 @@ def install_conda_exe(
                 target_path,
                 "conda_standalone",
                 constraint,
+                observations=observations,
                 probe_version=probe_version,
                 rejection_level=None,
             )
@@ -416,7 +420,7 @@ def install_conda_exe(
             url,
             chosen.sha256,
             validation=DownloadValidation(
-                "conda_standalone", constraint, Version(chosen.version)
+                "conda_standalone", constraint, Version(chosen.version), observations
             ),
         )
         return path_to_written_executable
@@ -506,6 +510,7 @@ def install_micromamba(
     *,
     force: bool = False,
     probe_version: bool = True,
+    observations: Optional[_Observations] = None,
 ) -> Path:
     """Install micromamba into the installation
 
@@ -529,6 +534,7 @@ def install_micromamba(
                 target_path,
                 "micromamba",
                 constraint,
+                observations=observations,
                 probe_version=probe_version,
                 rejection_level=None,
             )
@@ -542,7 +548,7 @@ def install_micromamba(
 
         url, version, sha256 = select_micromamba(subdir, constraint)
         logger.info("micromamba: downloading %s", url)
-        validation = DownloadValidation("micromamba", constraint, version)
+        validation = DownloadValidation("micromamba", constraint, version, observations)
         resp = request_url_with_retry(url)
         tarball = io.BytesIO(resp.content)
         if sha256:
@@ -655,6 +661,7 @@ def new_executable(
     early reads.
     """
     lock_path = f"{str(target_filename)}.lock"
+    observations = None if validation is None else validation.observations
     with lock_with_feedback(lock_path, f"file write ({target_filename})"):
         temp_filename = target_filename.with_name(
             uuid.uuid4().hex + (".exe" if is_windows else "")
@@ -666,6 +673,9 @@ def new_executable(
             os.chmod(temp_filename, st.st_mode | stat.S_IXUSR)
             if validation is not None:
                 validate_download(temp_filename, validation)
+            validated = determine_versions.detach_observation(
+                observations, temp_filename
+            )
             try:
                 os.replace(temp_filename, target_filename)
             except OSError as error:
@@ -684,6 +694,9 @@ def new_executable(
                         error.filename2,
                     )
                 raise replacement_error from error
+            determine_versions.attach_observation(
+                observations, target_filename, validated
+            )
         except BaseException:
             # Don't leave a partial executable behind, for example after Ctrl-C.
             with contextlib.suppress(OSError):
@@ -694,7 +707,9 @@ def new_executable(
 def validate_download(path: Path, validation: DownloadValidation) -> None:
     tool = validation.flavor.replace("_", "-")
     try:
-        version = determine_versions._probe_version(path, validation.flavor)
+        version = determine_versions._probe_version(
+            path, validation.flavor, validation.observations
+        )
     except (OSError, subprocess.CalledProcessError) as error:
         raise DownloadedExecutableError(
             f"{tool}: downloaded executable failed its version check: {error}"

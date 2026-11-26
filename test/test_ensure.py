@@ -164,12 +164,12 @@ def test_unconstrained_probe_errors(
     monkeypatch: pytest.MonkeyPatch,
     log_messages: Callable[[], str],
 ) -> None:
-    def broken_version(executable: object) -> Version:
+    def broken_version(
+        executable: object, flavor: object, observations: object
+    ) -> Version:
         raise error
 
-    monkeypatch.setattr(
-        determine_versions, "determine_micromamba_version", broken_version
-    )
+    monkeypatch.setattr(determine_versions, "_probe_version", broken_version)
     if installed:
         monkeypatch.setattr(api, "micromamba_executables", lambda: iter([MICROMAMBA]))
     else:

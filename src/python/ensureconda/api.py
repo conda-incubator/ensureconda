@@ -23,8 +23,10 @@ from packaging.version import InvalidVersion, Version
 from ensureconda.determine_versions import CondaExecutable as CondaExecutable
 from ensureconda.determine_versions import Flavor as Flavor
 from ensureconda.determine_versions import (
+    _Observations,
     _probe_version,
     _StrPath,
+    _version_output,
     _VersionConstraint,
     check_executable,
 )
@@ -83,11 +85,11 @@ def _flavor_from_name(executable: _StrPath) -> Optional[Flavor]:
     return flavors.get(name)
 
 
-def _probe_flavor(executable: _StrPath) -> Optional[Flavor]:
+def _probe_flavor(
+    executable: _StrPath, observations: Optional[_Observations]
+) -> Optional[Flavor]:
     try:
-        output = subprocess.check_output(
-            [executable, "--version"], stderr=subprocess.DEVNULL, encoding="utf-8"
-        )
+        output = _version_output(executable, observations)
     except (subprocess.CalledProcessError, OSError, UnicodeDecodeError):
         return None
     lines = output.strip().splitlines()
@@ -283,6 +285,7 @@ def _ensure(
             )
 
     rejection_level = logging.WARNING if install == "force" else logging.INFO
+    observations: _Observations = {}
 
     # A missing download mapping need not prevent using an installed tool.
     unsupported_platform: Optional[UnsupportedPlatformError] = None
@@ -331,12 +334,14 @@ def _ensure(
                             constraint,
                             force=install == "force",
                             probe_version=probe_version,
+                            observations=observations,
                         )
                     else:
                         installed_path = install_conda_exe(
                             constraint,
                             force=install == "force",
                             probe_version=probe_version,
+                            observations=observations,
                         )
                     if install == "force":
                         refreshed[flavor] = installed_path
@@ -385,6 +390,7 @@ def _ensure(
                 path,
                 flavor,
                 constraint,
+                observations=observations,
                 probe_version=probe_version,
                 rejection_level=rejection_level,
             )
@@ -420,11 +426,12 @@ def identify(executable: _StrPath) -> CondaExecutable:
         raise FileNotFoundError(errno.ENOENT, "No such executable", str(executable))
     if not os.access(path, os.X_OK):
         raise PermissionError(errno.EACCES, "Not an executable file", str(executable))
-    flavor = _flavor_from_name(executable) or _probe_flavor(executable)
+    observations: _Observations = {}
+    flavor = _flavor_from_name(executable) or _probe_flavor(executable, observations)
     if flavor is None:
         raise ValueError(f"{executable} is not a recognized conda executable")
     try:
-        version = _probe_version(executable, flavor)
+        version = _probe_version(executable, flavor, observations)
     except (subprocess.CalledProcessError, OSError, InvalidVersion, UnicodeDecodeError):
         version = None
     return CondaExecutable(path, flavor, version)

@@ -448,7 +448,7 @@ def test_install_reuses_an_executable_only_if_it_is_usable(
     checked: List[Path] = []
     urls: List[str] = []
 
-    def probe(path: Path, flavor: str) -> Version:
+    def probe(path: Path, flavor: str, observations: object) -> Version:
         lock_name = (
             "micromamba_install.lock"
             if name == "micromamba"

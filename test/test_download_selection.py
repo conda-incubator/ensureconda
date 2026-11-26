@@ -14,6 +14,7 @@ from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
 from ensureconda import api, determine_versions, installer
+from ensureconda.determine_versions import Flavor
 from ensureconda.resolve import is_windows
 
 
@@ -169,7 +170,10 @@ def test_network_failure_is_not_a_constraint_miss(
 
 
 def serve_package(
-    monkeypatch: pytest.MonkeyPatch, tool: str, version: str = "2"
+    monkeypatch: pytest.MonkeyPatch,
+    tool: str,
+    version: str = "2",
+    content: bytes = b"new",
 ) -> List[str]:
     archive = io.BytesIO()
     name = (
@@ -179,8 +183,8 @@ def serve_package(
     )
     with tarfile.open(fileobj=archive, mode="w:bz2") as tar:
         member = tarfile.TarInfo(name)
-        member.size = 3
-        tar.addfile(member, io.BytesIO(b"new"))
+        member.size = len(content)
+        tar.addfile(member, io.BytesIO(content))
     urls: List[str] = []
 
     def get(
@@ -209,6 +213,32 @@ def serve_package(
     return urls
 
 
+@pytest.mark.skipif(is_windows, reason="the stand-ins are shell scripts")
+@pytest.mark.parametrize("tool", ["micromamba", "conda_standalone"])
+def test_one_call_runs_each_unchanged_file_once(
+    tool: Flavor, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    log = tmp_path / "runs.log"
+    prefix = "conda " if tool == "conda_standalone" else ""
+
+    def stand_in(name: str, version: str) -> bytes:
+        return f'#!/bin/sh\necho {name} >> "{log}"\necho {prefix}{version}\n'.encode()
+
+    on_path, cached = tmp_path / "bin" / tool, tmp_path / "data" / tool
+    for path in (on_path, cached):
+        path.parent.mkdir()
+        path.write_bytes(stand_in(path.parent.name, "0.1.0"))
+        path.chmod(0o755)
+    monkeypatch.setattr(installer, "site_path", lambda: cached.parent)
+    monkeypatch.setattr(api, f"{tool}_executables", lambda: iter([on_path, cached]))
+    serve_package(monkeypatch, tool, content=stand_in("download", "2"))
+
+    assert api.ensure([f"{tool}>=1"]) == api.CondaExecutable(cached, tool, Version("2"))
+    # The installer's check under the lock and the check of the installed file
+    # reuse the search's and the validation's results.
+    assert log.read_text().splitlines() == ["bin", "data", "download"]
+
+
 @pytest.mark.parametrize("tool", ["micromamba", "conda_standalone"])
 @pytest.mark.parametrize("failure", ["execution", "version", "unknown", "none"])
 def test_validate_before_replacing_cache(
@@ -222,7 +252,7 @@ def test_validate_before_replacing_cache(
     target.write_bytes(b"old")
     urls = serve_package(monkeypatch, tool)
 
-    def probe(path: Path, flavor: str) -> Optional[Version]:
+    def probe(path: Path, flavor: str, observations: object) -> Optional[Version]:
         assert path != target and path.read_bytes() == b"new"
         assert target.read_bytes() == b"old"
         if failure == "execution":

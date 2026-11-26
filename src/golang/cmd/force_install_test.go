@@ -99,7 +99,7 @@ func TestForceInstallReplacesFreshCache(t *testing.T) {
 				wantRequests = 4
 			}
 			for range 2 {
-				got, err := install(true)
+				got, err := install(nil, true)
 				if err != nil || got != target {
 					t.Fatalf("force install = %q, %v; want %q", got, err, target)
 				}
@@ -154,7 +154,7 @@ func TestForceInstallRetriesDownloadUnderLock(t *testing.T) {
 				}
 				return transport.RoundTrip(r)
 			})
-			got, err := install(true)
+			got, err := install(nil, true)
 			if err != nil || got != target {
 				t.Fatalf("force install = %q, %v; want %q", got, err, target)
 			}
@@ -362,7 +362,7 @@ func TestStandaloneValidationErrorNamesToolOnce(t *testing.T) {
 	serveForceInstall(t)
 	t.Setenv("ENSURECONDA_TEST_CONDA_VERSION", "1.0")
 
-	_, err := installCondaStandalone(true)
+	_, err := installCondaStandalone(nil, true)
 	var invalid *downloadedExecutableError
 	if !errors.As(err, &invalid) || strings.Count(err.Error(), "conda-standalone") != 1 {
 		t.Fatalf("got %v; want a validation error naming conda-standalone once", err)
@@ -453,7 +453,7 @@ func TestForceStandaloneChecksumFailurePreservesCache(t *testing.T) {
 		}
 		return response, err
 	})
-	if _, err := installCondaStandalone(true); err == nil || !strings.Contains(err.Error(), "SHA-256 mismatch") {
+	if _, err := installCondaStandalone(nil, true); err == nil || !strings.Contains(err.Error(), "SHA-256 mismatch") {
 		t.Fatalf("force install error = %v; want checksum failure", err)
 	}
 	if data, err := os.ReadFile(target); err != nil || !bytes.Equal(data, old) {
