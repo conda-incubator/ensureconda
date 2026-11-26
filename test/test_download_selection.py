@@ -273,7 +273,9 @@ def test_later_requirement_can_install_after_constraint_miss(
 
 
 @pytest.mark.parametrize("target", ["micromamba", "micromamba>=1"])
-@pytest.mark.parametrize("output", ["", "new-format", "undecodable", "nonzero"])
+@pytest.mark.parametrize(
+    "output", ["", "new-format", "undecodable", "nonzero", "0.0.0.dev0+placeholder"]
+)
 def test_download_with_unknown_version(
     target: str,
     output: str,

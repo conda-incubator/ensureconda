@@ -20,7 +20,8 @@ else:
 
 
 # The old version helpers use 0.0.0 as a sentinel for unrecognized output.
-# Keep their return values compatible; new API probes translate it to None.
+# Keep their return values compatible; new API probes report None for any
+# version with base version 0, such as conda's 0.0.0.dev0+placeholder.
 _LEGACY_UNKNOWN_VERSION = Version("0.0.0")
 
 
@@ -101,7 +102,9 @@ def _probe_version(executable: _StrPath, flavor: Flavor) -> Optional[Version]:
         version = determine_conda_version(executable)
     else:
         raise ValueError(f"Unknown executable flavor: {flavor!r}")
-    return None if version == _LEGACY_UNKNOWN_VERSION else version
+    if Version(version.base_version) == _LEGACY_UNKNOWN_VERSION:
+        return None
+    return version
 
 
 def version_satisfies(
