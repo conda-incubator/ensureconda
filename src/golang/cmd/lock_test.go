@@ -68,7 +68,7 @@ func fileNames(t *testing.T, dir string) []string {
 func TestExtractTarFilesReleasesLock(t *testing.T) {
 	target := filepath.Join(t.TempDir(), "tool")
 
-	got, err := extractTarFiles(tarWith(t, "bin/tool", []byte("binary")), map[string]string{"bin/tool": target})
+	got, err := extractTarFiles(tarWith(t, "bin/tool", []byte("binary")), map[string]string{"bin/tool": target}, nil)
 	if err != nil {
 		t.Fatalf("extractTarFiles() error = %v", err)
 	}
@@ -104,7 +104,7 @@ func TestExtractTarFilesRemovesTemporaryFileOnError(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "tool")
 
-	_, err := extractTarFiles(tar.NewReader(&buf), map[string]string{"bin/tool": target})
+	_, err := extractTarFiles(tar.NewReader(&buf), map[string]string{"bin/tool": target}, nil)
 
 	if err == nil {
 		t.Fatal("extractTarFiles() succeeded on a truncated archive")
@@ -127,7 +127,7 @@ func TestExtractTarFilesReportsReplacementFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := extractTarFiles(tarWith(t, "bin/tool", []byte("binary")), map[string]string{"bin/tool": target})
+	_, err := extractTarFiles(tarWith(t, "bin/tool", []byte("binary")), map[string]string{"bin/tool": target}, nil)
 	if err == nil || !strings.Contains(err.Error(), "could not replace executable "+target) {
 		t.Fatalf("replacement error = %v, want context naming the executable", err)
 	}
@@ -156,7 +156,7 @@ func TestExtractTarFilesLeavesOtherTemporaryFilesAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := extractTarFiles(tarWith(t, "bin/tool", []byte("binary")), map[string]string{"bin/tool": target}); err != nil {
+	if _, err := extractTarFiles(tarWith(t, "bin/tool", []byte("binary")), map[string]string{"bin/tool": target}, nil); err != nil {
 		t.Fatalf("extractTarFiles() error = %v", err)
 	}
 
@@ -177,7 +177,7 @@ func TestExtractTarFilesRemovesLeftoverTemporaryFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := extractTarFiles(tarWith(t, "bin/tool", []byte("binary")), map[string]string{"bin/tool": target}); err != nil {
+	if _, err := extractTarFiles(tarWith(t, "bin/tool", []byte("binary")), map[string]string{"bin/tool": target}, nil); err != nil {
 		t.Fatalf("extractTarFiles() error = %v", err)
 	}
 
@@ -293,7 +293,7 @@ func TestExtractTarFilesReportsWaitingForLock(t *testing.T) {
 	archive := tarWith(t, "bin/tool", []byte("binary"))
 	done := make(chan error, 1)
 	go func() {
-		_, err := extractTarFiles(archive, map[string]string{"bin/tool": target})
+		_, err := extractTarFiles(archive, map[string]string{"bin/tool": target}, nil)
 		done <- err
 	}()
 	if message := messages.next(t); !strings.Contains(message, "waiting for another process to finish writing tool") {
@@ -572,8 +572,12 @@ func TestEnsureCondaReplacesUnusableInstall(t *testing.T) {
 			if err == nil {
 				t.Error("EnsureConda() succeeded, want the refused download to fail")
 			}
-			if n := requests.Load(); n != 1 {
-				t.Errorf("made %d requests, want 1 to replace the executable", n)
+			wantRequests := int32(1)
+			if tt.exeName == "micromamba" {
+				wantRequests = 2
+			}
+			if n := requests.Load(); n != wantRequests {
+				t.Errorf("made %d requests, want %d to replace the executable", n, wantRequests)
 			}
 		})
 	}

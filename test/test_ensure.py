@@ -276,16 +276,21 @@ def test_legacy_minimum_can_have_a_local_version_label(
     )
 
 
+@pytest.mark.parametrize(
+    "version", ["", "0.0.0", "0", "0.0.0.dev0+placeholder", "0+unknown"]
+)
 @pytest.mark.parametrize("flavor", ["mamba", "micromamba", "conda", "conda_standalone"])
 @pytest.mark.parametrize("minimum", ["0", "1"])
 def test_zero_sentinel_is_only_used_for_old_api_minimums(
-    flavor: Flavor, minimum: str, monkeypatch: pytest.MonkeyPatch
+    version: str, flavor: Flavor, minimum: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     path = Path("unknown")
     monkeypatch.setattr(api, f"{flavor}_executables", lambda: iter([path]))
-    fake_version_outputs(monkeypatch, {path.name: ""})
+    prefix = "conda " if version and flavor.startswith("conda") else ""
+    fake_version_outputs(monkeypatch, {path.name: prefix + version})
 
     assert ensure([f"{flavor}>=0"], install="never") is None
+    assert ensure([f"{flavor}<24"], install="never") is None
     assert ensure([flavor], install="never") == CondaExecutable(path, flavor, None)
     assert ensureconda(
         mamba=flavor == "mamba",
@@ -296,6 +301,18 @@ def test_zero_sentinel_is_only_used_for_old_api_minimums(
         min_mamba_version=Version(minimum),
         min_conda_version=Version(minimum),
     ) == (path if minimum == "0" else None)
+
+
+@pytest.mark.parametrize("version", ["0.0.1", "0.0.0.1"])
+def test_versions_with_a_nonzero_release_number_are_known(
+    version: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(api, "micromamba_executables", lambda: iter([MICROMAMBA]))
+    fake_version_outputs(monkeypatch, {"micromamba": version})
+
+    assert ensure(["micromamba<24"], install="never") == CondaExecutable(
+        MICROMAMBA, "micromamba", Version(version)
+    )
 
 
 @pytest.mark.parametrize("flavor", ["mamba", "micromamba", "conda", "conda_standalone"])

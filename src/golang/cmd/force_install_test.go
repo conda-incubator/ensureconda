@@ -32,8 +32,16 @@ func serveForceInstall(t *testing.T) *[]string {
 	if err != nil {
 		t.Fatal(err)
 	}
+	condaVersion := os.Getenv("ENSURECONDA_TEST_CONDA_VERSION")
+	if condaVersion == "" {
+		condaVersion = "25.1"
+	}
+	microVersion := os.Getenv("ENSURECONDA_TEST_MICROMAMBA_VERSION")
+	if microVersion == "" {
+		microVersion = "25.1"
+	}
 	listing, err := json.Marshal([]AnacondaPkg{{
-		Attrs: AnacondaPkgAttr{Subdir: subdir}, Version: "25.1",
+		Attrs: AnacondaPkgAttr{Subdir: subdir}, Version: condaVersion,
 		DownloadUrl: "//example.invalid/conda.tar.bz2", Sha256: sha256Hex(archive),
 	}})
 	if err != nil {
@@ -43,15 +51,21 @@ func serveForceInstall(t *testing.T) *[]string {
 	client := &http.Client{Transport: roundTripper(func(r *http.Request) (*http.Response, error) {
 		requests = append(requests, r.URL.String())
 		lockName := "conda_exe_install.lock"
-		if strings.Contains(r.URL.Path, "/micromamba/") {
+		if strings.Contains(r.URL.Path, "micromamba") {
 			lockName = "micromamba_install.lock"
 		}
 		if held, err := lockIsHeld(filepath.Join(sitePath(), lockName)); err != nil || !held {
 			t.Fatalf("request without %s: held=%v, error=%v", lockName, held, err)
 		}
+		if strings.HasSuffix(r.URL.Path, "/latest") {
+			return &http.Response{StatusCode: 307, Status: "307 Temporary Redirect", Request: r, Header: http.Header{"Location": {"https://conda.anaconda.org/conda-forge/" + subdir + "/micromamba-" + microVersion + "-0.tar.bz2"}}, Body: http.NoBody}, nil
+		}
 		body := archive
 		if strings.HasSuffix(r.URL.Path, "/files") {
 			body = listing
+			if strings.Contains(r.URL.Path, "micromamba") {
+				body, _ = json.Marshal([]AnacondaPkg{{Attrs: AnacondaPkgAttr{Subdir: subdir}, Version: microVersion, DownloadUrl: "//conda.anaconda.org/conda-forge/" + subdir + "/micromamba-" + microVersion + "-0.tar.bz2"}})
+			}
 		}
 		return &http.Response{
 			StatusCode: 200, Status: "200 OK", Request: r,
@@ -65,6 +79,9 @@ func serveForceInstall(t *testing.T) *[]string {
 }
 
 func TestForceInstallReplacesFreshCache(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the stand-in executables are shell scripts; native force refresh is covered by test_go_binaries.py")
+	}
 	for _, tool := range []string{"micromamba", "conda_standalone"} {
 		t.Run(tool, func(t *testing.T) {
 			useSitePath(t)
@@ -79,7 +96,7 @@ func TestForceInstallReplacesFreshCache(t *testing.T) {
 			if tool == "micromamba" {
 				install = installMicromambaForPlatform
 				lockName = "micromamba_install.lock"
-				wantRequests = 2
+				wantRequests = 4
 			}
 			for range 2 {
 				got, err := install(true)
@@ -101,6 +118,9 @@ func TestForceInstallReplacesFreshCache(t *testing.T) {
 }
 
 func TestForceInstallRetriesDownloadUnderLock(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the stand-in executables are shell scripts; native force refresh is covered by test_go_binaries.py")
+	}
 	for _, tool := range []string{"micromamba", "conda_standalone"} {
 		t.Run(tool, func(t *testing.T) {
 			useSitePath(t)
@@ -120,7 +140,7 @@ func TestForceInstallRetriesDownloadUnderLock(t *testing.T) {
 			transport := client.Transport
 			attempts := 0
 			client.Transport = roundTripper(func(r *http.Request) (*http.Response, error) {
-				if !strings.HasSuffix(r.URL.Path, "/files") {
+				if !strings.HasSuffix(r.URL.Path, "/files") && !strings.HasSuffix(r.URL.Path, "/latest") {
 					attempts++
 					if attempts == 1 {
 						if held, err := lockIsHeld(filepath.Join(sitePath(), lockName)); err != nil || !held {
@@ -192,7 +212,7 @@ func TestForceInstallDoesNotFallBackToExistingTools(t *testing.T) {
 			useSitePath(t)
 			existingForceTools(t)
 			requests := refuseDownloads(t)
-			useMicromambaSubdirs(t)
+			unpublishMicromamba(t)
 			old, err := os.ReadFile(targetExeFilename("micromamba"))
 			if err != nil {
 				t.Fatal(err)
@@ -201,9 +221,9 @@ func TestForceInstallDoesNotFallBackToExistingTools(t *testing.T) {
 			if got != nil || err == nil {
 				t.Fatalf("ensureCondaWithMetadata(force) = %q, %v; want a failed download", got, err)
 			}
-			wantRequests := int32(1)
+			wantRequests := int32(2)
 			if standalone {
-				wantRequests = 2
+				wantRequests = 3
 			} else {
 				var notPublished *notPublishedError
 				if !errors.As(err, &notPublished) {
@@ -217,6 +237,103 @@ func TestForceInstallDoesNotFallBackToExistingTools(t *testing.T) {
 				t.Error("failed download changed the existing executable")
 			}
 		})
+	}
+}
+
+func TestForceInstallFallsBackWhenMicromambaFailsItsCheck(t *testing.T) {
+	for _, standalone := range []bool{true, false} {
+		t.Run(fmt.Sprintf("standalone=%t", standalone), func(t *testing.T) {
+			useSitePath(t)
+			existingForceTools(t)
+			serveForceInstall(t)
+			// The package is 25.1, but its executable reports 0.1.0.
+			t.Setenv("ENSURECONDA_TEST_MICROMAMBA_VERSION", "0.1.0")
+			old, err := os.ReadFile(targetExeFilename("micromamba"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			messages := captureLog(t)
+
+			got, err := ensureCondaWithMetadata(false, true, false, standalone, false, true)
+
+			if standalone {
+				if err != nil || got == nil || got.Path != targetExeFilename("conda_standalone") {
+					t.Fatalf("ensureCondaWithMetadata(force) = %v, %v; want conda-standalone", got, err)
+				}
+				want := "micromamba: downloaded executable reports 0.1.0, expected 25.1 satisfying >=" + DefaultMinMambaVersion + "; trying conda-standalone instead"
+				if all := logged(messages); !slices.Contains(all, want) {
+					t.Errorf("logged %q, want %q among it", all, want)
+				}
+			} else {
+				var invalid *downloadedExecutableError
+				if got != nil || !errors.As(err, &invalid) {
+					t.Fatalf("ensureCondaWithMetadata(force) = %v, %v; want a downloadedExecutableError", got, err)
+				}
+			}
+			if data, err := os.ReadFile(targetExeFilename("micromamba")); err != nil || !bytes.Equal(data, old) {
+				t.Errorf("failed check changed the cached micromamba to %q, error %v", data, err)
+			}
+		})
+	}
+}
+
+func TestEnsureCondaReportsInvalidDownloadWhenNothingElseMatches(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the stand-in executables are shell scripts")
+	}
+	for _, tt := range []struct {
+		name                     string
+		conda, standalone, force bool
+		condaVersion, reason     string
+	}{
+		{name: "conda-standalone too old", standalone: true, force: true, condaVersion: "1.0", reason: "newest available is 1.0"},
+		{name: "conda-standalone not published", standalone: true, force: true, reason: "no conda-standalone package found"},
+		{name: "no conda found", conda: true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			useSitePath(t)
+			t.Setenv("PATH", "")
+			if tt.condaVersion != "" {
+				t.Setenv("ENSURECONDA_TEST_CONDA_VERSION", tt.condaVersion)
+			}
+			serveForceInstall(t)
+			// The micromamba package is 25.1, but its executable reports 0.1.0.
+			t.Setenv("ENSURECONDA_TEST_MICROMAMBA_VERSION", "0.1.0")
+			if tt.name == "conda-standalone not published" {
+				client := httpClient()
+				transport := client.Transport
+				client.Transport = roundTripper(func(r *http.Request) (*http.Response, error) {
+					if strings.HasSuffix(r.URL.Path, "/conda-standalone/files") {
+						return &http.Response{StatusCode: 200, Status: "200 OK", Request: r, Body: io.NopCloser(strings.NewReader("[]"))}, nil
+					}
+					return transport.RoundTrip(r)
+				})
+			}
+			messages := captureLog(t)
+
+			got, err := ensureCondaWithMetadata(false, true, tt.conda, tt.standalone, false, tt.force)
+
+			var invalid *downloadedExecutableError
+			if got != nil || !errors.As(err, &invalid) || !strings.HasPrefix(err.Error(), "micromamba: ") {
+				t.Fatalf("ensureCondaWithMetadata() = %v, %v; want the invalid micromamba download", got, err)
+			}
+			if all := strings.Join(logged(messages), "\n"); !strings.Contains(all, tt.reason) {
+				t.Errorf("logged %q, want %q", all, tt.reason)
+			}
+		})
+	}
+}
+
+func TestStandaloneValidationErrorNamesToolOnce(t *testing.T) {
+	useSitePath(t)
+	existingForceTools(t)
+	serveForceInstall(t)
+	t.Setenv("ENSURECONDA_TEST_CONDA_VERSION", "1.0")
+
+	_, err := installCondaStandalone(true)
+	var invalid *downloadedExecutableError
+	if !errors.As(err, &invalid) || strings.Count(err.Error(), "conda-standalone") != 1 {
+		t.Fatalf("got %v; want a validation error naming conda-standalone once", err)
 	}
 }
 
@@ -322,7 +439,7 @@ func TestForceInstallCLIReportsVersionRejection(t *testing.T) {
 				if rejectStandalone {
 					condaVersion = "0.1.0"
 				}
-				args := []string{"-test.run=^TestForceInstallCLIHelper$", "--", "--force-install"}
+				args := []string{"-test.run=^TestForceInstallCLIHelper$", "--", "--force-install", "--verbosity", "0"}
 				if asJSON {
 					args = append(args, "--json")
 				}
@@ -338,11 +455,11 @@ func TestForceInstallCLIReportsVersionRejection(t *testing.T) {
 				if (err != nil) != rejectStandalone {
 					t.Fatalf("CLI error = %v, stdout %s, stderr %s; want failure=%t", err, out, &stderr, rejectStandalone)
 				}
-				microMessage := "Rejected " + targetExeFilename("micromamba") + " 0.1.0: requires >=" + DefaultMinMambaVersion
+				microMessage := "satisfies >=" + DefaultMinMambaVersion + "; newest available is 0.1.0"
 				if !strings.Contains(stderr.String(), microMessage) {
 					t.Errorf("stderr %q, want %q", &stderr, microMessage)
 				}
-				condaMessage := "Rejected " + targetExeFilename("conda_standalone") + " 0.1.0: requires >=" + DefaultMinCondaVersion
+				condaMessage := "satisfies >=" + DefaultMinCondaVersion + "; newest available is 0.1.0"
 				if rejectStandalone {
 					if !strings.Contains(stderr.String(), condaMessage) || !strings.Contains(stderr.String(), "Could not find compatible executable") {
 						t.Errorf("stderr %q, want standalone rejection and final failure", &stderr)

@@ -55,6 +55,8 @@ func checkExecutableMinVersion(executable string, minVersion pep440.Version, rej
 // parseExecutableVersion follows Python's determine_*_version helpers: use the
 // first matching line, trying another prefix only when no line matched. In
 // particular, a rejected mamba v1 version must not fall back to conda's version.
+// Like Python's probes, it reports a version with base version 0, such as
+// conda's 0.0.0.dev0+placeholder, as unknown.
 func parseExecutableVersion(output string, prefixes ...string) (*pep440.Version, error) {
 	if !utf8.ValidString(output) {
 		return nil, errors.New("version output is not valid UTF-8")
@@ -79,6 +81,9 @@ func parseExecutableVersion(output string, prefixes ...string) (*pep440.Version,
 				version, err := pep440.Parse(parts[len(parts)-1])
 				if err != nil {
 					return nil, err
+				}
+				if base, err := pep440.Parse(version.BaseVersion()); err == nil && base.Equal(pep440.MustParse("0")) {
+					return nil, nil
 				}
 				return &version, nil
 			}

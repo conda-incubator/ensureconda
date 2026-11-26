@@ -2,57 +2,30 @@ package cmd
 
 import (
 	"errors"
+	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
 )
 
-// useMicromambaSubdirs makes micromamba count as published for exactly the
-// given platforms.
-func useMicromambaSubdirs(t *testing.T, subdirs ...string) {
+// Make the successful metadata lookup report no builds for this platform.
+func unpublishMicromamba(t *testing.T) {
 	t.Helper()
-	previous := micromambaSubdirs
-	micromambaSubdirs = map[string]bool{}
-	for _, subdir := range subdirs {
-		micromambaSubdirs[subdir] = true
-	}
-	t.Cleanup(func() { micromambaSubdirs = previous })
-}
-
-func TestMicromambaInstallError(t *testing.T) {
-	notFound := &httpStatusError{url: "https://micro.mamba.pm", statusCode: 404, status: "404 Not Found"}
-	serverError := &httpStatusError{url: "https://micro.mamba.pm", statusCode: 500, status: "500 Internal Server Error"}
-	tests := []struct {
-		name             string
-		err              error
-		subdir           string
-		wantNotPublished bool
-	}{
-		{"404 for a platform without micromamba", notFound, "linux-s390x", true},
-		{"404 for a platform with micromamba", notFound, "linux-64", false},
-		{"other status", serverError, "linux-s390x", false},
-		{"other failure", errors.New("connection refused"), "linux-s390x", false},
-		{"success", nil, "linux-s390x", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := micromambaInstallError(tt.err, tt.subdir)
-
-			var notPublished *notPublishedError
-			if errors.As(got, &notPublished) != tt.wantNotPublished {
-				t.Fatalf("micromambaInstallError() = %v, want a notPublishedError: %v", got, tt.wantNotPublished)
-			}
-			if tt.wantNotPublished {
-				if want := "micromamba is not published for linux-s390x"; got.Error() != want {
-					t.Errorf("micromambaInstallError() = %q, want %q", got, want)
-				}
-			} else if got != tt.err {
-				t.Errorf("micromambaInstallError() = %v, want the error unchanged: %v", got, tt.err)
-			}
-		})
-	}
+	client := httpClient()
+	transport := client.Transport
+	client.Transport = roundTripper(func(r *http.Request) (*http.Response, error) {
+		response, err := transport.RoundTrip(r)
+		if err == nil && strings.HasSuffix(r.URL.Path, "/micromamba/files") {
+			response.Body.Close()
+			response.StatusCode, response.Status = 200, "200 OK"
+			response.Body = io.NopCloser(strings.NewReader("[]"))
+		}
+		return response, err
+	})
 }
 
 func TestInstallMicromambaTellsUnpublishedFromFailedDownload(t *testing.T) {
@@ -64,7 +37,7 @@ func TestInstallMicromambaTellsUnpublishedFromFailedDownload(t *testing.T) {
 	t.Run("not published", func(t *testing.T) {
 		useSitePath(t)
 		refuseDownloads(t)
-		useMicromambaSubdirs(t)
+		unpublishMicromamba(t)
 
 		_, err := InstallMicromamba()
 
@@ -80,7 +53,7 @@ func TestInstallMicromambaTellsUnpublishedFromFailedDownload(t *testing.T) {
 	t.Run("published", func(t *testing.T) {
 		useSitePath(t)
 		refuseDownloads(t)
-		useMicromambaSubdirs(t, subdir)
+		// A failed metadata lookup stays an HTTP error.
 
 		_, err := InstallMicromamba()
 
@@ -113,7 +86,7 @@ func TestEnsureCondaFallsBackWhenMicromambaIsNotPublished(t *testing.T) {
 	// Nothing to find elsewhere.
 	t.Setenv("PATH", "")
 	requests := refuseDownloads(t)
-	useMicromambaSubdirs(t)
+	unpublishMicromamba(t)
 	messages := captureLog(t)
 
 	_, err = EnsureConda(false, true, false, true, false)
@@ -122,8 +95,8 @@ func TestEnsureCondaFallsBackWhenMicromambaIsNotPublished(t *testing.T) {
 	if !errors.As(err, &status) {
 		t.Errorf("EnsureConda() error = %v, want the refused conda-standalone download", err)
 	}
-	if n := requests.Load(); n != 2 {
-		t.Errorf("made %d requests, want one for micromamba and one for conda-standalone", n)
+	if n := requests.Load(); n != 3 {
+		t.Errorf("made %d requests, want latest and metadata for micromamba, then conda-standalone", n)
 	}
 	want := "micromamba is not published for " + subdir + "; trying conda-standalone instead"
 	if got := logged(messages); !slices.Contains(got, want) {
@@ -142,7 +115,7 @@ func TestEnsureCondaFindsCondaWhenMicromambaIsNotPublished(t *testing.T) {
 	}
 	t.Setenv("PATH", filepath.Dir(conda))
 	refuseDownloads(t)
-	useMicromambaSubdirs(t)
+	unpublishMicromamba(t)
 
 	got, err := EnsureConda(false, true, true, false, false)
 
@@ -155,7 +128,7 @@ func TestEnsureCondaReportsUnpublishedMicromambaWithNothingLeftToTry(t *testing.
 	useSitePath(t)
 	t.Setenv("PATH", "")
 	requests := refuseDownloads(t)
-	useMicromambaSubdirs(t)
+	unpublishMicromamba(t)
 
 	_, err := EnsureConda(false, true, false, false, false)
 
@@ -163,7 +136,7 @@ func TestEnsureCondaReportsUnpublishedMicromambaWithNothingLeftToTry(t *testing.
 	if !errors.As(err, &notPublished) {
 		t.Errorf("EnsureConda() error = %v, want a notPublishedError", err)
 	}
-	if n := requests.Load(); n != 1 {
-		t.Errorf("made %d requests, want 1", n)
+	if n := requests.Load(); n != 2 {
+		t.Errorf("made %d requests, want 2", n)
 	}
 }

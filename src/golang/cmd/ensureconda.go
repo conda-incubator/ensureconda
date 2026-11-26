@@ -170,6 +170,7 @@ func ensureCondaWithMetadata(mamba, micromamba, conda, condaStandalone, noInstal
 		return nil, err
 	}
 	var executable *condaExecutable
+	var lastInvalidDownload error
 	dataDir := sitePath()
 	minMambaVersion, _ := pep440.Parse(DefaultMinMambaVersion)
 
@@ -205,8 +206,15 @@ func ensureCondaWithMetadata(mamba, micromamba, conda, condaStandalone, noInstal
 			if condaStandalone {
 				remaining = append(remaining, "conda-standalone")
 			}
+			var noCompatible *noCompatibleVersionError
 			var notPublished *notPublishedError
-			if errors.As(err, &notPublished) && len(remaining) > 0 {
+			var invalidDownload *downloadedExecutableError
+			if errors.As(err, &noCompatible) {
+				log.StandardLogger().Log(rejectionLevel, err)
+			} else if (errors.As(err, &notPublished) || errors.As(err, &invalidDownload)) && len(remaining) > 0 {
+				if invalidDownload != nil {
+					lastInvalidDownload = err
+				}
 				log.Warnf("%v; trying %s instead", err, strings.Join(remaining, " or "))
 			} else if err != nil {
 				return nil, err
@@ -233,6 +241,17 @@ func ensureCondaWithMetadata(mamba, micromamba, conda, condaStandalone, noInstal
 		}
 		if !noInstall {
 			exe, err := installCondaStandalone(forceInstall)
+			var noCompatible *noCompatibleVersionError
+			var notPublished *notPublishedError
+			if errors.As(err, &noCompatible) {
+				log.StandardLogger().Log(rejectionLevel, err)
+				return nil, lastInvalidDownload
+			}
+			if lastInvalidDownload != nil && errors.As(err, &notPublished) {
+				log.Warn(err)
+				return nil, lastInvalidDownload
+			}
+
 			if err != nil {
 				return nil, err
 			}
@@ -243,7 +262,7 @@ func ensureCondaWithMetadata(mamba, micromamba, conda, condaStandalone, noInstal
 		}
 	}
 
-	return nil, nil
+	return nil, lastInvalidDownload
 }
 
 type ArchSpec struct {

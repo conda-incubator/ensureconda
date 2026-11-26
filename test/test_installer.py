@@ -15,6 +15,7 @@ import filelock
 import pytest
 import requests
 from conda_package_streaming.create import conda_builder
+from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 from urllib3.response import HTTPResponse
 
@@ -322,8 +323,10 @@ def test_compute_candidates_skips_broken_and_invalid_versions(
         monkeypatch,
         [
             file_info("1.0", labels=["main"]),
-            # conda-forge moves builds it marks as broken to the "broken" label.
+            # conda-forge labels builds it marks as broken "broken", and
+            # some of them keep "main".
             file_info("3.0", labels=["broken"]),
+            file_info("2.5", labels=["main", "broken"]),
             file_info("not a version", labels=["main"]),
             # Entries without labels, or with null labels, are kept.
             file_info("2.0"),
@@ -337,6 +340,59 @@ def test_compute_candidates_skips_broken_and_invalid_versions(
     assert "Skipping conda-standalone not a version" in log_messages()
 
 
+def test_compute_candidates_skips_unusable_download_urls(
+    monkeypatch: pytest.MonkeyPatch, log_messages: Callable[[], str]
+) -> None:
+    serve_file_listing(
+        monkeypatch,
+        [
+            file_info("1.0", download_url="//[broken"),
+            file_info("1.5", download_url="//example.invalid/conda-standalone.zip"),
+            file_info("2.0"),
+        ],
+    )
+
+    candidates = installer.compute_candidates("conda-forge", "linux-64")
+
+    assert [candidate.version for candidate in candidates] == ["2.0"]
+    messages = log_messages()
+    assert "Skipping conda-standalone 1.0" in messages
+    assert "invalid download URL" in messages
+
+
+def test_conda_standalone_selects_newest_matching_release(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(installer, "site_path", lambda: tmp_path)
+    monkeypatch.setattr(installer, "platform_subdir", lambda: "linux-64")
+    packages = [
+        installer.AnacondaPkg(
+            0,
+            installer.AnacondaPkgAttr("linux-64", "0", 0, 0),
+            "conda",
+            version,
+            f"//example.invalid/conda-standalone-{version}-0.tar.bz2",
+        )
+        for version in ["24.1", "25.1"]
+    ]
+    monkeypatch.setattr(installer, "compute_candidates", lambda *args: packages)
+    urls: List[str] = []
+
+    def stream(url: str, sha256: Optional[str] = None, **kwargs: object) -> Path:
+        urls.append(url)
+        return tmp_path / "conda_standalone"
+
+    monkeypatch.setattr(installer, "stream_conda_executable", stream)
+
+    installer.install_conda_exe(SpecifierSet("<25"), force=True)
+    assert urls == ["https://example.invalid/conda-standalone-24.1-0.tar.bz2"]
+    with pytest.raises(
+        installer.NoCompatibleVersionError, match="newest available is 25.1"
+    ):
+        installer.install_conda_exe(SpecifierSet(">=26"), force=True)
+    assert len(urls) == 1
+
+
 def test_micromamba_is_extracted_while_holding_the_download_lock(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -344,7 +400,9 @@ def test_micromamba_is_extracted_while_holding_the_download_lock(
     response = requests.Response()
     response._content = b"tarball"
 
-    def extract(tarball: io.BytesIO, filename: str, dest_filename: str) -> Path:
+    def extract(
+        tarball: io.BytesIO, filename: str, dest_filename: str, **kwargs: object
+    ) -> Path:
         # Another process must still be unable to take the download lock.
         with pytest.raises(filelock.Timeout):
             filelock.FileLock(str(lock_path)).acquire(timeout=0)
@@ -352,6 +410,15 @@ def test_micromamba_is_extracted_while_holding_the_download_lock(
 
     monkeypatch.setattr(installer, "site_path", lambda: tmp_path)
     monkeypatch.setattr(installer, "request_url_with_retry", lambda url: response)
+    monkeypatch.setattr(
+        installer,
+        "select_micromamba",
+        lambda *args: (
+            "https://example.invalid/micromamba.tar.bz2",
+            Version("2"),
+            None,
+        ),
+    )
     monkeypatch.setattr(installer, "extract_files_from_tar_bz2", extract)
 
     executable = installer.install_micromamba()
@@ -1059,10 +1126,13 @@ def request_micromamba(
     def get(
         session: requests.Session, method: str, url: str, **kwargs: Any
     ) -> requests.Response:
-        assert url == f"https://micro.mamba.pm/api/micromamba/{subdir}/latest"
         response = requests.Response()
-        response.status_code = status
         response.raw = io.BytesIO()
+        if url.endswith("/files") and subdir == "linux-s390x":
+            response.status_code = 200
+            response._content = b"[]"
+            return response
+        response.status_code = status
         return response
 
     monkeypatch.setattr(requests.Session, "request", get)
@@ -1079,13 +1149,13 @@ def test_micromamba_not_published_for_the_platform(
     ) as error:
         request_micromamba("linux-s390x", 404, tmp_path, monkeypatch)
 
-    assert isinstance(error.value.__cause__, requests.HTTPError)
+    assert error.value.__cause__ is None
 
 
 @pytest.mark.parametrize(
     "subdir, status",
     [
-        # A release that hasn't been uploaded for this platform yet.
+        # The release metadata consulted after a 404 from latest fails too.
         ("linux-64", 404),
         ("linux-s390x", 403),
     ],

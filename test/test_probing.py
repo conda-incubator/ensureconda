@@ -89,11 +89,22 @@ def test_fresh_unrunnable_cache_is_replaced_by_installation(
 ) -> None:
     cached = executable_file(isolated_tools / "data" / "micromamba")
 
-    def extract(tarball: object, filename: str, dest_filename: str) -> Path:
+    def extract(
+        tarball: object, filename: str, dest_filename: str, **kwargs: object
+    ) -> Path:
         return program(cached, "#!/bin/sh\nprintf '2.9.0\\n'\n")
 
     monkeypatch.setattr(
         installer, "request_url_with_retry", lambda url: requests.Response()
+    )
+    monkeypatch.setattr(
+        installer,
+        "select_micromamba",
+        lambda *args: (
+            "https://example.invalid/micromamba.tar.bz2",
+            Version("2.9"),
+            None,
+        ),
     )
     monkeypatch.setattr(installer, "extract_files_from_tar_bz2", extract)
 

@@ -183,6 +183,9 @@ func TestEnsureCondaInstalledMetadata(t *testing.T) {
 				t.Setenv("TEST_VERSION_CALLS", calls)
 				downloads := 0
 				client := &http.Client{Transport: roundTripper(func(r *http.Request) (*http.Response, error) {
+					if strings.HasSuffix(r.URL.Path, "/latest") {
+						return &http.Response{StatusCode: 307, Status: "307 Temporary Redirect", Body: http.NoBody, Request: r, Header: http.Header{"Location": {"https://conda.anaconda.org/conda-forge/" + subdir + "/micromamba-99.0-0.tar.bz2"}}}, nil
+					}
 					body := archive
 					if strings.HasSuffix(r.URL.Path, "/files") {
 						body = listing
@@ -214,8 +217,8 @@ func TestEnsureCondaInstalledMetadata(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				if string(probes) != "probe\n" {
-					t.Errorf("version probes = %q, want exactly one", probes)
+				if string(probes) != "probe\nprobe\n" {
+					t.Errorf("version probes = %q, want staged validation and installed metadata", probes)
 				}
 			})
 		}

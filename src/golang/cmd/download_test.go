@@ -38,7 +38,7 @@ func testArchive(t *testing.T, name string) []byte {
 	}
 	var buf bytes.Buffer
 	zipWriter := zip.NewWriter(&buf)
-	entry, err := zipWriter.Create("pkg-conda-standalone-test.tar.zst")
+	entry, err := zipWriter.Create("pkg-test-1-0.tar.zst")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,7 +90,7 @@ func TestArchiveDownloadRetriesBeforeExtraction(t *testing.T) {
 					if verify {
 						digest = sha256Hex(payload)
 					}
-					got, err := downloadAndUnpackArchive(server.URL+"/"+name, digest, map[string]string{"bin/tool": target})
+					got, err := downloadAndUnpackArchive(server.URL+"/"+name, digest, map[string]string{"bin/tool": target}, nil)
 					if err != nil || got != target || attempts.Load() != 2 {
 						t.Fatalf("download = %q, %v; attempts %d", got, err, attempts.Load())
 					}
@@ -130,7 +130,7 @@ func TestArchiveDownloadDoesNotExtractAfterFailure(t *testing.T) {
 				if failure == "checksum" {
 					digest = sha256Hex([]byte("different archive"))
 				}
-				_, err := downloadAndUnpackArchive(server.URL+"/"+name, digest, map[string]string{"bin/tool": target})
+				_, err := downloadAndUnpackArchive(server.URL+"/"+name, digest, map[string]string{"bin/tool": target}, nil)
 				if err == nil {
 					t.Fatal("download unexpectedly succeeded")
 				}
@@ -190,7 +190,7 @@ func TestDownloadRejectsSha256Mismatch(t *testing.T) {
 			_, err := downloadAndUnpackArchive(
 				server.URL+"/"+name,
 				sha256Hex([]byte("expected archive")),
-				map[string]string{"standalone_conda/conda.exe": target},
+				map[string]string{"standalone_conda/conda.exe": target}, nil,
 			)
 			if err == nil || !strings.Contains(err.Error(), "SHA-256 mismatch") {
 				t.Fatalf("downloadAndUnpackArchive() error = %v, want a SHA-256 mismatch", err)
