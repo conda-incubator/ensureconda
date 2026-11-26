@@ -78,34 +78,16 @@ var (
 				log.SetLevel(log.InfoLevel)
 			}
 
-			var executable *condaExecutable
-			if !forceInstall {
-				executable, err = ensureCondaWithMetadata(mamba, micromamba, conda, condaExe, true, false)
-				if err != nil {
-					panic(err)
-				}
+			executable, err := ensureCondaPreferringInstalled(mamba, micromamba, conda, condaExe, noInstall, forceInstall)
+			if err != nil {
+				er(err)
 			}
-
 			if executable != nil {
 				log.Infof("Selected %s %s at %s", executable.Flavor, executable.Version, executable.Path)
 				if err := printExecutable(cmd, executable, asJSON); err != nil {
 					er(err)
 				}
 				os.Exit(0)
-			}
-			if !noInstall {
-				log.Debugf("Attempting to install")
-				executable, err = ensureCondaWithMetadata(mamba, micromamba, conda, condaExe, noInstall, forceInstall)
-				if err != nil {
-					er(err)
-				}
-				if executable != nil {
-					log.Infof("Selected %s %s at %s", executable.Flavor, executable.Version, executable.Path)
-					if err := printExecutable(cmd, executable, asJSON); err != nil {
-						er(err)
-					}
-					os.Exit(0)
-				}
 			}
 			er("Could not find compatible executable")
 		},
@@ -179,6 +161,29 @@ func ensureCondaWithMetadata(mamba, micromamba, conda, condaStandalone, noInstal
 		}
 		if installable(flavor) && !noInstall {
 			steps = append(steps, resolutionStep{flavor: flavor, install: true})
+		}
+	}
+	return resolveSteps(steps, forceInstall)
+}
+
+// ensureCondaPreferringInstalled searches for every enabled tool before running
+// any installer, as the command line does.
+func ensureCondaPreferringInstalled(mamba, micromamba, conda, condaStandalone, noInstall, forceInstall bool) (*condaExecutable, error) {
+	if err := validateForceInstall(micromamba, condaStandalone, noInstall, forceInstall); err != nil {
+		return nil, err
+	}
+	flavors := enabledFlavors(mamba, micromamba, conda, condaStandalone)
+	var steps []resolutionStep
+	if !forceInstall {
+		for _, flavor := range flavors {
+			steps = append(steps, resolutionStep{flavor: flavor})
+		}
+	}
+	if !noInstall {
+		for _, flavor := range flavors {
+			if installable(flavor) {
+				steps = append(steps, resolutionStep{flavor: flavor, install: true})
+			}
 		}
 	}
 	return resolveSteps(steps, forceInstall)
