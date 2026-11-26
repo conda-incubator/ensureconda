@@ -35,19 +35,16 @@ def test_skip_candidate_whose_version_check_fails(
     monkeypatch: pytest.MonkeyPatch,
     log_messages: Callable[[], str],
 ) -> None:
-    def broken_version(executable: object) -> Version:
-        raise error
+    def probe(executable: object, flavor: str, observations: object) -> Version:
+        if flavor == "mamba":
+            raise error
+        return Version("2.0.0")
 
     monkeypatch.setattr(api, "mamba_executables", lambda: iter([BROKEN_MAMBA]))
     monkeypatch.setattr(
         api, "micromamba_executables", lambda: iter([WORKING_MICROMAMBA])
     )
-    monkeypatch.setattr(determine_versions, "determine_mamba_version", broken_version)
-    monkeypatch.setattr(
-        determine_versions,
-        "determine_micromamba_version",
-        lambda executable: Version("2.0.0"),
-    )
+    monkeypatch.setattr(determine_versions, "_probe_version", probe)
 
     executable = api.ensureconda(
         conda=False,
@@ -100,7 +97,7 @@ def test_install_replaces_a_new_executable_that_the_search_rejected(
     current = version
     downloads: List[str] = []
 
-    def determine_version(exe: object) -> Version:
+    def probe(exe: object, flavor: object, observations: object) -> Version:
         if isinstance(current, Exception):
             raise current
         return current
@@ -133,9 +130,7 @@ def test_install_replaces_a_new_executable_that_the_search_rejected(
     )
     monkeypatch.setattr("ensureconda.installer.request_url_with_retry", download)
     monkeypatch.setattr("ensureconda.installer.extract_files_from_tar_bz2", extract)
-    monkeypatch.setattr(
-        determine_versions, "determine_micromamba_version", determine_version
-    )
+    monkeypatch.setattr(determine_versions, "_probe_version", probe)
 
     result = api.ensureconda(
         mamba=False, conda=False, conda_exe=False, min_mamba_version=minimum

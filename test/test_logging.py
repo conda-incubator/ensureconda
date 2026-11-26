@@ -21,7 +21,7 @@ def test_cli_logs_to_stderr_and_restores_application_logger(
     monkeypatch.setattr(
         determine_versions,
         "_probe_version",
-        lambda path, flavor: Version("1" if path.name == "old" else "2"),
+        lambda path, flavor, observations: Version("1" if path.name == "old" else "2"),
     )
     logger = logging.getLogger("ensureconda")
     previous = logger.level, logger.handlers[:], logger.propagate
@@ -76,7 +76,9 @@ def test_cli_keeps_application_handlers(monkeypatch: pytest.MonkeyPatch) -> None
 
     monkeypatch.setattr(api, "micromamba_executables", find)
     monkeypatch.setattr(
-        determine_versions, "_probe_version", lambda path, flavor: Version("2")
+        determine_versions,
+        "_probe_version",
+        lambda path, flavor, observations: Version("2"),
     )
     logger.addHandler(before)
     try:
@@ -97,7 +99,9 @@ def test_library_decisions_are_available_to_application_logging(
 ) -> None:
     monkeypatch.setattr(api, "micromamba_executables", lambda: iter([Path("old")]))
     monkeypatch.setattr(
-        determine_versions, "_probe_version", lambda path, flavor: Version("1")
+        determine_versions,
+        "_probe_version",
+        lambda path, flavor, observations: Version("1"),
     )
     with caplog.at_level(logging.INFO, logger="ensureconda"):
         assert api.ensure(["micromamba>=2"], install="never") is None
@@ -119,7 +123,9 @@ def test_cli_reports_no_failure_before_installing(
         api, "install_micromamba", lambda *args, **kwargs: Path("micromamba")
     )
     monkeypatch.setattr(
-        determine_versions, "_probe_version", lambda path, flavor: Version("2")
+        determine_versions,
+        "_probe_version",
+        lambda path, flavor, observations: Version("2"),
     )
     runner_options: Dict[str, Any] = {}
     if "mix_stderr" in inspect.signature(CliRunner).parameters:
@@ -143,7 +149,9 @@ def test_selection_without_a_known_version(
     monkeypatch.setattr(
         api, "micromamba_executables", lambda: iter([Path("micromamba")])
     )
-    monkeypatch.setattr(determine_versions, "_probe_version", lambda path, flavor: None)
+    monkeypatch.setattr(
+        determine_versions, "_probe_version", lambda path, flavor, observations: None
+    )
     with caplog.at_level(logging.INFO, logger="ensureconda"):
         result = api.ensure(
             ["micromamba"], install="never", probe_version=probe_version

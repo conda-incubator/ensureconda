@@ -47,7 +47,7 @@ def test_probe_version_rejects_unknown_flavor_without_running_it(
     calls = fake_version_outputs(monkeypatch, {})
 
     with pytest.raises(ValueError, match="Unknown executable flavor"):
-        determine_versions._probe_version(Path("tool"), cast(Flavor, flavor))
+        determine_versions._probe_version(Path("tool"), cast(Flavor, flavor), None)
     assert calls == []
 
 
@@ -164,13 +164,13 @@ def test_identify_still_reports_unknown_version_after_probe_failure(
     monkeypatch: pytest.MonkeyPatch,
     log_messages: Callable[[], str],
 ) -> None:
-    def broken_version(executable: object) -> Version:
+    def broken_version(
+        executable: object, flavor: object, observations: object
+    ) -> Version:
         raise error
 
     executable = executable_file(tmp_path / "micromamba")
-    monkeypatch.setattr(
-        determine_versions, "determine_micromamba_version", broken_version
-    )
+    monkeypatch.setattr(api, "_probe_version", broken_version)
 
     assert identify(executable) == CondaExecutable(executable, "micromamba", None)
     assert log_messages() == ""

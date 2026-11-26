@@ -48,7 +48,7 @@ def test_force_install_replaces_fresh_cache(
     monkeypatch.setattr(
         determine_versions,
         "_probe_version",
-        lambda path, flavor: Version(
+        lambda path, flavor, observations: Version(
             "1.5" if path.read_bytes() == b"old executable" else "25.1"
         ),
     )
@@ -172,7 +172,7 @@ def test_normal_install_reuses_usable_cache(
     probe = Mock(return_value=Version("2.0"))
     monkeypatch.setattr(determine_versions, "_probe_version", probe)
     assert install(Version("1.0")) == target
-    probe.assert_called_once_with(target, tool)
+    probe.assert_called_once_with(target, tool, None)
     assert target.read_bytes() == b"existing executable"
 
 
@@ -245,7 +245,9 @@ def test_force_install_checks_version_constraints(
     install = Mock(return_value=Path("micromamba"))
     monkeypatch.setattr(api, "install_micromamba", install)
     monkeypatch.setattr(
-        determine_versions, "_probe_version", lambda path, flavor: Version("1.0")
+        determine_versions,
+        "_probe_version",
+        lambda path, flavor, observations: Version("1.0"),
     )
     assert api.ensure(["micromamba>=2"], install="force", probe_version=False) is None
     install.assert_called_once()
@@ -279,7 +281,9 @@ def test_force_cli_keeps_version_minimums(
         api, "install_micromamba" if micro else "install_conda_exe", install
     )
     monkeypatch.setattr(
-        determine_versions, "_probe_version", lambda path, flavor: Version(version)
+        determine_versions,
+        "_probe_version",
+        lambda path, flavor, observations: Version(version),
     )
     args = ["--force-install", "--no-conda-exe" if micro else "--no-micromamba"]
     if minimum is not None:
@@ -313,7 +317,9 @@ def test_force_reports_version_rejection_before_fallback(
     monkeypatch.setattr(
         determine_versions,
         "_probe_version",
-        lambda path, flavor: Version("2.3.0" if flavor == "micromamba" else "25.1"),
+        lambda path, flavor, observations: Version(
+            "2.3.0" if flavor == "micromamba" else "25.1"
+        ),
     )
 
     def standalone(constraint: object, **kwargs: object) -> Path:
@@ -432,7 +438,9 @@ def test_force_downloads_repeated_tool_only_once(
     install = Mock(return_value=path)
     monkeypatch.setattr(api, "install_micromamba", install)
     monkeypatch.setattr(
-        determine_versions, "_probe_version", lambda path, flavor: Version("2.5")
+        determine_versions,
+        "_probe_version",
+        lambda path, flavor, observations: Version("2.5"),
     )
 
     result = api.ensure(["micromamba>=3", second_target], install="force")
