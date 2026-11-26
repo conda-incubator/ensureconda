@@ -247,7 +247,7 @@ func TestLockInstallReportsOnlyWhenWaiting(t *testing.T) {
 	useSitePath(t)
 	messages := captureLog(t)
 
-	unlock, err := lockInstall("test_install.lock")
+	_, unlock, err := lockInstall("tool", "test_install.lock")
 	if err != nil {
 		t.Fatalf("lockInstall() error = %v", err)
 	}
@@ -260,7 +260,7 @@ func TestLockInstallReportsOnlyWhenWaiting(t *testing.T) {
 	// A second caller has to wait for the first, and says so.
 	done := make(chan error, 1)
 	go func() {
-		unlockSecond, err := lockInstall("test_install.lock")
+		_, unlockSecond, err := lockInstall("tool", "test_install.lock")
 		if err == nil {
 			unlockSecond()
 		}

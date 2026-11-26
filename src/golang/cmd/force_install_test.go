@@ -78,6 +78,21 @@ func serveForceInstall(t *testing.T) *[]string {
 	return &requests
 }
 
+func TestInstallInCurrentDirectory(t *testing.T) {
+	skipOnWindows(t)
+	work := t.TempDir()
+	t.Chdir(work)
+	t.Setenv("ENSURECONDA_DATA_DIR", ".")
+	t.Setenv("PATH", filepath.Join(work, "empty"))
+	serveForceInstall(t)
+	for _, tool := range []string{"micromamba", "conda_standalone"} {
+		got, err := EnsureConda(false, tool == "micromamba", false, tool == "conda_standalone", false)
+		if want := filepath.Join(work, tool); got != want || err != nil {
+			t.Errorf("installing %s returned %q, %v; want %q", tool, got, err, want)
+		}
+	}
+}
+
 func TestForceInstallReplacesFreshCache(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("the stand-in executables are shell scripts; native force refresh is covered by test_go_binaries.py")

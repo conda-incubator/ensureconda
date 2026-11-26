@@ -164,17 +164,28 @@ func FindExecutable(executableFileName string, searchPath string, predicate func
 	return findExecutableInDirs(executableFileName, filepath.SplitList(searchPath), predicate)
 }
 
+func pathForExecution(path string) (string, error) {
+	absolute, err := filepath.Abs(path)
+	if err != nil && filepath.Base(path) != path {
+		// Even in an unlinked working directory, ../bin/conda can be run
+		// directly without looking up the name on PATH.
+		return path, nil
+	}
+	return absolute, err
+}
+
 func findExecutableInDirs(executableFileName string, directories []string, predicate func(path string) (bool, error)) (string, error) {
 	log.
 		WithField("searchDirectories", directories).
 		WithField("executable", executableFileName).
 		Debug("Searching for executable")
 	for _, dir := range directories {
-		if dir == "" {
-			// Unix shell semantics: searchPath element "" means "."
-			dir = "."
+		// An empty entry refers to the working directory as well. Give the
+		// predicate a path so exec.Command cannot look up the name again.
+		path, err := pathForExecution(filepath.Join(dir, executableFileName))
+		if err != nil {
+			continue
 		}
-		path := filepath.Join(dir, executableFileName)
 		for _, candidate := range executableCandidates(path, runtime.GOOS, os.Getenv("PATHEXT")) {
 			if err := assertExecutable(candidate); err == nil {
 				if result, err := predicate(candidate); err == nil && result {

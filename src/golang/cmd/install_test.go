@@ -51,7 +51,10 @@ func TestInstallMicromamba(t *testing.T) {
 				return
 			}
 			gotClean := filepath.Clean(got)
-			wantClean := filepath.Clean(tt.want)
+			wantClean, err := filepath.Abs(tt.want)
+			if err != nil {
+				t.Fatal(err)
+			}
 
 			if gotClean != wantClean {
 				t.Errorf("InstallMicromamba() got = %v, want %v", gotClean, wantClean)
@@ -83,7 +86,10 @@ func TestInstallCondaStandalone(t *testing.T) {
 				return
 			}
 			gotClean := filepath.Clean(got)
-			wantClean := filepath.Clean(tt.want)
+			wantClean, err := filepath.Abs(tt.want)
+			if err != nil {
+				t.Fatal(err)
+			}
 
 			if gotClean != wantClean {
 				t.Errorf("InstallCondaStandalone() got = %v, want %v", gotClean, wantClean)
