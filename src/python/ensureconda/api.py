@@ -413,6 +413,9 @@ def _ensure(
 def identify(executable: _StrPath) -> CondaExecutable:
     """Describe a conda, mamba, micromamba, or conda-standalone executable.
 
+    A relative path names a file in the working directory. The result includes
+    its absolute path whenever the working directory can be named.
+
     The flavor comes from the file name, as for the executables that
     :func:`ensureconda` finds. For other names it comes from the shape of the
     ``--version`` output instead, which can't distinguish micromamba from

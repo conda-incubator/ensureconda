@@ -143,7 +143,7 @@ By default, ensureconda stores downloaded executables in:
 - macOS: `~/Library/Application Support/ensure-conda`
 - Windows: `%LOCALAPPDATA%\ensure-conda\ensure-conda`
 
-To use a different directory, set `ENSURECONDA_DATA_DIR` to its absolute path.
+To use a different directory, set `ENSURECONDA_DATA_DIR` to its path.
 This applies to both Python and Go.
 
 ### Configuring conda-standalone channel
