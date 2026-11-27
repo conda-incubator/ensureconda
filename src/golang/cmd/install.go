@@ -30,7 +30,6 @@ import (
 )
 
 func targetExeFilename(exeName string) string {
-	_ = os.MkdirAll(sitePath(), 0700)
 	targetFileName := filepath.Join(sitePath(), exeName)
 	if runtime.GOOS == "windows" {
 		targetFileName = targetFileName + ".exe"
@@ -143,8 +142,7 @@ func installCondaStandalone(obs *observer, forceInstall bool) (string, error) {
 		return "", err
 	}
 
-	target := targetExeFilename("conda_standalone")
-	unlock, err := lockInstall("conda_exe_install.lock")
+	target, unlock, err := lockInstall("conda_standalone", "conda_exe_install.lock")
 	if err != nil {
 		return "", err
 	}
@@ -335,8 +333,7 @@ func unpackConda(archive []byte, fileNameMap map[string]string, validation *down
 // installMicromamba downloads micromamba from url, unless a concurrent process
 // has just installed one that can be used. forceInstall always downloads again.
 func installMicromamba(obs *observer, url string, forceInstall bool) (string, error) {
-	target := targetExeFilename("micromamba")
-	unlock, err := lockInstall("micromamba_install.lock")
+	target, unlock, err := lockInstall("micromamba", "micromamba_install.lock")
 	if err != nil {
 		return "", err
 	}
@@ -361,12 +358,19 @@ func installMicromamba(obs *observer, url string, forceInstall bool) (string, er
 	}, &downloadValidation{observer: obs, flavor: "micromamba", minimum: pep440.MustParse(DefaultMinMambaVersion), expected: pep440.MustParse(chosen.Version)})
 }
 
-// lockInstall takes the named download lock in the site path, so that
-// concurrent processes download each executable only once. The lock names match
-// the Python implementation, so the two coordinate.
-func lockInstall(lockName string) (func(), error) {
-	_ = os.MkdirAll(sitePath(), 0700)
-	return lockFile(filepath.Join(sitePath(), lockName), "downloading")
+// lockInstall fixes the path to the target before acquiring the download
+// lock in its directory. The lock names match the Python implementation.
+func lockInstall(exeName, lockName string) (string, func(), error) {
+	target, err := pathForExecution(targetExeFilename(exeName))
+	if err != nil {
+		return "", nil, err
+	}
+	dir := filepath.Dir(target)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return "", nil, err
+	}
+	unlock, err := lockFile(filepath.Join(dir, lockName), "downloading")
+	return target, unlock, err
 }
 
 // lockFile blocks until it holds the lock at lockPath, and returns a function

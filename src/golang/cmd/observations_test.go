@@ -108,6 +108,22 @@ func TestObserverKeepsFailures(t *testing.T) {
 	}
 }
 
+func TestObserverDoesNotCachePathLookupAgainstLocalFile(t *testing.T) {
+	skipOnWindows(t)
+	work, bin := t.TempDir(), t.TempDir()
+	t.Chdir(work)
+	standIn(t, filepath.Join(work, "conda"), "echo conda 4.7")
+	t.Setenv("PATH", bin)
+	obs := newObserver()
+	for _, version := range []string{"25.1", "25.2"} {
+		standIn(t, filepath.Join(bin, "conda"), "echo conda "+version)
+		output, err := obs.versionOutput("conda")
+		if err != nil || string(output) != "conda "+version+"\n" {
+			t.Fatalf("versionOutput() = %q, %v; want conda %s", output, err, version)
+		}
+	}
+}
+
 func TestObserverCarriesResultAcrossRename(t *testing.T) {
 	skipOnWindows(t)
 	for _, tt := range []struct {
@@ -172,20 +188,21 @@ func TestEnsureCondaRunsEachUnchangedFileOnce(t *testing.T) {
 	}
 }
 
-func TestBareNamesAreNotObserved(t *testing.T) {
+func TestRelativePathEntriesProbeTheFileThatWasFound(t *testing.T) {
 	skipOnWindows(t)
 	useSitePath(t)
 	work, bin := t.TempDir(), t.TempDir()
 	t.Chdir(work)
 	standIn(t, filepath.Join(bin, "conda"), "echo conda 4.7.12")
 	standIn(t, filepath.Join(work, "conda"), "echo conda 25.1.0")
-	// The search through "." finds ./conda as "conda", which runs the conda in bin.
-	t.Setenv("PATH", strings.Join([]string{bin, ".", work}, string(os.PathListSeparator)))
-
-	got, err := EnsureConda(false, false, true, false, true)
-
-	if want := filepath.Join(work, "conda"); err != nil || got != want {
-		t.Fatalf("EnsureConda() = %q, %v; want %q", got, err, want)
+	for _, path := range []string{bin + ":.", bin + ":", ".:empty", ":empty"} {
+		t.Run("PATH="+path, func(t *testing.T) {
+			t.Setenv("PATH", path)
+			got, err := EnsureConda(false, false, true, false, true)
+			if want := filepath.Join(work, "conda"); err != nil || got != want {
+				t.Fatalf("EnsureConda() = %q, %v; want %q", got, err, want)
+			}
+		})
 	}
 }
 

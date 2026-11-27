@@ -235,6 +235,7 @@ def extract_files_from_tar_bz2(
     filename: str,
     dest_filename: str,
     *,
+    data_dir: Optional[Path] = None,
     validation: Optional[DownloadValidation] = None,
 ) -> Path:
     tarball.seek(0)
@@ -243,7 +244,7 @@ def extract_files_from_tar_bz2(
         if fo is None:
             raise RuntimeError("Could not extract executable!")
         return write_executable_from_file_object(
-            fo, dest_filename, validation=validation
+            fo, dest_filename, data_dir=data_dir, validation=validation
         )
 
 
@@ -251,10 +252,13 @@ def write_executable_from_file_object(
     fo: IO[bytes],
     dest_filename: str,
     *,
+    data_dir: Optional[Path] = None,
     validation: Optional[DownloadValidation] = None,
 ) -> Path:
-    site_path().mkdir(parents=True, exist_ok=True)
-    target_path = site_path() / dest_filename
+    if data_dir is None:
+        data_dir = site_path()
+    data_dir.mkdir(parents=True, exist_ok=True)
+    target_path = data_dir / dest_filename
     with new_executable(target_path, validation=validation) as exe_fo:
         shutil.copyfileobj(fo, exe_fo, length=1024 * 1024)
     return target_path
@@ -320,6 +324,7 @@ def stream_conda_executable(
     url: str,
     sha256: Optional[str] = None,
     *,
+    data_dir: Optional[Path] = None,
     validation: Optional[DownloadValidation] = None,
 ) -> Path:
     """Extract `conda.exe` from the conda-standalone package at the given URL.
@@ -350,7 +355,7 @@ def stream_conda_executable(
                             f"Could not extract executable {member.name} from {url}!"
                         )
                     conda_exe = write_executable_from_file_object(
-                        fo, dest_filename, validation=validation
+                        fo, dest_filename, data_dir=data_dir, validation=validation
                     )
                     return conda_exe
         raise RuntimeError("Could not find conda.exe in the conda-standalone package")
@@ -382,14 +387,15 @@ def install_conda_exe(
     """
     subdir = platform_subdir()
     # Create a lock file specific to conda_exe to prevent concurrent downloads
-    lock_path = site_path() / "conda_exe_install.lock"
+    data_dir = site_path()
+    lock_path = data_dir / "conda_exe_install.lock"
     dest_filename = f"conda_standalone{exe_suffix()}"
-    site_path().mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True)
 
     # Use the context manager for lock acquisition with feedback
     with lock_with_feedback(lock_path, "downloading conda"):
         # Check if the file already exists after acquiring the lock
-        target_path = site_path() / dest_filename
+        target_path = data_dir / dest_filename
         if (
             not force
             and is_exe(target_path)
@@ -419,6 +425,7 @@ def install_conda_exe(
         path_to_written_executable = stream_conda_executable(
             url,
             chosen.sha256,
+            data_dir=data_dir,
             validation=DownloadValidation(
                 "conda_standalone", constraint, Version(chosen.version), observations
             ),
@@ -519,14 +526,15 @@ def install_micromamba(
     """
     subdir = platform_subdir()
     # Create a lock file specific to micromamba to prevent concurrent downloads
-    lock_path = site_path() / "micromamba_install.lock"
+    data_dir = site_path()
+    lock_path = data_dir / "micromamba_install.lock"
     dest_filename = f"micromamba{exe_suffix()}"
-    site_path().mkdir(parents=True, exist_ok=True)
+    data_dir.mkdir(parents=True, exist_ok=True)
 
     # Use the context manager for lock acquisition with feedback
     with lock_with_feedback(lock_path, "downloading micromamba"):
         # Check if the file already exists after acquiring the lock
-        target_path = site_path() / dest_filename
+        target_path = data_dir / dest_filename
         if (
             not force
             and is_exe(target_path)
@@ -565,13 +573,17 @@ def install_micromamba(
                         fo = tar.extractfile(member)
                         if fo is not None:
                             return write_executable_from_file_object(
-                                fo, dest_filename, validation=validation
+                                fo,
+                                dest_filename,
+                                data_dir=data_dir,
+                                validation=validation,
                             )
             raise RuntimeError("Could not find micromamba in the package")
         return extract_files_from_tar_bz2(
             tarball=tarball,
             filename=filename,
             dest_filename=dest_filename,
+            data_dir=data_dir,
             validation=validation,
         )
 

@@ -141,12 +141,17 @@ func TestFindExecutable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := FindExecutable("tool", dir, acceptAny)
-	if err != nil {
-		t.Fatalf("FindExecutable() error = %v", err)
-	}
-	if got != want {
-		t.Errorf("FindExecutable() = %v, want %v", got, want)
+	t.Chdir(dir)
+	for _, searchPath := range []string{dir, ".", string(os.PathListSeparator) + "empty"} {
+		got, err := FindExecutable("tool", searchPath, func(path string) (bool, error) {
+			if path != want {
+				t.Errorf("checking %q, want %q", path, want)
+			}
+			return true, nil
+		})
+		if err != nil || got != want {
+			t.Errorf("FindExecutable(%q) = %q, %v; want %q", searchPath, got, err, want)
+		}
 	}
 }
 
@@ -172,6 +177,58 @@ func TestResolveExecutableDataDirectoryWithPathSeparator(t *testing.T) {
 	got, err := ResolveExecutable("tool", dir, acceptAny)
 	if err != nil || got != want {
 		t.Fatalf("ResolveExecutable() = %q, %v; want %q", got, err, want)
+	}
+}
+
+func TestEmptyPathSkipsTheWorkingDirectory(t *testing.T) {
+	t.Chdir(t.TempDir())
+	t.Setenv("PATHEXT", ".EXE")
+	t.Setenv("PATH", "")
+	name := "tool"
+	if runtime.GOOS == "windows" {
+		name += ".EXE"
+	}
+	if err := os.WriteFile(name, nil, 0755); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := ResolveExecutable("tool", t.TempDir(), acceptAny); err == nil {
+		t.Fatalf("found %q in the working directory with an empty PATH", got)
+	}
+}
+
+func TestDirectoryQualifiedPathsInRemovedWorkingDirectory(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("uses .. from an unlinked working directory")
+	}
+	root := t.TempDir()
+	for _, name := range []string{"bin", "data", "work"} {
+		if err := os.Mkdir(filepath.Join(root, name), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"bin", "data"} {
+		standIn(t, filepath.Join(root, name, "conda"), "echo conda 25.1")
+	}
+	work := filepath.Join(root, "work")
+	t.Chdir(work)
+	if err := os.Remove(work); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", "../bin")
+	for _, tt := range []struct{ dataDir, want string }{
+		{"../data", "../data/conda"},
+		{"../empty", "../bin/conda"},
+	} {
+		t.Setenv("ENSURECONDA_DATA_DIR", tt.dataDir)
+		got, err := EnsureConda(false, false, true, false, true)
+		if err != nil || got != tt.want {
+			t.Errorf("search = %q, %v; want %q", got, err, tt.want)
+		}
+	}
+	t.Setenv("ENSURECONDA_DATA_DIR", "../data")
+	serveForceInstall(t)
+	if got, err := InstallMicromamba(); err != nil || got != "../data/micromamba" {
+		t.Errorf("install = %q, %v; want ../data/micromamba", got, err)
 	}
 }
 

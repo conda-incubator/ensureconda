@@ -1,3 +1,4 @@
+import os
 import platform
 import sys
 import sysconfig
@@ -6,6 +7,7 @@ from test.test_info import executable_file
 from typing import Optional
 
 import pytest
+from packaging.version import Version
 
 from ensureconda import api, resolve
 from ensureconda.resolve import (
@@ -24,10 +26,11 @@ def test_default_data_directory(
         monkeypatch.delenv("ENSURECONDA_DATA_DIR", raising=False)
     else:
         monkeypatch.setenv("ENSURECONDA_DATA_DIR", value)
+    monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(
-        "ensureconda.resolve.appdirs.user_data_dir", lambda app: str(tmp_path)
+        "ensureconda.resolve.appdirs.user_data_dir", lambda app: "default"
     )
-    assert resolve.site_path() == tmp_path
+    assert resolve.site_path() == tmp_path / "default"
 
 
 @pytest.mark.parametrize("relative", [False, True])
@@ -38,8 +41,98 @@ def test_data_directory_override(
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("ENSURECONDA_DATA_DIR", str(directory))
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "ignored"))
-    assert resolve.site_path() == directory
+    assert resolve.site_path() == tmp_path / "custom data"
     assert not directory.exists()  # Discovery does not create the directory.
+
+
+@pytest.mark.parametrize(
+    "conda_exe, search_path, expected, version",
+    [
+        ("conda", "bin", "bin", "4.7.12"),
+        ("./conda", "bin", ".", "25.1.0"),
+        ("./conda", "empty", ".", "25.1.0"),
+        ("bin/conda", ".", "bin", "4.7.12"),
+        ("", ".", ".", "25.1.0"),
+        ("", os.pathsep + "empty", ".", "25.1.0"),
+        ("", "bin", "bin", "4.7.12"),
+    ],
+)
+def test_relative_discovery_probes_and_returns_the_same_file(
+    conda_exe: str,
+    search_path: str,
+    expected: str,
+    version: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("PATH", search_path)
+    monkeypatch.setenv("ENSURECONDA_DATA_DIR", "cache")
+    monkeypatch.setenv("PATHEXT", ".CMD")
+    suffix = ".cmd" if sys.platform == "win32" else ""
+    name = "conda" + suffix
+    for directory, output in [(tmp_path, "25.1.0"), (tmp_path / "bin", "4.7.12")]:
+        path = executable_file(directory / name)
+        script = "@echo off" if suffix else "#!/bin/sh"
+        path.write_text(f"{script}\necho conda {output}\n")
+    # On Windows a path with a directory names the file including its extension.
+    if os.path.dirname(conda_exe):
+        conda_exe += suffix
+    monkeypatch.setenv("CONDA_EXE", conda_exe)
+
+    found = api.ensure(["conda"], install="never")
+    assert found == api.CondaExecutable(
+        tmp_path / expected / name, "conda", Version(version)
+    )
+    assert api.identify(Path(name)) == api.CondaExecutable(
+        tmp_path / name, "conda", Version("25.1.0")
+    )
+    monkeypatch.chdir(tmp_path.parent)
+    assert found is not None and api.identify(found.path) == found
+
+
+@pytest.mark.parametrize("path_value", [None, ""])
+def test_missing_or_empty_path_skips_the_working_directory(
+    path_value: Optional[str], tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ENSURECONDA_DATA_DIR", "cache")
+    monkeypatch.setenv("CONDA_EXE", "conda")
+    if path_value is None:
+        monkeypatch.delenv("PATH", raising=False)
+    else:
+        monkeypatch.setenv("PATH", path_value)
+    executable_file(tmp_path / ("conda.exe" if sys.platform == "win32" else "conda"))
+    assert list(resolve.conda_executables()) == []
+
+
+def test_path_lookup_skips_pyenv_shims(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    name = "conda.exe" if sys.platform == "win32" else "conda"
+    shim = executable_file(tmp_path / ".pyenv" / "shims" / name)
+    binary = executable_file(tmp_path / "bin" / name)
+    monkeypatch.setenv("PATH", os.pathsep.join([str(shim.parent), str(binary.parent)]))
+    assert resolve.which_no_shims(name) == str(binary)
+    # An explicitly supplied path already identifies the caller's executable.
+    assert resolve.which_no_shims(str(shim)) == str(shim)
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows executable extensions")
+def test_unset_pathext_uses_default_extensions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("PATHEXT", raising=False)
+    monkeypatch.setenv("PATH", str(tmp_path))
+    executable_file(tmp_path / "conda.CMD")
+    executable = executable_file(tmp_path / "conda.EXE")
+    assert list(resolve.ext_candidates("conda")) == [
+        "conda.COM",
+        "conda.EXE",
+        "conda.BAT",
+        "conda.CMD",
+    ]
+    assert resolve.which_no_shims("conda") == str(executable)
 
 
 @pytest.mark.parametrize("location", ["data", "bin"])
