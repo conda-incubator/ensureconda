@@ -312,7 +312,12 @@ func platformSubdir(goos string, goarch string) (string, error) {
 }
 
 // Execute executes the root command.
-func Execute(version string) error {
+func Execute() error {
+	return ExecuteWithVersion("")
+}
+
+// ExecuteWithVersion executes the root command with the given --version text.
+func ExecuteWithVersion(version string) error {
 	// Cobra adds --version; -v already belongs to --verbosity.
 	rootCmd.Version = version
 	return rootCmd.Execute()

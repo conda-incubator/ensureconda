@@ -543,7 +543,7 @@ func TestForceInstallCLIHelper(t *testing.T) {
 			break
 		}
 	}
-	if err := Execute("test"); err != nil {
+	if err := Execute(); err != nil {
 		t.Fatal(err)
 	}
 }

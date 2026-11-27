@@ -46,7 +46,7 @@ func version() string {
 }
 
 func main() {
-	err := cmd.Execute(version())
+	err := cmd.ExecuteWithVersion(version())
 	if err != nil {
 		os.Exit(1)
 	}
