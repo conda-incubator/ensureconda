@@ -88,3 +88,12 @@ jobs:
           coverage run --parallel-mode -m pytest -vv test --ignore=test/test_go_binaries.py
           coverage combine --append
           coverage report -m
+
+      - name: Check Go locking against Python 3.8's filelock on Windows
+        if: runner.os == 'Windows' && matrix.pixi-env == 'test-py38'
+        env:
+          CGO_ENABLED: "0"
+          ENSURECONDA_EXE: ensureconda.exe
+        run: |
+          go build -o "$ENSURECONDA_EXE" .
+          python -m pytest test/test_go_binaries.py::test_python_and_go_share_one_download

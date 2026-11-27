@@ -4,12 +4,14 @@ import pathlib
 import subprocess
 import sys
 import time
+from contextlib import ExitStack
 from test.helpers import run_container_test
 from typing import Dict, List, Optional
 
 import docker.client
 import docker.models.images
 import pytest
+from filelock import FileLock
 
 
 @pytest.fixture()
@@ -354,35 +356,89 @@ def test_default_directory_matches_python(
         assert python_result.stdout == result.stdout + b"\n"
 
 
+def wait_for_lock(
+    worker: "subprocess.Popen[str]", log: pathlib.Path, waiting: str
+) -> None:
+    deadline = time.monotonic() + 180
+    while waiting not in (messages := log.read_text(errors="replace")):
+        assert worker.poll() is None, messages
+        assert time.monotonic() < deadline, f"Expected {waiting!r}\n{messages}"
+        time.sleep(0.05)
+
+
 @pytest.mark.parametrize(
-    "flags",
+    "flavor, first, exclude",
     [
-        pytest.param(["--no-conda-exe"], id="micromamba"),
-        pytest.param(["--no-micromamba"], id="conda-standalone"),
+        ("micromamba", "python", "--no-conda-exe"),
+        ("conda_standalone", "go", "--no-micromamba"),
     ],
+    ids=["python-installs-micromamba", "go-installs-conda-standalone"],
 )
-def test_find_installed_executable(
+def test_python_and_go_share_one_download(
     golang_exe: Optional[str],
     isolated_env: Dict[str, str],
     tmp_path: pathlib.Path,
     platform: str,
-    flags: List[str],
+    flavor: str,
+    first: str,
+    exclude: str,
 ) -> None:
-    """Both a fresh install and its discovery must print just a usable path."""
     if golang_exe is None:
-        raise pytest.skip("environment variable not set")
-    flags = ["--no-mamba", "--no-conda", *flags]
-    # Hide PATH so that both runs must use ensureconda's data directory.
-    env = {**isolated_env, "PATH": ""}
-    installed = subprocess.check_output([golang_exe, *flags], encoding="utf8", env=env)
-    assert pathlib.Path(installed).is_file()
+        pytest.skip("environment variable not set")
+    commands = {"python": [sys.executable, "-m", "ensureconda"], "go": [golang_exe]}
+    flags = ["--no-mamba", "--no-conda", exclude]
+    env = {**isolated_env, "PATH": str(tmp_path / "empty-bin"), "CONDA_EXE": ""}
+    data = pathlib.Path(env["ENSURECONDA_DATA_DIR"])
+    data.mkdir()
+    target = data / (flavor + (".exe" if platform == "win32" else ""))
+    tool = flavor.replace("_", "-")
+
+    with ExitStack() as children:
+        workers = []
+        # Hold the write lock so that the winner cannot publish the executable
+        # before both other processes reach the download lock.
+        with FileLock(str(target) + ".lock"):
+            for index, language in enumerate([first, "python", "go"]):
+                log = tmp_path / f"{index}-{language}.log"
+                with log.open("wb") as stderr:
+                    worker = children.enter_context(
+                        subprocess.Popen(
+                            [*commands[language], *flags],
+                            cwd=tmp_path,
+                            env=env,
+                            stdout=subprocess.PIPE,
+                            stderr=stderr,
+                            encoding="utf8",
+                        )
+                    )
+                children.callback(worker.kill)
+                workers.append((language, worker, log))
+                if language == "python":
+                    activity = "file write" if index == 0 else "downloading"
+                    waiting = f"Waiting for lock for {activity}"
+                else:
+                    activity = "writing" if index == 0 else "downloading"
+                    waiting = f"waiting for another process to finish {activity}"
+                wait_for_lock(worker, log, waiting)
+
+        downloads: List[str] = []
+        for language, worker, log in workers:
+            path, _ = worker.communicate(timeout=180)
+            messages = log.read_text(errors="replace")
+            assert worker.returncode == 0, messages
+            assert path == str(target) + ("\n" if language == "python" else "")
+            downloads.extend(
+                line
+                for line in messages.splitlines()
+                if f"{tool}: downloading https://" in line
+                or (f"downloading {tool}" in line and "https://" in line)
+            )
+    assert len(downloads) == 1, downloads
+    assert target.is_file()
     found = subprocess.check_output(
-        [golang_exe, "--no-install", *flags], encoding="utf8", env=env
+        [golang_exe, "--no-install", *flags], encoding="utf8", cwd=tmp_path, env=env
     )
-    # On Windows, a found executable's extension is spelled as in PATHEXT
-    # (".EXE"), while a fresh install reports ".exe".
-    assert os.path.normcase(found) == os.path.normcase(installed)
-    assert pathlib.Path(installed).parent == tmp_path / "ensure-conda"
+    assert pathlib.Path(found) == target
 
 
 @pytest.mark.parametrize("as_json", [False, True], ids=["plain", "json"])
