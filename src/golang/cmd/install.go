@@ -560,11 +560,10 @@ func newestCompatible(candidates []AnacondaPkg, minimum pep440.Version, tool, su
 }
 
 func selectMicromamba(latest, subdir string, minimum pep440.Version) (AnacondaPkg, error) {
-	resp, err := requestURLWithRetryMode(latest, true)
+	resp, err := requestURLMode(latest, true)
 	if err != nil {
-		return AnacondaPkg{}, err
-	}
-	if resp.statusCode == 404 {
+		log.Warnf("micromamba: lookup at %s failed (%v); checking release metadata", latest, err)
+	} else if resp.statusCode == 404 {
 		log.Infof("micromamba: no build of the latest release for %s; checking release metadata", subdir)
 	} else {
 		latestURL, _ := url.Parse(latest)

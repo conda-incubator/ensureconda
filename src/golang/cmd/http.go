@@ -151,14 +151,10 @@ func retryableRequestError(err error) bool {
 // requestURLWithRetry reads the entire body into the returned response, so
 // that a truncated or stalled body is retried like any other failure.
 func requestURLWithRetry(rawURL string) (*response, error) {
-	return requestURLWithRetryMode(rawURL, false)
-}
-
-func requestURLWithRetryMode(rawURL string, headersOnly bool) (*response, error) {
 	deadline := retryNow().Add(retryTimeBudget)
 	backoff := time.Second
 	for attempt := 1; ; attempt++ {
-		resp, err := requestURLMode(rawURL, headersOnly)
+		resp, err := requestURL(rawURL)
 		if err == nil {
 			return resp, nil
 		}
