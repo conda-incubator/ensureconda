@@ -58,6 +58,7 @@ def test_install_and_force_refresh(
     golang_exe: Optional[str],
     isolated_env: Dict[str, str],
     tmp_path: pathlib.Path,
+    monkeypatch: pytest.MonkeyPatch,
     platform: str,
     flags: List[str],
     replace_rejected: bool,
@@ -66,6 +67,7 @@ def test_install_and_force_refresh(
         raise pytest.skip("environment variable not set")
     data = tmp_path / "ensure-conda"
     data.mkdir()
+    monkeypatch.chdir(data)
     standalone = "--no-micromamba" in flags
     if platform != "win32":
         # Model a developer's populated cache: another usable flavor must not
@@ -91,7 +93,12 @@ def test_install_and_force_refresh(
     print(args)
     # Both implementations must use the install directory, even on hosts with
     # conda already installed or CONDA_EXE set by an activated environment.
-    env = {**isolated_env, "PATH": "", "CONDA_EXE": ""}
+    env = {
+        **isolated_env,
+        "ENSURECONDA_DATA_DIR": ".",
+        "PATH": str(tmp_path / "empty-bin"),
+        "CONDA_EXE": "",
+    }
     run = subprocess.run(
         args, capture_output=True, check=True, encoding="utf8", env=env
     )

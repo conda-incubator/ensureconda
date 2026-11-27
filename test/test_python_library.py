@@ -129,17 +129,11 @@ def test_ensure_in_python_image(
 def test_locally_install(
     tmp_path: pathlib.Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # The order of these tests matter
-    import appdirs
-
-    def user_data_dir(*args: Any, **kwargs: Any) -> str:
-        return str(tmp_path)
-
-    monkeypatch.setattr(appdirs, "user_data_dir", user_data_dir)
-
     from ensureconda.api import ensureconda
     from ensureconda.resolve import is_windows
 
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("ENSURECONDA_DATA_DIR", ".")
     monkeypatch.delenv("CONDA_EXE", raising=False)
     # remove all paths from $PATH until we don't have a conda executable
     conda_executable = ensureconda(no_install=True)
