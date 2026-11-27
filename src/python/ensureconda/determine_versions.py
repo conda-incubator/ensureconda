@@ -73,6 +73,18 @@ def _run_version(exe: _StrPath) -> Union[str, Exception]:
         return error
 
 
+def _has_failed_probe(path: Path, observations: Optional[_Observations]) -> bool:
+    if not observations or not os.path.dirname(path):
+        return False
+    key = _observation_key(path)
+    recorded = observations.get(key) if key is not None else None
+    return (
+        recorded is not None
+        and isinstance(recorded[1], subprocess.CalledProcessError)
+        and recorded[0] == _fingerprint(path)
+    )
+
+
 def _version_output(exe: _StrPath, observations: Optional[_Observations]) -> str:
     key: Optional[str] = None
     current: Optional[_Fingerprint] = None
@@ -324,6 +336,8 @@ def check_executable(
                         reason,
                     )
                 return None
+    elif _has_failed_probe(path, observations):
+        return None
     match = match_version(version, constraint)
     if match is not VersionMatch.ACCEPTED:
         if rejection_level is not None:
