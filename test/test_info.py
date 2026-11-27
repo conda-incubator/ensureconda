@@ -1,6 +1,7 @@
 import json
 import subprocess
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, Callable, Dict, List, cast
 
@@ -67,6 +68,10 @@ def test_ensure_reports_flavor_and_version(
     info = ensure(install="never")
 
     assert info == CondaExecutable(MICROMAMBA, "micromamba", Version("2.9.0"))
+    assert not isinstance(info, Iterable)
+    assert {info} == {CondaExecutable(MICROMAMBA, "micromamba", Version("2.9.0"))}
+    with pytest.raises(AttributeError):
+        setattr(info, "path", Path("elsewhere"))
     assert info.to_json() == {
         "path": str(MICROMAMBA),
         "flavor": "micromamba",

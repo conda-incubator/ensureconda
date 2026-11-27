@@ -93,7 +93,9 @@ $ ensureconda --json
 ```python
 import ensureconda
 
-ensureconda.ensure()  # CondaExecutable(path, flavor, version), or None
+result = ensureconda.ensure()
+if result is not None:
+    print(result.path, result.flavor, result.version)
 ensureconda.ensure(["micromamba>=2,<3", "conda>=24"])
 ensureconda.ensure(["conda", "micromamba"], install="never")
 ensureconda.identify("/opt/conda/bin/conda")  # Describe a given executable
