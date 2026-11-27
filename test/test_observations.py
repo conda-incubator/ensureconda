@@ -116,6 +116,44 @@ def test_requirements_apply_to_one_observation(
     assert runs() == 1
 
 
+@pytest.mark.parametrize(
+    "body, accepted",
+    [
+        ("exit 1", False),
+        ("echo unrecognized", True),
+        ("printf '\\377\\n'", True),
+        ("printf '\\377\\n'\nexit 1", False),
+        ('echo "#" >> "$0"\nexit 1', True),
+    ],
+    ids=[
+        "failed",
+        "unknown-version",
+        "undecodable-output",
+        "failed-with-undecodable-output",
+        "file-changed-during-probe",
+    ],
+)
+def test_unprobed_target_uses_only_a_current_failure(
+    body: str,
+    accepted: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    runs: Callable[[], int],
+) -> None:
+    micromamba = stand_in(tmp_path / "micromamba", body)
+    monkeypatch.setenv("ENSURECONDA_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("PATH", "")
+
+    result = api.ensure(
+        ["micromamba>=1", "micromamba"], install="never", probe_version=False
+    )
+
+    assert result == (
+        CondaExecutable(micromamba, "micromamba", None) if accepted else None
+    )
+    assert runs() == 1
+
+
 @pytest.mark.parametrize("probe_version", [True, False])
 def test_bare_target_accepts_prerelease_after_constrained_target(
     probe_version: bool,

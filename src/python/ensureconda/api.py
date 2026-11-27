@@ -235,8 +235,10 @@ def ensure(
 
     With probe_version=False, probe installed candidates only when constrained,
     and omit unconstrained result versions, even after an earlier target
-    probed the same file. Downloaded executables must always run
-    successfully; without a constraint, an unreadable version is acceptable.
+    probed the same file. Skip a file if this call still has a valid record
+    that its version probe exited unsuccessfully. Downloaded executables must
+    always run successfully. An unconstrained download can report an unreadable
+    version.
     Select the newest package satisfying the constraint before downloading.
     Micromamba uses the latest redirect first, then release metadata if needed.
     A target with no matching published version permits later targets, including

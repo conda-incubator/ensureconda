@@ -66,11 +66,30 @@ def _observation_key(path: _StrPath) -> Optional[str]:
 
 def _run_version(exe: _StrPath) -> Union[str, Exception]:
     try:
-        return subprocess.check_output(
-            [exe, "--version"], stderr=subprocess.DEVNULL, encoding="utf-8"
-        )
-    except (subprocess.CalledProcessError, OSError, UnicodeDecodeError) as error:
+        # Check the exit status before decoding stdout. A decode error on its
+        # own means the command ran successfully and its version is unknown.
+        output = subprocess.check_output([exe, "--version"], stderr=subprocess.DEVNULL)
+        return output.decode("utf-8")
+    except subprocess.CalledProcessError as error:
+        # The public version helpers expose the captured output as text.
+        if error.output is not None:
+            text = error.output.decode("utf-8", errors="replace")
+            error.output = text.replace("\r\n", "\n").replace("\r", "\n")
         return error
+    except (OSError, UnicodeDecodeError) as error:
+        return error
+
+
+def _has_failed_probe(path: Path, observations: Optional[_Observations]) -> bool:
+    if not observations or not os.path.dirname(path):
+        return False
+    key = _observation_key(path)
+    recorded = observations.get(key) if key is not None else None
+    return (
+        recorded is not None
+        and isinstance(recorded[1], subprocess.CalledProcessError)
+        and recorded[0] == _fingerprint(path)
+    )
 
 
 def _version_output(exe: _StrPath, observations: Optional[_Observations]) -> str:
@@ -325,6 +344,8 @@ def check_executable(
                         reason,
                     )
                 return None
+    elif _has_failed_probe(path, observations):
+        return None
     match = match_version(version, constraint)
     if match is not VersionMatch.ACCEPTED:
         if rejection_level is not None:

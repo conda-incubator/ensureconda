@@ -442,12 +442,12 @@ def test_download_with_unknown_version(
     cached = tmp_path / ("micromamba" + installer.exe_suffix())
     cached.write_bytes(b"old")
 
-    def check_output(*args: Any, **kwargs: Any) -> str:
+    def check_output(*args: Any, **kwargs: Any) -> bytes:
         if output == "undecodable":
-            return b"\xff".decode()
+            return b"\xff"
         if output == "nonzero":
             raise subprocess.CalledProcessError(1, "micromamba --version")
-        return output
+        return output.encode()
 
     monkeypatch.setattr(subprocess, "check_output", check_output)
     if target == "micromamba" and output != "nonzero":
@@ -462,13 +462,38 @@ def test_download_with_unknown_version(
         assert cached.read_bytes() == b"old"
 
 
+@pytest.mark.skipif(is_windows, reason="the downloaded executable is a shell script")
+def test_failed_download_with_undecodable_output_preserves_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(installer, "site_path", lambda: tmp_path)
+    cached = tmp_path / "micromamba"
+    original = b"#!/bin/sh\necho 2.0\n"
+    cached.write_bytes(original)
+    cached.chmod(0o755)
+    serve_package(
+        monkeypatch,
+        "micromamba",
+        content=b"#!/bin/sh\nprintf 'error\\r\\n\\377'\nexit 7\n",
+    )
+
+    with pytest.raises(installer.DownloadedExecutableError) as error:
+        api.ensure(["micromamba"], install="force")
+
+    cause = error.value.__cause__
+    assert isinstance(cause, subprocess.CalledProcessError)
+    assert cause.returncode == 7
+    assert cause.output == "error\n\ufffd"
+    assert cached.read_bytes() == original
+
+
 def test_legacy_zero_minimum_rejects_download_with_unknown_version(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("ENSURECONDA_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("PATH", str(tmp_path / "empty-bin"))
     serve_package(monkeypatch, "micromamba")
-    monkeypatch.setattr(subprocess, "check_output", lambda *args, **kwargs: "")
+    monkeypatch.setattr(subprocess, "check_output", lambda *args, **kwargs: b"")
 
     with pytest.raises(
         installer.DownloadedExecutableError, match="reports unknown version"

@@ -29,12 +29,12 @@ def fake_version_outputs(
     """Answer `<exe> --version` from outputs, keyed by file name; return the calls."""
     calls: List[str] = []
 
-    def check_output(args: List[Any], **kwargs: Any) -> str:
+    def check_output(args: List[Any], **kwargs: Any) -> bytes:
         name = Path(args[0]).name
         calls.append(name)
         if name not in outputs:
             raise subprocess.CalledProcessError(1, args)
-        return outputs[name]
+        return outputs[name].encode()
 
     monkeypatch.setattr(subprocess, "check_output", check_output)
     return calls
