@@ -4,6 +4,7 @@ import logging
 import os
 import subprocess
 import sys
+from dataclasses import dataclass
 from enum import Enum, auto
 from pathlib import Path
 from typing import (
@@ -11,7 +12,6 @@ from typing import (
     Callable,
     Dict,
     Literal,
-    NamedTuple,
     Optional,
     Tuple,
     Union,
@@ -174,10 +174,11 @@ Flavor = Literal["mamba", "micromamba", "conda", "conda_standalone"]
 _VersionConstraint = Optional[Union[Version, SpecifierSet]]
 
 
-class CondaExecutable(NamedTuple):
+@dataclass(frozen=True)
+class CondaExecutable:
     """An executable that ensureconda found, installed, or identified.
 
-    Later releases may add fields.
+    Read the fields by name. Later releases may add fields.
     """
 
     path: Path
