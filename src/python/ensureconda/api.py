@@ -39,7 +39,7 @@ from ensureconda.determine_versions import (
 from ensureconda.determine_versions import (
     determine_micromamba_version as determine_micromamba_version,
 )
-from ensureconda.determine_versions import requirement_text
+from ensureconda.determine_versions import has_version_constraint, requirement_text
 from ensureconda.installer import (
     DownloadedExecutableError,
     NoCompatibleVersionError,
@@ -163,11 +163,11 @@ def ensureconda(
     return None if result is None else result.path
 
 
-def _parse_target(target: str) -> Tuple[Flavor, Optional[SpecifierSet]]:
+def _parse_target(target: str) -> Tuple[Flavor, SpecifierSet]:
     """Parse a tool name and optional version constraints.
 
     >>> _parse_target("Conda-Standalone")
-    ('conda_standalone', None)
+    ('conda_standalone', <SpecifierSet('')>)
     >>> flavor, constraint = _parse_target("micromamba>=2,<3")
     >>> flavor
     'micromamba'
@@ -198,7 +198,7 @@ def _parse_target(target: str) -> Tuple[Flavor, Optional[SpecifierSet]]:
         )
     if requirement.extras or requirement.marker is not None or requirement.url:
         raise ValueError(f"Invalid target {target!r}")
-    return flavor, requirement.specifier or None
+    return flavor, requirement.specifier
 
 
 def ensure(
@@ -210,7 +210,10 @@ def ensure(
     """Find or install an executable matching an ordered sequence of targets.
 
     Each target names mamba, micromamba, conda, or conda_standalone, optionally
-    followed by version constraints such as ">=2,<3".
+    followed by version constraints such as ">=2,<3". A constrained target
+    skips prereleases unless it requests one, for example "micromamba>=2.0rc1".
+    A bare target accepts an executable reporting any version, including a
+    prerelease. When choosing a package to download, it selects a stable release.
 
     install selects when installation is attempted. Only micromamba and
     conda_standalone can be installed.
@@ -230,7 +233,8 @@ def ensure(
     satisfy unconstrained targets, with version=None.
 
     With probe_version=False, probe installed candidates only when constrained,
-    and omit unconstrained result versions. Downloads must always run
+    and omit unconstrained result versions, even after an earlier target
+    probed the same file. Downloaded executables must always run
     successfully; without a constraint, an unreadable version is acceptable.
     Select the newest package satisfying the constraint before downloading.
     Micromamba uses the latest redirect first, then release metadata if needed.
@@ -381,9 +385,12 @@ def _ensure(
                 continue
             candidates = iter([installed_path])
         else:
-            logger.debug(
-                "Searching for %s matching %s", flavor, requirement_text(constraint)
-            )
+            if has_version_constraint(constraint) or probe_version:
+                logger.debug(
+                    "Searching for %s matching %s", flavor, requirement_text(constraint)
+                )
+            else:
+                logger.debug("Searching for %s without probing its version", flavor)
             candidates = finders[flavor]()
         for path in candidates:
             result = check_executable(

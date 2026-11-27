@@ -4,6 +4,7 @@ import logging
 import os
 import subprocess
 import sys
+from enum import Enum, auto
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
@@ -168,7 +169,8 @@ def _conda_version(output: str) -> Version:
 
 
 Flavor = Literal["mamba", "micromamba", "conda", "conda_standalone"]
-# Version is an old-API minimum; SpecifierSet is a new-API constraint.
+# The old API supplies a minimum Version or None. The new API supplies a
+# SpecifierSet, including an empty one for a bare target.
 _VersionConstraint = Optional[Union[Version, SpecifierSet]]
 
 
@@ -210,25 +212,79 @@ def _probe_version(
     return version
 
 
-def version_satisfies(
-    version: Optional[Version], constraint: _VersionConstraint
-) -> bool:
-    if isinstance(constraint, Version):
-        # Preserve the old API's unknown-version sentinel and direct comparison.
-        return (
-            version if version is not None else _LEGACY_UNKNOWN_VERSION
-        ) >= constraint
-    if constraint is None:
-        return True
-    return version is not None and constraint.contains(version, prereleases=True)
+def _requests_prerelease(constraint: SpecifierSet) -> bool:
+    for clause in constraint:
+        if clause.operator != "!=":
+            try:
+                if Version(clause.version).is_prerelease:
+                    return True
+            except InvalidVersion:
+                # Wildcards and arbitrary equality can contain non-versions.
+                pass
+    return False
+
+
+def has_version_constraint(constraint: _VersionConstraint) -> bool:
+    """A legacy minimum or a nonempty specifier requires a version probe."""
+    return isinstance(constraint, Version) or bool(constraint)
 
 
 def requirement_text(constraint: _VersionConstraint) -> str:
-    return (
-        f">={constraint}"
-        if isinstance(constraint, Version)
-        else str(constraint or "any version")
-    )
+    if not has_version_constraint(constraint):
+        return "any version"
+    if isinstance(constraint, Version):
+        return f">={constraint}"
+    return str(constraint)
+
+
+class VersionMatch(Enum):
+    ACCEPTED = auto()
+    UNKNOWN = auto()
+    MISMATCH = auto()
+    PRERELEASE_NOT_REQUESTED = auto()
+
+    def rejection_text(self, constraint: _VersionConstraint) -> str:
+        requirement = requirement_text(constraint)
+        if self is VersionMatch.PRERELEASE_NOT_REQUESTED:
+            if not has_version_constraint(constraint):
+                requirement = "a stable release"
+            return f"{requirement} (prereleases must be requested explicitly)"
+        return requirement
+
+
+def match_version(
+    version: Optional[Version], constraint: _VersionConstraint
+) -> VersionMatch:
+    """Match the running executable, whose version can differ from its package."""
+    if not has_version_constraint(constraint):
+        return VersionMatch.ACCEPTED
+    if version is None:
+        # The old API compares unrecognized output as version 0.0.0.
+        if isinstance(constraint, Version) and _LEGACY_UNKNOWN_VERSION >= constraint:
+            return VersionMatch.ACCEPTED
+        return VersionMatch.UNKNOWN
+    return match_package_version(version, constraint)
+
+
+def match_package_version(
+    version: Version, constraint: _VersionConstraint
+) -> VersionMatch:
+    """A bare ensure() target selects only stable published versions."""
+    if isinstance(constraint, Version):
+        return VersionMatch.ACCEPTED if version >= constraint else VersionMatch.MISMATCH
+    if constraint is None:
+        return VersionMatch.ACCEPTED
+    if not constraint.contains(version, prereleases=True):
+        return VersionMatch.MISMATCH
+    if version.is_prerelease and not _requests_prerelease(constraint):
+        return VersionMatch.PRERELEASE_NOT_REQUESTED
+    return VersionMatch.ACCEPTED
+
+
+def version_satisfies(
+    version: Optional[Version], constraint: _VersionConstraint
+) -> bool:
+    return match_version(version, constraint) is VersionMatch.ACCEPTED
 
 
 def check_executable(
@@ -241,7 +297,8 @@ def check_executable(
     rejection_level: Optional[int] = logging.INFO,
 ) -> Optional[CondaExecutable]:
     version = None
-    if constraint is not None or probe_version:
+    constrained = has_version_constraint(constraint)
+    if constrained or probe_version:
         try:
             version = _probe_version(path, flavor, observations)
         except (
@@ -252,7 +309,7 @@ def check_executable(
         ) as error:
             # Unknown metadata is acceptable without a constraint, but a
             # command that cannot run must never pass a requested probe.
-            if constraint is not None or isinstance(
+            if constrained or isinstance(
                 error, (subprocess.CalledProcessError, OSError)
             ):
                 reason = (
@@ -267,8 +324,8 @@ def check_executable(
                         reason,
                     )
                 return None
-    if not version_satisfies(version, constraint):
-        requirement = requirement_text(constraint)
+    match = match_version(version, constraint)
+    if match is not VersionMatch.ACCEPTED:
         if rejection_level is not None:
             found_version = version if version is not None else "unknown version"
             logger.log(
@@ -276,7 +333,7 @@ def check_executable(
                 "Rejected %s %s: requires %s",
                 path,
                 found_version,
-                requirement,
+                match.rejection_text(constraint),
             )
         return None
     return CondaExecutable(path, flavor, version)
