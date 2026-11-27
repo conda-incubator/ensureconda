@@ -131,7 +131,11 @@ class _HeadersOnlySession(requests.Session):
 
 
 def request_url_with_retry(
-    url: str, *, destination: Optional[IO[bytes]] = None, follow_redirects: bool = True
+    url: str,
+    *,
+    destination: Optional[IO[bytes]] = None,
+    follow_redirects: bool = True,
+    retry: bool = True,
 ) -> requests.Response:
     """Retrieve a URL, retrying transient failures during the entire download.
 
@@ -142,6 +146,7 @@ def request_url_with_retry(
 
     With follow_redirects=False, return headers without reading the body, and
     return a 404 instead of raising; the latest-version lookup expects both.
+    With retry=False, let the caller handle the first failure.
 
     Retry-After on retryable HTTP responses can extend an individual wait.
     Schedule retries only within RETRY_TIME_BUDGET_SEC seconds of the initial
@@ -182,6 +187,8 @@ def request_url_with_retry(
                     destination.seek(0)
                 return response
         except requests.exceptions.RequestException as error:
+            if not retry:
+                raise
             retryable = isinstance(
                 error,
                 (
@@ -609,12 +616,20 @@ def select_candidate(
     )
 
 
-def select_micromamba(
+def _latest_micromamba(
     subdir: str, constraint: _VersionConstraint
-) -> Tuple[str, Version, Optional[str]]:
+) -> Optional[Tuple[str, Version]]:
     latest = f"https://micro.mamba.pm/api/micromamba/{subdir}/latest"
     logger.debug("Checking latest micromamba at %s", latest)
-    response = request_url_with_retry(latest, follow_redirects=False)
+    try:
+        response = request_url_with_retry(latest, follow_redirects=False, retry=False)
+    except requests.RequestException as error:
+        logger.warning(
+            "micromamba: lookup at %s failed (%s); checking release metadata",
+            latest,
+            error,
+        )
+        return None
     if response.status_code == 404:
         logger.info(
             "micromamba: no build of the latest release for %s; checking release metadata",
@@ -650,7 +665,7 @@ def select_micromamba(
                 logger.info(
                     "micromamba: selected latest version %s for %s", version, subdir
                 )
-                return artifact, version, None
+                return artifact, version
             logger.info(
                 "micromamba: latest version %s does not satisfy %s; checking release metadata",
                 version,
@@ -660,6 +675,16 @@ def select_micromamba(
             logger.info(
                 "micromamba: latest response did not identify a release; checking release metadata"
             )
+    return None
+
+
+def select_micromamba(
+    subdir: str, constraint: _VersionConstraint
+) -> Tuple[str, Version, Optional[str]]:
+    latest = _latest_micromamba(subdir, constraint)
+    if latest is not None:
+        url, version = latest
+        return url, version, None
     candidates = compute_candidates("conda-forge", subdir, "micromamba")
     chosen = select_candidate(candidates, constraint, "micromamba", subdir)
     logger.info("micromamba: selected version %s for %s", chosen.version, subdir)

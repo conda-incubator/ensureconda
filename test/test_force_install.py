@@ -78,11 +78,13 @@ def test_force_install_replaces_fresh_cache(
         *,
         destination: Optional[IO[bytes]] = None,
         follow_redirects: bool = True,
+        retry: bool = True,
     ) -> requests.Response:
         with pytest.raises(filelock.Timeout):
             filelock.FileLock(str(tmp_path / lock_name)).acquire(timeout=0)
         response = requests.Response()
         if not follow_redirects:
+            assert not retry
             response.status_code = 307
             response.headers["Location"] = (
                 f"https://conda.anaconda.org/conda-forge/{platform_subdir()}/micromamba-25.1-0.tar.bz2"
@@ -184,12 +186,15 @@ def test_force_download_failure_preserves_existing_executable(
     target = tmp_path / (tool + installer.exe_suffix())
     target.write_bytes(b"old executable")
     monkeypatch.setattr(installer, "site_path", lambda: tmp_path)
-    monkeypatch.setattr(
-        installer,
-        "request_url_with_retry",
-        Mock(side_effect=requests.ConnectionError("offline")),
-    )
-    with pytest.raises(requests.ConnectionError, match="offline"):
+
+    def unavailable(url: str, **kwargs: object) -> requests.Response:
+        if url.endswith("/latest"):
+            raise requests.Timeout("redirect service timed out")
+        assert url.endswith("/files")
+        raise requests.ConnectionError("metadata offline")
+
+    monkeypatch.setattr(installer, "request_url_with_retry", unavailable)
+    with pytest.raises(requests.ConnectionError, match="metadata offline"):
         api.ensure([tool], install="force")
     assert target.read_bytes() == b"old executable"
 
