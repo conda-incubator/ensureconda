@@ -156,7 +156,7 @@ func TestEnsureCondaInstalledMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	subdir, err := PlatformSubdir()
+	subdir, err := currentPlatformSubdir()
 	if err != nil {
 		t.Fatal(err)
 	}

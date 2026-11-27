@@ -281,7 +281,14 @@ type ArchSpec struct {
 	arch string
 }
 
-func PlatformSubdir() (string, error) {
+// PlatformSubdir returns the conda subdir for this platform, or an empty
+// string if the platform has no known subdir.
+func PlatformSubdir() string {
+	subdir, _ := currentPlatformSubdir()
+	return subdir
+}
+
+func currentPlatformSubdir() (string, error) {
 	return platformSubdir(runtime.GOOS, runtime.GOARCH)
 }
 

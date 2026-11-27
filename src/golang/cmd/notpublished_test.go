@@ -29,7 +29,7 @@ func unpublishMicromamba(t *testing.T) {
 }
 
 func TestInstallMicromambaTellsUnpublishedFromFailedDownload(t *testing.T) {
-	subdir, err := PlatformSubdir()
+	subdir, err := currentPlatformSubdir()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -78,7 +78,7 @@ func logged(messages logMessages) []string {
 }
 
 func TestEnsureCondaFallsBackWhenMicromambaIsNotPublished(t *testing.T) {
-	subdir, err := PlatformSubdir()
+	subdir, err := currentPlatformSubdir()
 	if err != nil {
 		t.Fatal(err)
 	}

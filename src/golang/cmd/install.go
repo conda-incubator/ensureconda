@@ -49,7 +49,7 @@ func InstallMicromamba() (string, error) {
 }
 
 func installMicromambaForPlatform(obs *observer, forceInstall bool) (string, error) {
-	subdir, err := PlatformSubdir()
+	subdir, err := currentPlatformSubdir()
 	if err != nil {
 		return "", err
 	}
@@ -133,7 +133,7 @@ func InstallCondaStandalone() (string, error) {
 
 func installCondaStandalone(obs *observer, forceInstall bool) (string, error) {
 	// Get the most recent conda-standalone
-	subdir, err := PlatformSubdir()
+	subdir, err := currentPlatformSubdir()
 	if err != nil {
 		return "", err
 	}
@@ -343,7 +343,7 @@ func installMicromamba(obs *observer, url string, forceInstall bool) (string, er
 			return target, nil
 		}
 	}
-	subdir, err := PlatformSubdir()
+	subdir, err := currentPlatformSubdir()
 	if err != nil {
 		return "", err
 	}
