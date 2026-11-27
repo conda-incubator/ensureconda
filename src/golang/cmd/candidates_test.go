@@ -7,10 +7,17 @@ import (
 )
 
 func TestSelectCandidates(t *testing.T) {
-	pkg := func(version, subdir, build string, labels []string) AnacondaPkg {
-		return AnacondaPkg{DownloadUrl: "//example.invalid/package.conda", Version: version, Labels: labels, Attrs: AnacondaPkgAttr{Subdir: subdir, Build: build}}
+	pkg := func(version, subdir, build string, labels []string) packageFile {
+		return packageFile{
+			AnacondaPkg: AnacondaPkg{
+				DownloadUrl: "//example.invalid/package.conda",
+				Version:     version,
+				Attrs:       AnacondaPkgAttr{Subdir: subdir, Build: build},
+			},
+			Labels: labels,
+		}
 	}
-	data := []AnacondaPkg{
+	data := []packageFile{
 		pkg("1.0", "linux-64", "h0_0", []string{"main"}),
 		// conda-forge labels builds it marks as broken "broken", and some of
 		// them keep "main".

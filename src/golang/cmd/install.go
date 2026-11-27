@@ -72,6 +72,11 @@ type AnacondaPkg struct {
 	DownloadUrl string          `json:"download_url"`
 	// Sha256 is empty for older conda-forge files, which lack a digest.
 	Sha256 string `json:"sha256"`
+}
+
+// packageFile carries the labels used to filter a channel's file listing.
+type packageFile struct {
+	AnacondaPkg
 	// Labels is nil when the listing omits them.
 	Labels []string `json:"labels"`
 }
@@ -198,7 +203,7 @@ func computePackageCandidates(channel, subdir, packageName string) ([]AnacondaPk
 	if err != nil {
 		return nil, fmt.Errorf("GET candidates: %w", err)
 	}
-	var data []AnacondaPkg
+	var data []packageFile
 	if err := json.Unmarshal(resp.body, &data); err != nil {
 		return nil, fmt.Errorf("decoding candidates from %s: %w", url, err)
 	}
@@ -215,7 +220,7 @@ func computePackageCandidates(channel, subdir, packageName string) ([]AnacondaPk
 }
 
 // selectCandidates returns the packages in data that are suitable for subdir.
-func selectCandidates(data []AnacondaPkg, subdir, packageName string) []AnacondaPkg {
+func selectCandidates(data []packageFile, subdir, packageName string) []AnacondaPkg {
 	candidates := make([]AnacondaPkg, 0)
 	for _, datum := range data {
 		if datum.Attrs.Subdir != subdir ||
@@ -242,7 +247,7 @@ func selectCandidates(data []AnacondaPkg, subdir, packageName string) []Anaconda
 			}).Warnf("skipping unparseable %s version", packageName)
 			continue
 		}
-		candidates = append(candidates, datum)
+		candidates = append(candidates, datum.AnacondaPkg)
 	}
 	return candidates
 }
