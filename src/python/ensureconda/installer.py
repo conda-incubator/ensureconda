@@ -35,11 +35,13 @@ from packaging.version import InvalidVersion, Version
 from ensureconda import determine_versions
 from ensureconda.determine_versions import (
     Flavor,
+    VersionMatch,
     _Observations,
     _VersionConstraint,
     check_executable,
-    requirement_text,
-    version_satisfies,
+    has_version_constraint,
+    match_package_version,
+    match_version,
 )
 from ensureconda.resolve import is_exe, is_windows, platform_subdir, site_path
 
@@ -594,11 +596,15 @@ def select_candidate(
     package: str,
     subdir: str,
 ) -> AnacondaPkg:
+    reason = VersionMatch.MISMATCH
     for candidate in reversed(candidates):
-        if version_satisfies(Version(candidate.version), constraint):
+        match = match_package_version(Version(candidate.version), constraint)
+        if match is VersionMatch.ACCEPTED:
             return candidate
+        if match is VersionMatch.PRERELEASE_NOT_REQUESTED:
+            reason = match
     raise NoCompatibleVersionError(
-        f"{package}: no published version for {subdir} satisfies {requirement_text(constraint)}; "
+        f"{package}: no published version for {subdir} satisfies {reason.rejection_text(constraint)}; "
         f"newest available is {candidates[-1].version}"
     )
 
@@ -639,7 +645,8 @@ def select_micromamba(
             # the release; the full metadata can still provide a usable build.
             pass
         if version is not None:
-            if version_satisfies(version, constraint):
+            match = match_package_version(version, constraint)
+            if match is VersionMatch.ACCEPTED:
                 logger.info(
                     "micromamba: selected latest version %s for %s", version, subdir
                 )
@@ -647,7 +654,7 @@ def select_micromamba(
             logger.info(
                 "micromamba: latest version %s does not satisfy %s; checking release metadata",
                 version,
-                requirement_text(constraint),
+                match.rejection_text(constraint),
             )
         else:
             logger.info(
@@ -728,19 +735,23 @@ def validate_download(path: Path, validation: DownloadValidation) -> None:
         ) from error
     except (InvalidVersion, UnicodeDecodeError):
         version = None
-    if version is None and validation.constraint is None:
+    if version is None and has_version_constraint(validation.constraint):
+        # A staged executable must report a version for every explicit minimum.
+        match = VersionMatch.UNKNOWN
+    else:
+        match = match_version(version, validation.constraint)
+    if match is not VersionMatch.ACCEPTED:
+        raise DownloadedExecutableError(
+            f"{tool}: downloaded executable reports {version or 'unknown version'}, "
+            f"expected {validation.expected_version} satisfying {match.rejection_text(validation.constraint)}"
+        )
+    if version is None:
         logger.info(
             "%s: downloaded executable ran but reported no recognizable version (package version %s)",
             tool,
             validation.expected_version,
         )
-        return
-    if version is None or not version_satisfies(version, validation.constraint):
-        raise DownloadedExecutableError(
-            f"{tool}: downloaded executable reports {version or 'unknown version'}, "
-            f"expected {validation.expected_version} satisfying {requirement_text(validation.constraint)}"
-        )
-    if version == validation.expected_version:
+    elif version == validation.expected_version:
         logger.info("%s: validated executable version %s", tool, version)
     else:
         logger.info(

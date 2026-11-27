@@ -109,6 +109,10 @@ constraints in Python packaging's version-specifier syntax, such as `>=2,<3` or
 and such an executable can't satisfy a constraint. Later releases may add
 fields to the result or keys to `ensureconda --json`.
 
+Version constraints skip prereleases unless you request one, as in
+`micromamba>=2.0rc1`. A plain `micromamba` target can use an installed
+prerelease and downloads a stable release if needed.
+
 The `install` argument selects when installation is attempted. Only
 `micromamba` and `conda_standalone` can be installed.
 

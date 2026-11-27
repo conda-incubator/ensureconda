@@ -340,10 +340,23 @@ def test_each_tool_uses_its_own_old_api_minimum(
     ) == (path if minimum == "1" else None)
 
 
-@pytest.mark.parametrize("installed", [False, True])
-@pytest.mark.parametrize("target", ["micromamba>=1", "micromamba>=1,<3"])
-def test_prereleases_satisfy_target_constraints(
-    installed: bool, target: str, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("installed", [False, True], ids=["installer-result", "found"])
+@pytest.mark.parametrize("probe_version", [True, False])
+@pytest.mark.parametrize(
+    "target, accepts_rc",
+    [
+        ("micromamba", True),
+        ("micromamba>=1", False),
+        ("micromamba>=1,<3", False),
+        ("micromamba>=2.0rc1,<3", True),
+    ],
+)
+def test_prerelease_selection(
+    installed: bool,
+    probe_version: bool,
+    target: str,
+    accepts_rc: bool,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     if installed:
         monkeypatch.setattr(api, "micromamba_executables", lambda: iter([MICROMAMBA]))
@@ -351,12 +364,21 @@ def test_prereleases_satisfy_target_constraints(
         monkeypatch.setattr(
             api, "install_micromamba", lambda *args, **kwargs: MICROMAMBA
         )
-    fake_version_outputs(monkeypatch, {"micromamba": "2.0rc1"})
+    monkeypatch.setattr(api, "conda_executables", lambda: iter([CONDA]))
+    fake_version_outputs(monkeypatch, {"micromamba": "2.0rc1", "conda": "conda 25"})
 
-    # Pin today's policy until the explicit prerelease-policy change in #123.
-    assert ensure([target]) == CondaExecutable(
-        MICROMAMBA, "micromamba", Version("2.0rc1")
+    result = ensure(
+        [target, "conda"],
+        install="never" if installed else "per-target",
+        probe_version=probe_version,
     )
+    if accepts_rc:
+        version = Version("2.0rc1") if probe_version or target != "micromamba" else None
+        assert result == CondaExecutable(MICROMAMBA, "micromamba", version)
+    else:
+        assert result == CondaExecutable(
+            CONDA, "conda", Version("25") if probe_version else None
+        )
 
 
 @pytest.mark.parametrize("targets", [[], ["conda"], ["mamba"]])
@@ -705,7 +727,9 @@ def test_cli_searches_once_before_installing(
 
 
 @pytest.mark.parametrize("as_json", [False, True])
-@pytest.mark.parametrize("output, minimum", [("", "0"), ("2.0+local", "2.0+local")])
+@pytest.mark.parametrize(
+    "output, minimum", [("", "0"), ("2.0+local", "2.0+local"), ("2.0rc1", "1")]
+)
 def test_cli_keeps_old_minimum_semantics_in_both_output_formats(
     as_json: bool, output: str, minimum: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:

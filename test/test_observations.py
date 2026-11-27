@@ -116,6 +116,27 @@ def test_requirements_apply_to_one_observation(
     assert runs() == 1
 
 
+@pytest.mark.parametrize("probe_version", [True, False])
+def test_bare_target_accepts_prerelease_after_constrained_target(
+    probe_version: bool,
+    tmp_path: Path,
+    runs: Callable[[], int],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    micromamba = stand_in(tmp_path / "micromamba", "echo 2.0rc1")
+    monkeypatch.setenv("ENSURECONDA_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("PATH", str(tmp_path / "empty-bin"))
+
+    result = api.ensure(
+        ["micromamba>=1", "micromamba"], install="never", probe_version=probe_version
+    )
+
+    assert result == CondaExecutable(
+        micromamba, "micromamba", Version("2.0rc1") if probe_version else None
+    )
+    assert runs() == 1
+
+
 @pytest.mark.parametrize(
     "body, expected",
     [("exit 1", None), ("echo unrecognized", "unknown version")],

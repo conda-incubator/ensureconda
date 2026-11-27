@@ -2,6 +2,7 @@ import inspect
 import json
 import logging
 from pathlib import Path
+from test.test_info import fake_version_outputs
 from typing import Any, Dict, Iterator, List
 
 import pytest
@@ -92,21 +93,60 @@ def test_cli_keeps_application_handlers(monkeypatch: pytest.MonkeyPatch) -> None
         logger.removeHandler(during)
 
 
+@pytest.mark.parametrize(
+    "output, constraint, rejection",
+    [
+        ("1", ">=2", "1: requires >=2"),
+        (
+            "3.0rc1",
+            ">=2",
+            "3.0rc1: requires >=2 (prereleases must be requested explicitly)",
+        ),
+        ("3.0rc1", "<2", "3.0rc1: requires <2"),
+        ("0.0.0.dev0+placeholder", ">=1", "unknown version: requires >=1"),
+    ],
+)
 def test_library_decisions_are_available_to_application_logging(
+    output: str,
+    constraint: str,
+    rejection: str,
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     monkeypatch.setattr(api, "micromamba_executables", lambda: iter([Path("old")]))
-    monkeypatch.setattr(
-        determine_versions,
-        "_probe_version",
-        lambda path, flavor, observations: Version("1"),
-    )
-    with caplog.at_level(logging.INFO, logger="ensureconda"):
-        assert api.ensure(["micromamba>=2"], install="never") is None
-    assert caplog.messages == ["Rejected old 1: requires >=2"]
+    fake_version_outputs(monkeypatch, {"old": output})
+    with caplog.at_level(logging.DEBUG, logger="ensureconda"):
+        assert api.ensure(["micromamba" + constraint], install="never") is None
+    assert caplog.messages == [
+        f"Searching for micromamba matching {constraint}",
+        f"Rejected old {rejection}",
+    ]
     assert capsys.readouterr().out == ""
+
+
+@pytest.mark.parametrize(
+    "probe_version, search",
+    [(True, "matching any version"), (False, "without probing its version")],
+)
+def test_unconstrained_search_reports_its_actual_version_policy(
+    probe_version: bool,
+    search: str,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    path = Path("micromamba")
+    monkeypatch.setattr(api, "micromamba_executables", lambda: iter([path]))
+    fake_version_outputs(monkeypatch, {path.name: "2.0rc1"})
+    with caplog.at_level(logging.DEBUG, logger="ensureconda"):
+        assert api.ensure(
+            ["micromamba"], install="never", probe_version=probe_version
+        ) == (
+            api.CondaExecutable(
+                path, "micromamba", Version("2.0rc1") if probe_version else None
+            )
+        )
+    assert caplog.messages[0] == f"Searching for micromamba {search}"
 
 
 def test_cli_reports_no_failure_before_installing(

@@ -67,6 +67,18 @@ def test_unrunnable_cached_micromamba_allows_path_candidate(
     assert f"Skipping {broken}" in log_messages()
 
 
+def test_prerelease_in_cache_allows_stable_path_candidate(isolated_tools: Path) -> None:
+    cached = program(isolated_tools / "data" / "micromamba", "#!/bin/sh\necho 2.0rc1\n")
+    stable = program(isolated_tools / "bin" / "micromamba", "#!/bin/sh\necho 1.9\n")
+
+    assert ensure(["micromamba>=1"], install="never") == CondaExecutable(
+        stable, "micromamba", Version("1.9")
+    )
+    assert ensure(["micromamba"], install="never", probe_version=False) == (
+        CondaExecutable(cached, "micromamba", None)
+    )
+
+
 def test_broken_conda_exe_allows_path_candidate(
     isolated_tools: Path,
     monkeypatch: pytest.MonkeyPatch,

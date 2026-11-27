@@ -174,6 +174,7 @@ def serve_package(
     tool: str,
     version: str = "2",
     content: bytes = b"new",
+    published_versions: Optional[List[str]] = None,
 ) -> List[str]:
     archive = io.BytesIO()
     name = (
@@ -203,14 +204,108 @@ def serve_package(
                 f"//conda.anaconda.org/conda-forge/linux-64/micromamba-{version}-0.tar.bz2"
             )
         elif url.endswith("/files"):
+            versions = [version] if published_versions is None else published_versions
             response._content = json.dumps(
-                [package(version, tool.replace("_", "-"))]
+                [package(v, tool.replace("_", "-")) for v in versions]
             ).encode()
         return response
 
     monkeypatch.setattr(requests.Session, "request", get)
     monkeypatch.setattr(installer, "platform_subdir", lambda: "linux-64")
     return urls
+
+
+@pytest.mark.parametrize("tool", ["micromamba", "conda_standalone"])
+@pytest.mark.parametrize("constraint, selected", [("", "1.5"), (">=2.0rc1", "2.0rc1")])
+def test_download_prerelease_policy(
+    tool: Flavor,
+    constraint: str,
+    selected: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(installer, "site_path", lambda: tmp_path)
+    urls = serve_package(
+        monkeypatch, tool, version="2.0rc1", published_versions=["1.5", "2.0rc1"]
+    )
+    monkeypatch.setattr(
+        determine_versions, "_probe_version", lambda *args: Version(selected)
+    )
+    result = api.ensure([tool + constraint], install="force")
+    assert result is not None and result.version == Version(selected)
+    assert [url.split("/")[-1] for url in urls if url.endswith(".tar.bz2")] == [
+        f"{tool.replace('_', '-')}-{selected}-0.tar.bz2"
+    ]
+
+
+@pytest.mark.parametrize("tool", ["micromamba", "conda_standalone"])
+@pytest.mark.parametrize(
+    "constraint, published, hint_for_latest, hint_for_metadata",
+    [
+        ("", ["2.0rc1"], True, True),
+        (">=1", ["2.0rc1"], True, True),
+        (">=99", ["1.0", "2.0"], False, False),
+        ("<2", ["2.0rc1", "3.0rc1"], False, False),
+        ("<2", ["1.8rc1", "3.0rc1"], False, True),
+    ],
+)
+def test_explain_published_version_miss(
+    tool: Flavor,
+    constraint: str,
+    published: List[str],
+    hint_for_latest: bool,
+    hint_for_metadata: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(installer, "site_path", lambda: tmp_path)
+    latest = published[-1]
+    serve_package(monkeypatch, tool, version=latest, published_versions=published)
+    with caplog.at_level(logging.INFO, logger="ensureconda"):
+        assert api.ensure([tool + constraint], install="force") is None
+    hint = " (prereleases must be requested explicitly)"
+    requirement = constraint or "a stable release"
+    assert (
+        f"{tool.replace('_', '-')}: no published version for linux-64 satisfies "
+        f"{requirement}{hint if hint_for_metadata else ''}; newest available is {latest}"
+    ) in caplog.messages
+    if tool == "micromamba":
+        assert (
+            f"micromamba: latest version {latest} does not satisfy "
+            f"{requirement}{hint if hint_for_latest else ''}; checking release metadata"
+        ) in caplog.messages
+
+
+@pytest.mark.parametrize("tool", ["micromamba", "conda_standalone"])
+def test_staged_prerelease_is_checked_against_executable_constraint(
+    tool: Flavor, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(installer, "site_path", lambda: tmp_path)
+    cached = tmp_path / (tool + installer.exe_suffix())
+    cached.write_bytes(b"old")
+    serve_package(monkeypatch, tool)
+    monkeypatch.setattr(
+        determine_versions, "_probe_version", lambda *args: Version("2.0rc1")
+    )
+    with pytest.raises(
+        installer.DownloadedExecutableError,
+        match="prereleases must be requested explicitly",
+    ):
+        api.ensure([tool + ">=1"], install="force")
+    with pytest.raises(
+        installer.DownloadedExecutableError,
+        match=r"reports 2.0rc1, expected 2 satisfying >=2$",
+    ):
+        api.ensure([tool + ">=2"], install="force")
+    assert cached.read_bytes() == b"old"
+    assert api.ensure([tool], install="force") == api.CondaExecutable(
+        cached, tool, Version("2.0rc1")
+    )
+    assert cached.read_bytes() == b"new"
+    assert api.ensure([tool], install="force", probe_version=False) == (
+        api.CondaExecutable(cached, tool, None)
+    )
 
 
 @pytest.mark.skipif(is_windows, reason="the stand-ins are shell scripts")
@@ -361,9 +456,27 @@ def test_download_with_unknown_version(
         )
         assert cached.read_bytes() == b"new"
     else:
-        with pytest.raises(installer.DownloadedExecutableError):
+        with pytest.raises(installer.DownloadedExecutableError) as error:
             api.ensure([target], install="force")
+        assert "prereleases" not in str(error.value)
         assert cached.read_bytes() == b"old"
+
+
+def test_legacy_zero_minimum_rejects_download_with_unknown_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("ENSURECONDA_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("PATH", str(tmp_path / "empty-bin"))
+    serve_package(monkeypatch, "micromamba")
+    monkeypatch.setattr(subprocess, "check_output", lambda *args, **kwargs: "")
+
+    with pytest.raises(
+        installer.DownloadedExecutableError, match="reports unknown version"
+    ):
+        api.ensureconda(
+            mamba=False, conda=False, conda_exe=False, min_mamba_version=Version("0")
+        )
+    assert not (tmp_path / ("micromamba" + installer.exe_suffix())).exists()
 
 
 def test_standalone_package_revision_can_differ_from_executable(
