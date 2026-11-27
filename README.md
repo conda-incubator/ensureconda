@@ -132,6 +132,11 @@ A download that fails to run or doesn't satisfy the target never replaces the
 cached executable. For unconstrained targets, `probe_version=False` skips
 checking that installed executables run and returns `version=None`.
 
+When selecting a micromamba download, both installers ask `micro.mamba.pm` once
+for the latest build. If the lookup fails or cannot identify a compatible build,
+they consult the conda-forge release metadata on `api.anaconda.org`. Metadata
+and archive downloads retry transient failures.
+
 `ensureconda()`, the old API, keeps its options, its path-or-`None` result and
 its original search order.
 

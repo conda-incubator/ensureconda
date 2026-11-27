@@ -5,8 +5,9 @@ import json
 import logging
 import subprocess
 import tarfile
+import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 
 import pytest
 import requests
@@ -151,22 +152,69 @@ def test_unrecognized_latest_redirect_uses_metadata(
 
 
 @pytest.mark.parametrize(
-    "error", [requests.ConnectionError("offline"), requests.Timeout("timeout")]
+    "failure",
+    [
+        429,
+        503,
+        pytest.param(requests.ConnectionError("offline"), id="connection"),
+        pytest.param(requests.Timeout("timeout"), id="timeout"),
+    ],
 )
-def test_network_failure_is_not_a_constraint_miss(
-    error: Exception, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("metadata_status", [200, 403])
+def test_latest_outage_uses_release_metadata(
+    failure: Union[int, requests.RequestException],
+    metadata_status: int,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    def fail(*args: Any, **kwargs: Any) -> requests.Response:
-        raise error
+    latest = "https://micro.mamba.pm/api/micromamba/linux-64/latest"
+    metadata = "https://api.anaconda.org/package/conda-forge/micromamba/files"
+    urls: List[str] = []
+    digest = "a" * 64
 
-    monkeypatch.setattr(installer, "request_url_with_retry", fail)
+    def get(
+        session: requests.Session, method: str, url: str, **kwargs: Any
+    ) -> requests.Response:
+        urls.append(url)
+        response = requests.Response()
+        response.url = url
+        if url == latest:
+            if isinstance(failure, requests.RequestException):
+                raise failure
+            response.status_code = failure
+            response.raw = UnreadableBody()
+        else:
+            assert url == metadata
+            response.status_code = metadata_status
+            response.raw = io.BytesIO(
+                json.dumps([package("1.5", sha256=digest), package("2")]).encode()
+            )
+        return response
 
-    def unexpected(*args: Any) -> List[installer.AnacondaPkg]:
-        raise AssertionError("network failures must not trigger metadata fallback")
+    def unexpected_sleep(seconds: float) -> None:
+        pytest.fail(f"unexpected retry after {seconds}s")
 
-    monkeypatch.setattr(installer, "compute_candidates", unexpected)
-    with pytest.raises(type(error)):
-        installer.select_micromamba("linux-64", None)
+    monkeypatch.setattr(requests.Session, "request", get)
+    monkeypatch.setattr(time, "sleep", unexpected_sleep)
+    if metadata_status == 200:
+        url, version, sha256 = installer.select_micromamba(
+            "linux-64", SpecifierSet("<2")
+        )
+        assert (
+            url
+            == "https://conda.anaconda.org/conda-forge/linux-64/micromamba-1.5-0.tar.bz2"
+        )
+        assert version == Version("1.5") and sha256 == digest
+    else:
+        with pytest.raises(requests.HTTPError) as error:
+            installer.select_micromamba("linux-64", None)
+        assert error.value.response.url == metadata
+        assert error.value.response.status_code == metadata_status
+    assert urls == [latest, metadata]
+    assert any(
+        latest in message and "checking release metadata" in message
+        for message in caplog.messages
+    )
 
 
 def serve_package(

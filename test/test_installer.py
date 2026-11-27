@@ -474,7 +474,7 @@ def test_install_reuses_an_executable_only_if_it_is_usable(
     else:
         with pytest.raises(requests.ConnectionError):
             install(Version("2"))
-        assert len(urls) == 1
+        assert len(urls) == (2 if name == "micromamba" else 1)
     assert checked == [existing]
 
 
@@ -527,7 +527,7 @@ def test_install_reuses_an_executable_that_runs_by_default(
     else:
         with pytest.raises(requests.ConnectionError):
             install()
-        assert len(urls) == 1
+        assert len(urls) == (2 if name == "micromamba" else 1)
     assert commands == [[existing, "--version"]]
 
 
@@ -1127,6 +1127,7 @@ def request_micromamba(
         session: requests.Session, method: str, url: str, **kwargs: Any
     ) -> requests.Response:
         response = requests.Response()
+        response.url = url
         response.raw = io.BytesIO()
         if url.endswith("/files") and subdir == "linux-s390x":
             response.status_code = 200
@@ -1141,29 +1142,24 @@ def request_micromamba(
     installer.install_micromamba()
 
 
+@pytest.mark.parametrize("latest_status", [403, 404])
 def test_micromamba_not_published_for_the_platform(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    latest_status: int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with pytest.raises(
         installer.NotPublishedError, match="micromamba is not published for linux-s390x"
     ) as error:
-        request_micromamba("linux-s390x", 404, tmp_path, monkeypatch)
+        request_micromamba("linux-s390x", latest_status, tmp_path, monkeypatch)
 
     assert error.value.__cause__ is None
 
 
-@pytest.mark.parametrize(
-    "subdir, status",
-    [
-        # The release metadata consulted after a 404 from latest fails too.
-        ("linux-64", 404),
-        ("linux-s390x", 403),
-    ],
-)
-def test_other_micromamba_download_failures_remain_http_errors(
-    subdir: str, status: int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("status", [403, 404])
+def test_micromamba_metadata_failures_remain_http_errors(
+    status: int, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     with pytest.raises(requests.HTTPError) as error:
-        request_micromamba(subdir, status, tmp_path, monkeypatch)
+        request_micromamba("linux-64", status, tmp_path, monkeypatch)
 
     assert error.value.response.status_code == status
+    assert error.value.response.url.endswith("/micromamba/files")

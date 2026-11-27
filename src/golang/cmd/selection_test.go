@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -39,6 +40,9 @@ func TestLatestCandidateAndMetadataFallback(t *testing.T) {
 		{"latest too old", 307, "micromamba-0.1-0.tar.bz2", "1", "2.10", true, false},
 		{"no matching version", 307, "micromamba-2.10-0.tar.bz2", "3", "", true, false},
 		{"latest missing", 404, "", "1", "2.10", true, false},
+		{"latest forbidden", 403, "", "1", "2.10", true, false},
+		{"latest rate limited", 429, "", "1", "2.10", true, false},
+		{"latest unavailable", 503, "", "1", "2.10", true, false},
 		{"unexpected body", 200, "", "1", "2.10", true, false},
 		{"unparseable redirect", 307, "unknown", "1", "2.10", true, false},
 		{"malformed redirect URL", 307, "bad%zz", "1", "2.10", true, false},
@@ -46,6 +50,7 @@ func TestLatestCandidateAndMetadataFallback(t *testing.T) {
 		{"nothing published", 404, "", "1", "", true, true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
+			clock := useRetryClock(t)
 			urls := []string{}
 			body := &headersOnlyBody{t: t}
 			client := &http.Client{Transport: roundTripper(func(r *http.Request) (*http.Response, error) {
@@ -104,30 +109,39 @@ func TestLatestCandidateAndMetadataFallback(t *testing.T) {
 			if tt.metadata {
 				wantRequests = 2
 			}
-			if len(urls) != wantRequests || !body.closed {
-				t.Fatalf("requests=%v, latest body closed=%t", urls, body.closed)
+			if len(urls) != wantRequests || len(clock.delays) != 0 || !body.closed {
+				t.Fatalf("requests=%v, delays=%v, latest body closed=%t", urls, clock.delays, body.closed)
 			}
 		})
 	}
 }
 
-func TestLatestServerFailureDoesNotBecomeMetadataFallback(t *testing.T) {
-	useRetryClock(t)
-	attempts := 0
+func TestLatestAndMetadataUnavailable(t *testing.T) {
+	clock := useRetryClock(t)
+	latest := "https://micro.mamba.pm/api/micromamba/linux-64/latest"
+	metadata := anacondaAPIBaseURL + "/package/conda-forge/micromamba/files"
+	var latestCalls, metadataCalls int
 	client := &http.Client{Transport: roundTripper(func(r *http.Request) (*http.Response, error) {
-		attempts++
-		if !strings.HasSuffix(r.URL.Path, "/latest") {
-			t.Fatalf("unexpected metadata fallback: %s", r.URL)
+		if r.URL.String() == latest {
+			latestCalls++
+			return nil, &net.DNSError{Name: r.URL.Host, Err: "unreachable"}
 		}
+		if r.URL.String() != metadata {
+			t.Fatalf("unexpected request: %s", r.URL)
+		}
+		metadataCalls++
 		return &http.Response{StatusCode: 503, Status: "503 Service Unavailable", Request: r, Body: http.NoBody}, nil
 	})}
 	previous := httpClient
 	httpClient = func() *http.Client { return client }
 	t.Cleanup(func() { httpClient = previous })
-	_, err := selectMicromamba("https://micro.mamba.pm/api/micromamba/linux-64/latest", "linux-64", pep440.MustParse("1"))
+	_, err := selectMicromamba(latest, "linux-64", pep440.MustParse("1"))
 	var status *httpStatusError
-	if !errors.As(err, &status) || status.statusCode != 503 || attempts < 2 {
-		t.Fatalf("error=%v, attempts=%d", err, attempts)
+	if !errors.As(err, &status) || status.statusCode != 503 || status.url != metadata {
+		t.Fatalf("expected metadata HTTP 503, got %v", err)
+	}
+	if latestCalls != 1 || len(clock.delays) == 0 || metadataCalls != 1+len(clock.delays) {
+		t.Fatalf("latest requests=%d, metadata requests=%d, retry delays=%v", latestCalls, metadataCalls, clock.delays)
 	}
 }
 
