@@ -507,11 +507,11 @@ def test_install_reuses_an_executable_that_runs_by_default(
     commands: List[List[Any]] = []
     urls: List[str] = []
 
-    def check_output(args: List[Any], **kwargs: Any) -> str:
+    def check_output(args: List[Any], **kwargs: Any) -> bytes:
         commands.append(args)
         if not runs:
             raise OSError(8, "Exec format error")
-        return "2.0.0\n"
+        return b"2.0.0\n"
 
     def request(url: str, **kwargs: Any) -> requests.Response:
         urls.append(url)

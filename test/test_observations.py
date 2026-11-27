@@ -122,12 +122,14 @@ def test_requirements_apply_to_one_observation(
         ("exit 1", False),
         ("echo unrecognized", True),
         ("printf '\\377\\n'", True),
+        ("printf '\\377\\n'\nexit 1", False),
         ('echo "#" >> "$0"\nexit 1', True),
     ],
     ids=[
         "failed",
         "unknown-version",
         "undecodable-output",
+        "failed-with-undecodable-output",
         "file-changed-during-probe",
     ],
 )

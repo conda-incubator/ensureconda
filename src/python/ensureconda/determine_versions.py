@@ -66,10 +66,17 @@ def _observation_key(path: _StrPath) -> Optional[str]:
 
 def _run_version(exe: _StrPath) -> Union[str, Exception]:
     try:
-        return subprocess.check_output(
-            [exe, "--version"], stderr=subprocess.DEVNULL, encoding="utf-8"
-        )
-    except (subprocess.CalledProcessError, OSError, UnicodeDecodeError) as error:
+        # Check the exit status before decoding stdout. A decode error on its
+        # own means the command ran successfully and its version is unknown.
+        output = subprocess.check_output([exe, "--version"], stderr=subprocess.DEVNULL)
+        return output.decode("utf-8")
+    except subprocess.CalledProcessError as error:
+        # The public version helpers expose the captured output as text.
+        if error.output is not None:
+            text = error.output.decode("utf-8", errors="replace")
+            error.output = text.replace("\r\n", "\n").replace("\r", "\n")
+        return error
+    except (OSError, UnicodeDecodeError) as error:
         return error
 
 
