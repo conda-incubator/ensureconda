@@ -173,22 +173,26 @@ def _named_version(
     return fallback
 
 
-def _mamba1_version(output: str) -> Optional[Version]:
-    """Read a mamba 1 version line, even if the wrapper prints a banner first."""
-    for line in output.splitlines():
+def _bare_mamba_version(output: str) -> Optional[Version]:
+    """Read the bare version from mamba 2 or micromamba."""
+    for line in output.strip().splitlines():
         fields = line.split()
-        if len(fields) == 2 and fields[0] == "mamba":
-            try:
-                return Version(fields[1])
-            except InvalidVersion:
-                continue
+        if len(fields) > 2 and fields[0] in ("mamba", "micromamba"):
+            continue  # A shell integration banner can precede the version.
+        try:
+            return Version(line.strip())
+        except InvalidVersion:
+            break
     return None
 
 
 def _mamba_version(output: str) -> Version:
-    standard = _mamba1_version(output)
-    if standard is not None:
-        return standard
+    declared = _named_version(output, "mamba", two_fields=True)
+    if declared is not None:
+        return Version(declared)
+    bare = _bare_mamba_version(output)
+    if bare is not None:
+        return bare
     version = _named_version(output, "mamba")
     if version is not None:
         return Version(version)
@@ -201,7 +205,13 @@ def determine_micromamba_version(exe: _StrPath) -> Version:
 
 
 def _micromamba_version(output: str) -> Version:
-    for line in output.strip().splitlines(keepends=False):
+    declared = _named_version(output, "micromamba", two_fields=True)
+    if declared is not None:
+        return Version(declared)
+    bare = _bare_mamba_version(output)
+    if bare is not None:
+        return bare
+    for line in output.strip().splitlines():
         return Version(line.split()[-1])
     return _LEGACY_UNKNOWN_VERSION
 
@@ -260,25 +270,22 @@ def _flavor_from_name(executable: _StrPath) -> Optional[Flavor]:
 def _flavor_from_output(
     output: str, named_flavor: Optional[Flavor]
 ) -> Optional[Flavor]:
-    if named_flavor is not None:
-        # The mamba 1 version line identifies the tool even under a conda alias.
-        return "mamba" if _mamba1_version(output) is not None else named_flavor
     # Mamba 1 also reports its bundled conda. A mamba version line, even
     # with an unreadable version, takes precedence over that conda line.
     if _named_version(output, "mamba", two_fields=True) is not None:
         return "mamba"
+    if _named_version(output, "conda", two_fields=True) is not None:
+        return "conda_standalone" if named_flavor == "conda_standalone" else "conda"
+    if _named_version(output, "micromamba", two_fields=True) is not None:
+        return "micromamba"
+    if _bare_mamba_version(output) is not None:
+        return "mamba" if named_flavor == "mamba" else "micromamba"
+    if named_flavor is not None:
+        return named_flavor
     if _named_version(output, "conda") is not None:
         return "conda"
     if _named_version(output, "mamba") is not None:
         return "mamba"
-    lines = output.strip().splitlines()
-    if lines:
-        # micromamba prints only its version.
-        try:
-            Version(lines[0].strip())
-        except InvalidVersion:
-            return None
-        return "micromamba"  # or mamba 2, whose output is identical
     return None
 
 

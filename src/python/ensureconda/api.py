@@ -435,10 +435,9 @@ def identify(executable: _StrPath) -> CondaExecutable:
     its absolute path whenever the working directory can be named.
 
     A ``mamba <version>`` line identifies mamba 1 even under another name.
-    Otherwise, a recognized file name determines the flavor. With an unfamiliar
-    name, a bare version number is reported as "micromamba" (also printed by
-    mamba 2), and a conda version line as "conda" (also printed by
-    conda-standalone).
+    A bare version is shared by mamba 2 and micromamba. A conda version line
+    is shared by conda and conda-standalone. The filename distinguishes tools
+    within each pair, defaulting to micromamba and conda respectively.
 
     Raises FileNotFoundError if the executable doesn't exist, PermissionError
     if it isn't executable, and ValueError if it can't be recognized.

@@ -134,6 +134,17 @@ def test_ensure_reuses_the_target_version_check(
             "1.5.12",
         ),
         ("bin/my-conda", "conda 26.5.2\n", "conda", "26.5.2"),
+        ("bin/conda", "2.9.0\n", "micromamba", "2.9.0"),
+        ("bin/mamba", "conda 25.1.0\n", "conda", "25.1.0"),
+        ("bin/micromamba", "conda 25.1.0\n", "conda", "25.1.0"),
+        ("bin/mamba", "mamba shell integration enabled\n2.9.0", "mamba", "2.9.0"),
+        (
+            "bin/wrapper",
+            "mamba shell integration enabled\n2.9.0",
+            "micromamba",
+            "2.9.0",
+        ),
+        ("bin/conda", "Loading profile\nmicromamba 2.9.0", "micromamba", "2.9.0"),
     ],
 )
 def test_identify(
@@ -149,6 +160,19 @@ def test_identify(
 
     assert identify(executable) == CondaExecutable(executable, flavor, Version(version))
     assert calls == [executable.name]
+
+
+@pytest.mark.parametrize("name", ["mamba", "conda", "wrapper"])
+@pytest.mark.parametrize(
+    "output",
+    ["mamba garbage\nconda 24.11.3", "mamba garbage\nmamba 1.5.12\nconda 24.11.3"],
+)
+def test_malformed_first_mamba_version_still_identifies_mamba(
+    name: str, output: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = executable_file(tmp_path / name)
+    fake_version_outputs(monkeypatch, {name: output})
+    assert identify(path) == CondaExecutable(path, "mamba", None)
 
 
 @pytest.fixture
