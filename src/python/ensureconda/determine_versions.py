@@ -87,7 +87,7 @@ class _Observations:
 
 def _fingerprint(path: _StrPath) -> Optional[_Fingerprint]:
     # On Windows st_ctime is the creation time, which a change of contents or
-    # attributes leaves alone, so nothing is reused there.
+    # attributes leaves alone. Each requested version probe must run again.
     if os.name == "nt":
         return None
     try:

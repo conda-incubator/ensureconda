@@ -138,12 +138,14 @@ can satisfy a conda target. The filename distinguishes mamba 2 from
 micromamba when either prints a bare version, and conda from conda-standalone
 when either prints a conda version line. An unfamiliar filename defaults to
 `micromamba` and `conda` respectively.
-With `probe_version=False`, a bare target starts no process and returns
-`version=None` for a match. It can identify an unchanged file from an earlier
-probe in the same call. When the file has no usable fingerprint (including
-on Windows), the filename must identify the tool. Earlier output can still
-rule it out if it reported a different tool. A probe that exited unsuccessfully
-also rules out that candidate unless ensureconda can tell the file changed.
+
+With `probe_version=False`, a bare target can select an installed executable
+without running it and returns `version=None`. It can identify an unchanged file
+from an earlier probe in the same call. When the file has no usable fingerprint
+(including on Windows), the filename must identify the tool. Earlier output
+can still rule it out if it reported a different tool. A probe that exited
+unsuccessfully also rules out that candidate unless ensureconda can tell the
+file changed. Downloads are always validated before installation.
 
 Version constraints skip prereleases unless you request one, as in
 `micromamba>=2.0rc1`. A plain `micromamba` target can use an installed
