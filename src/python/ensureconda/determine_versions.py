@@ -369,6 +369,16 @@ def version_satisfies(
     return match_version(version, constraint) is VersionMatch.ACCEPTED
 
 
+def _matches_conda_target(
+    flavor: Optional[Flavor], constraint: _VersionConstraint
+) -> bool:
+    if isinstance(constraint, SpecifierSet):
+        return flavor in ("conda", "conda_standalone")
+    # The old API accepts an override with no minimum and compares an unknown
+    # version as zero when given a minimum.
+    return constraint is None or flavor not in ("mamba", "micromamba")
+
+
 def check_executable(
     path: Path,
     flavor: Flavor,
@@ -384,32 +394,17 @@ def check_executable(
     constrained = has_version_constraint(constraint)
     if constrained or probe_version:
         try:
-            output = None
-            if flavor == "conda" and not (
-                constrained and candidate_flavor in ("mamba", "micromamba")
+            if flavor != "conda":
+                version = _probe_version(path, flavor, observations)
+            elif candidate_flavor is None or _matches_conda_target(
+                candidate_flavor, constraint
             ):
                 output = _version_output(path, observations)
                 candidate_flavor = _flavor_from_output(output, candidate_flavor)
-            if (
-                constrained
-                and flavor == "conda"
-                and candidate_flavor in ("mamba", "micromamba")
-            ):
-                if rejection_level is not None:
-                    logger.log(
-                        rejection_level,
-                        "Rejected %s (%s): requires conda%s",
-                        path,
-                        candidate_flavor,
-                        requirement_text(constraint),
-                    )
-                return None
-            if candidate_flavor is not None:
-                version = (
-                    _probe_version(path, candidate_flavor, observations)
-                    if output is None
-                    else _parse_version(output, candidate_flavor)
-                )
+                if candidate_flavor is not None and _matches_conda_target(
+                    candidate_flavor, constraint
+                ):
+                    version = _parse_version(output, candidate_flavor)
         except (
             subprocess.CalledProcessError,
             OSError,
@@ -439,6 +434,16 @@ def check_executable(
             return None
         if flavor == "conda" and isinstance(recorded, str):
             candidate_flavor = _flavor_from_output(recorded, candidate_flavor)
+    if flavor == "conda" and not _matches_conda_target(candidate_flavor, constraint):
+        if rejection_level is not None:
+            logger.log(
+                rejection_level,
+                "Rejected %s (%s): requires conda%s",
+                path,
+                candidate_flavor or "unknown flavor",
+                requirement_text(constraint) if constrained else "",
+            )
+        return None
     match = match_version(version, constraint)
     if match is not VersionMatch.ACCEPTED:
         if rejection_level is not None:

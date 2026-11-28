@@ -155,28 +155,34 @@ def test_unprobed_target_uses_only_a_current_failure(
 
 
 @pytest.mark.parametrize(
-    "body, expected_flavor",
+    "name, body, accepted",
     [
-        ("echo 'mamba 1.5.12'\necho 'conda 24.11.3'", "mamba"),
-        ("echo '#' >> \"$0\"\necho 'mamba 1.5.12'\necho 'conda 24.11.3'", "conda"),
+        ("conda", "echo 'mamba 1.5.12'\necho 'conda 24.11.3'", False),
+        (
+            "conda",
+            "echo '#' >> \"$0\"\necho 'mamba 1.5.12'\necho 'conda 24.11.3'",
+            True,
+        ),
+        ("wrapper", "echo 'conda 24.11.3'", True),
     ],
-    ids=["unchanged", "changed-during-probe"],
+    ids=["mamba-alias", "changed-during-probe", "conda-wrapper"],
 )
 def test_unprobed_conda_fallback_uses_current_flavor(
+    name: str,
     body: str,
-    expected_flavor: api.Flavor,
+    accepted: bool,
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     runs: Callable[[], int],
 ) -> None:
-    alias = stand_in(tmp_path / "conda", body)
+    alias = stand_in(tmp_path / name, body)
     monkeypatch.setenv("CONDA_EXE", str(alias))
     monkeypatch.setenv("ENSURECONDA_DATA_DIR", str(tmp_path / "cache"))
     monkeypatch.setenv("PATH", "")
 
-    result = api.ensure(["conda>=24", "conda"], install="never", probe_version=False)
+    result = api.ensure(["conda>=25", "conda"], install="never", probe_version=False)
 
-    assert result == CondaExecutable(alias, expected_flavor, None)
+    assert result == (CondaExecutable(alias, "conda", None) if accepted else None)
     assert runs() == 1
 
 

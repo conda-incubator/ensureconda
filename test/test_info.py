@@ -215,14 +215,16 @@ def test_conda_name_with_mamba_in_its_output(
     expected = CondaExecutable(alias, flavor, Version(version))
 
     assert identify(alias) == expected
-    assert ensure(["conda"], install="never") == expected
-    constrained = ensure(["conda>=24"], install="never", probe_version=False)
-    if flavor == "mamba":
-        assert constrained == CondaExecutable(other, "conda", Version("25.1"))
-        assert calls == [alias.name] * 3 + [other.name]
-    else:
-        assert constrained == expected
-        assert calls == [alias.name] * 3
+    assert calls == [alias.name]
+    for target, probe in [("conda", True), ("conda>=24", False)]:
+        calls.clear()
+        result = ensure([target], install="never", probe_version=probe)
+        if flavor == "mamba":
+            assert result == CondaExecutable(other, "conda", Version("25.1"))
+            assert calls == [alias.name, other.name]
+        else:
+            assert result == expected
+            assert calls == [alias.name]
 
 
 @pytest.mark.parametrize(
@@ -233,10 +235,11 @@ def test_conda_name_with_mamba_in_its_output(
         ("mamba", "mamba 1.5.12\nconda 24.11.3", "mamba", "1.5.12"),
         ("wrapper", "mamba 1.5.12\nconda 24.11.3", "mamba", "1.5.12"),
         ("wrapper", "2.9.0", "micromamba", "2.9.0"),
+        ("wrapper", "conda 24.11.3", "conda", "24.11.3"),
         ("conda-standalone", "conda 24.11.3", "conda_standalone", "24.11.3"),
     ],
 )
-def test_conda_exe_metadata(
+def test_conda_target_requires_a_conda_family_override(
     name: str,
     output: str,
     flavor: Flavor,
@@ -247,18 +250,47 @@ def test_conda_exe_metadata(
     executable = set_conda_exe(name)
     calls = fake_version_outputs(monkeypatch, {name: output})
 
-    result = ensure(["micromamba>=2", "conda"], install="never")
-    assert result == CondaExecutable(executable, flavor, Version(version))
-    assert calls == [name]
-    assert result == identify(executable)
+    info = CondaExecutable(executable, flavor, Version(version))
+    assert identify(executable) == info
+    calls.clear()
+    in_family = flavor in ("conda", "conda_standalone")
+    result = ensure(["conda"], install="never")
+    assert result == (info if in_family else None)
+    assert calls == ([name] if in_family or name == "wrapper" else [])
 
     calls.clear()
-    unprobed_flavor = "conda" if name == "wrapper" else flavor
-    assert ensure(["conda"], install="never", probe_version=False) == CondaExecutable(
-        executable, unprobed_flavor, None
+    assert ensure(["conda"], install="never", probe_version=False) == (
+        CondaExecutable(executable, flavor, None)
+        if in_family and name != "wrapper"
+        else None
     )
     assert ensureconda(no_install=True) == executable
     assert calls == []
+
+
+def test_micromamba_minimum_and_conda_fallback(
+    set_conda_exe: Callable[[str], Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    set_conda_exe("micromamba")
+    bin_dir = tmp_path / "bin"
+    monkeypatch.setenv("PATH", str(bin_dir))
+    fake_version_outputs(
+        monkeypatch,
+        {"micromamba": "1.5.8", "conda.exe": "conda 24.1.2", "micromamba.exe": "2.9.0"},
+    )
+    targets = ["micromamba>=2", "conda"]
+
+    assert ensure(targets, install="never") is None
+    conda = executable_file(bin_dir / "conda.exe")
+    assert ensure(targets, install="never") == CondaExecutable(
+        conda, "conda", Version("24.1.2")
+    )
+    micromamba = executable_file(bin_dir / "micromamba.exe")
+    assert ensure(targets, install="never") == CondaExecutable(
+        micromamba, "micromamba", Version("2.9.0")
+    )
 
 
 @pytest.mark.parametrize(
@@ -323,14 +355,16 @@ def test_cli_json_reports_conda_standalone_from_conda_exe(
     )
 
 
-def test_unrecognized_conda_exe_preserves_unconstrained_selection(
+def test_unrecognized_conda_exe_is_only_a_legacy_fallback(
     set_conda_exe: Callable[[str], Path], monkeypatch: pytest.MonkeyPatch
 ) -> None:
     wrapper = set_conda_exe("wrapper")
     fake_version_outputs(monkeypatch, {"wrapper": "unknown"})
 
-    assert ensure(["conda"], install="never") == CondaExecutable(wrapper, "conda", None)
+    assert ensure(["conda"], install="never") is None
     assert ensure(["conda>=0"], install="never") is None
+    assert ensureconda(no_install=True) == wrapper
+    assert ensureconda(no_install=True, min_conda_version=Version("0")) == wrapper
 
 
 def test_identify_rejects_unrecognized_executables(

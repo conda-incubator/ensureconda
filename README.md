@@ -111,25 +111,23 @@ constraints in Python packaging's version-specifier syntax, such as `>=2,<3` or
 and such an executable can't satisfy a constraint. Later releases may add
 fields to the result or keys to `ensureconda --json`.
 
-The Python `conda` target checks `CONDA_EXE` first. For example, if it points
-to mamba 1.5.12, `ensure(["conda"])` returns that path with flavor `mamba` and
-version `1.5.12`. A constrained target such as `conda>=24` skips candidates
-identified as mamba or micromamba and continues looking for a compatible
-conda. A conda-standalone executable supplied through `CONDA_EXE` can satisfy
-a conda constraint.
+The Python `conda` target checks `CONDA_EXE` first and accepts an override
+identified as conda or conda-standalone. For example,
+`ensure(["micromamba>=2", "conda"], install="never")` uses an installed conda
+when `CONDA_EXE` points to micromamba 1.5.8 and the first target finds no
+compatible micromamba. If neither target finds a match, it returns `None`.
 
-When the Python `conda` target or `identify()` probes a wrapper named `conda`
-that prints both `mamba 1.5.12` and `conda 24.11.3`, it reports `mamba`
-1.5.12. The second line describes mamba's bundled conda. A recognized file
-name determines the flavor when the version output is ambiguous.
+When `identify()` probes a wrapper named `conda` that prints both
+`mamba 1.5.12` and `conda 24.11.3`, it reports `mamba` 1.5.12. The second
+line describes mamba's bundled conda. The `conda` target skips this wrapper.
+A recognized file name determines the flavor when the output is ambiguous.
 Renamed mamba 2 and micromamba both print a bare version number and are
 reported as `micromamba`. Renamed conda and conda-standalone both print
 `conda` followed by a version and are reported as `conda`.
-If neither identifies the tool, a bare `conda` target still accepts a usable
-candidate as `conda` with version `None`. With `probe_version=False`, a bare
-`conda` target can use an earlier probe from the same call to identify an
-unchanged file. Otherwise it uses the name alone. Its version is `None` in
-both cases.
+With `probe_version=False`, a bare `conda` target can use an earlier probe
+from the same call to identify an unchanged file. Otherwise it uses the file
+name alone. It skips an override whose flavor it cannot identify and returns
+`version=None` for an accepted candidate.
 
 Version constraints skip prereleases unless you request one, as in
 `micromamba>=2.0rc1`. A plain `micromamba` target can use an installed
