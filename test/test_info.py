@@ -446,6 +446,49 @@ def test_legacy_api_and_cli_select_mamba_under_its_own_target(
 
 
 @pytest.mark.parametrize(
+    "name, output",
+    [("mamba", "mamba 1.5.12\nconda 24.11.3"), ("micromamba", "1.5.8")],
+)
+def test_only_conda_enabled_skips_a_known_mamba_launcher(
+    name: str,
+    output: str,
+    set_conda_exe: Callable[[str], Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    set_conda_exe(name)
+    calls = fake_version_outputs(monkeypatch, {name: output, "conda.exe": "conda 25.1"})
+    for minimum in (None, Version("0"), Version("4.8.2")):
+        assert (
+            ensureconda(
+                mamba=False,
+                micromamba=False,
+                conda_exe=False,
+                min_conda_version=minimum,
+                no_install=True,
+            )
+            is None
+        )
+
+    args = ["--no-install", "--no-mamba", "--no-micromamba", "--no-conda-exe"]
+    runner = CliRunner()
+    for minimum_arg in ([], ["--min-conda-version", "0"]):
+        result = runner.invoke(cli.ensureconda_cli, [*args, *minimum_arg])
+        assert result.exit_code == 1
+    assert calls == []
+
+    conda = executable_file(tmp_path / "bin" / "conda.exe")
+    monkeypatch.setenv("PATH", str(conda.parent))
+    result = runner.invoke(cli.ensureconda_cli, [*args, "--json", "--verbosity", "0"])
+    assert result.exit_code == 0
+    assert (
+        json.loads(result.stdout)
+        == CondaExecutable(conda, "conda", Version("25.1")).to_json()
+    )
+    assert calls == [conda.name]
+
+
+@pytest.mark.parametrize(
     "name, output, flavor",
     [
         ("mamba", "mamba 1.5.12\nconda 24.11.3", "mamba"),

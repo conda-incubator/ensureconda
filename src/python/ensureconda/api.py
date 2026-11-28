@@ -111,6 +111,9 @@ def ensureconda(
     The booleans select targets in the legacy order: mamba, micromamba, conda,
     conda_standalone. Search and attempt installation for each target before
     moving on. Version probes run only when a minimum version is requested.
+    The shell launcher search is the same as for ensure(). A conda-only search
+    skips known mamba and micromamba executables. For compatibility it can
+    still accept an unidentified conda wrapper with no minimum or a zero minimum.
 
     For an ordered target sequence and executable metadata, use :func:`ensure`.
     """

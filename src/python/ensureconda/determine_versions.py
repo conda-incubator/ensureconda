@@ -383,11 +383,10 @@ def _matches_target_flavor(
 ) -> bool:
     if target != "conda":
         return candidate == target
-    if isinstance(constraint, SpecifierSet):
-        return candidate in ("conda", "conda_standalone")
-    # The old API accepts an override with no minimum and compares an unknown
-    # version as zero when given a minimum.
-    return constraint is None or candidate not in ("mamba", "micromamba")
+    if candidate is None:
+        # The old API allows an unidentified wrapper subject to its minimum.
+        return not isinstance(constraint, SpecifierSet)
+    return candidate in ("conda", "conda_standalone")
 
 
 def check_executable(

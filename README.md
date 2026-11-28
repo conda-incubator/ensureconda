@@ -168,7 +168,13 @@ they consult the conda-forge release metadata on `api.anaconda.org`. Metadata
 and archive downloads retry transient failures.
 
 `ensureconda()`, the old API, keeps its options, its path-or-`None` result and
-its original order of targets.
+its original order of targets. A conda-only request in the old API or Python
+CLI now skips a known mamba or micromamba, even with a minimum conda version
+of zero. In v1.7.0, mamba 1 could pass a conda minimum using its bundled
+conda version. With mamba enabled, the Python CLI can still return the same
+path and checks mamba's own version. The old API continues to accept an
+unidentified `CONDA_EXE` wrapper with no minimum, or a runnable wrapper with
+an unknown version when the minimum is zero.
 
 ### Diagnostics
 
