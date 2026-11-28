@@ -389,9 +389,9 @@ def check_executable(
     observations: Optional[_Observations],
     probe_version: bool = True,
     rejection_level: Optional[int] = logging.INFO,
-    from_conda_exe: bool = False,
+    from_env: bool = False,
 ) -> Optional[CondaExecutable]:
-    identify_flavor = from_conda_exe or flavor == "conda"
+    identify_flavor = from_env or flavor == "conda"
     candidate_flavor = _flavor_from_name(path) if identify_flavor else flavor
     version = None
     constrained = has_version_constraint(constraint)

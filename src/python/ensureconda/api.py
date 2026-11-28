@@ -51,7 +51,7 @@ from ensureconda.installer import (
 )
 from ensureconda.resolve import (
     UnsupportedPlatformError,
-    _conda_exe_from_env,
+    _executable_from_env,
     absolute_path,
     conda_executables,
     conda_standalone_executables,
@@ -182,10 +182,10 @@ def ensure(
     A bare target accepts an executable reporting any version, including a
     prerelease. When choosing a package to download, it selects a stable release.
 
-    The conda target checks CONDA_EXE first. It accepts an override identified
-    as conda or conda_standalone and otherwise continues searching for conda.
-    Other targets check CONDA_EXE after their normal search. Each target
-    applies its own flavor and version requirements to that executable.
+    For mamba and micromamba, try MAMBA_EXE and then CONDA_EXE. For conda
+    and conda_standalone, try CONDA_EXE. If the launchers do not satisfy
+    the current target, continue with the data directory and PATH. The conda
+    target accepts conda or conda_standalone. Other targets match one flavor.
 
     install selects when installation is attempted. Only micromamba and
     conda_standalone can be installed.
@@ -205,8 +205,8 @@ def ensure(
     satisfy unconstrained targets, with version=None.
 
     With probe_version=False, probe installed candidates only when constrained,
-    and omit unconstrained result versions. A target can still identify
-    CONDA_EXE using output recorded earlier in this call for the unchanged file.
+    and omit unconstrained result versions. A target can still identify a
+    shell launcher using output recorded earlier in this call for the unchanged file.
     Skip a file if this call still has a valid record
     that its version probe exited unsuccessfully. Downloaded executables must
     always run successfully. An unconstrained download can report an unreadable
@@ -244,24 +244,27 @@ def ensure(
 
 
 def _installed_candidates(
-    paths: Iterator[Path], flavor: Flavor, constraint: _VersionConstraint
+    paths: Iterator[Path], flavor: Flavor
 ) -> Iterator[Tuple[Path, bool]]:
-    """Yield candidate paths and flag overrides that need flavor identification."""
-    # The conda finder already tries CONDA_EXE first. Only the ordered API
-    # offers it as a fallback to the other finders.
-    override = (
-        _conda_exe_from_env()
-        if flavor != "conda" and isinstance(constraint, SpecifierSet)
-        else None
-    )
-    tried_override = False
+    """Yield each path once per target, with shell launchers first."""
+    seen: Set[Path] = set()
+    # The conda finder already yields CONDA_EXE first and all its paths are
+    # identified. Flag launchers for the other finders to identify as well.
+    if flavor != "conda":
+        variables = (
+            ("CONDA_EXE",)
+            if flavor == "conda_standalone"
+            else ("MAMBA_EXE", "CONDA_EXE")
+        )
+        for variable in variables:
+            launcher = _executable_from_env(variable)
+            if launcher is not None and launcher not in seen:
+                seen.add(launcher)
+                yield launcher, True
     for path in paths:
-        is_override = path == override
-        if is_override:
-            tried_override = True
-        yield path, is_override
-    if override is not None and not tried_override:
-        yield override, True
+        if path not in seen:
+            seen.add(path)
+            yield path, False
 
 
 def _ensure(
@@ -388,8 +391,8 @@ def _ensure(
                 )
             else:
                 logger.debug("Searching for %s without probing its version", flavor)
-            candidates = _installed_candidates(finders[flavor](), flavor, constraint)
-        for path, from_conda_exe in candidates:
+            candidates = _installed_candidates(finders[flavor](), flavor)
+        for path, from_env in candidates:
             result = check_executable(
                 path,
                 flavor,
@@ -397,7 +400,7 @@ def _ensure(
                 observations=observations,
                 probe_version=probe_version,
                 rejection_level=rejection_level,
-                from_conda_exe=from_conda_exe,
+                from_env=from_env,
             )
             if result is not None:
                 if result.version is None:

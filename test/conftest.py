@@ -6,6 +6,12 @@ import docker
 import pytest
 
 
+@pytest.fixture(autouse=True)
+def isolate_shell_launchers(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("CONDA_EXE", raising=False)
+    monkeypatch.delenv("MAMBA_EXE", raising=False)
+
+
 @pytest.fixture(scope="session")
 def in_github_actions() -> bool:
     return os.environ.get("GITHUB_WORKFLOW") is not None

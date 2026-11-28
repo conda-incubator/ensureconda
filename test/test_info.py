@@ -299,12 +299,70 @@ def test_micromamba_minimum_and_conda_fallback(
     micromamba = executable_file(bin_dir / "micromamba.exe")
     calls.clear()
     assert ensure(targets, install="never") == CondaExecutable(
+        override, "micromamba", Version("3.0.0")
+    )
+    assert calls == [override.name]
+    outputs[override.name] = "1.5.8"
+    assert ensure(targets, install="never") == CondaExecutable(
         micromamba, "micromamba", Version("2.9.0")
     )
-    assert calls == [micromamba.name]
-    outputs[micromamba.name] = "1.4"
+
+
+@pytest.mark.parametrize("flavor", ["mamba", "micromamba"])
+def test_mamba_shell_launchers_precede_cache_and_path(
+    flavor: Flavor,
+    set_conda_exe: Callable[[str], Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    preferred = executable_file(tmp_path / "shell" / f"{flavor}.cmd")
+    monkeypatch.setenv("MAMBA_EXE", str(preferred))
+    secondary = set_conda_exe(f"{flavor}.bat")
+    cached = executable_file(tmp_path / "cache" / f"{flavor}.exe")
+    on_path = executable_file(tmp_path / "bin" / f"{flavor}.exe")
+    monkeypatch.setenv("PATH", str(on_path.parent))
+    outputs = {preferred.name: "2.3", secondary.name: "2.2", cached.name: "2.1"}
+    calls = fake_version_outputs(monkeypatch, outputs)
+    targets = [f"{flavor}>=2"]
+
     assert ensure(targets, install="never") == CondaExecutable(
-        override, "micromamba", Version("3.0.0")
+        preferred, flavor, Version("2.3")
+    )
+    assert calls == [preferred.name]
+    outputs[preferred.name] = "1.9"
+    assert ensure(targets, install="never") == CondaExecutable(
+        secondary, flavor, Version("2.2")
+    )
+    secondary.unlink()
+    assert ensure(targets, install="never") == CondaExecutable(
+        cached, flavor, Version("2.1")
+    )
+    cached.unlink()
+    assert ensure(targets, install="never") == CondaExecutable(
+        on_path, flavor, Version("2.1")
+    )
+
+
+@pytest.mark.parametrize(
+    "target, other", [("mamba", "micromamba"), ("micromamba", "mamba")]
+)
+def test_mamba_launcher_must_match_the_requested_tool(
+    target: Flavor,
+    other: Flavor,
+    set_conda_exe: Callable[[str], Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wrong = executable_file(tmp_path / other)
+    monkeypatch.setenv("MAMBA_EXE", str(wrong))
+    matching = set_conda_exe(target)
+    fake_version_outputs(monkeypatch, {wrong.name: "2.3", matching.name: "2.2"})
+
+    assert ensure([f"{target}>=2"], install="never") == CondaExecutable(
+        matching, target, Version("2.2")
+    )
+    assert ensure([target], install="never", probe_version=False) == CondaExecutable(
+        matching, target, None
     )
 
 
@@ -338,21 +396,46 @@ def test_other_targets_check_conda_exe_as_the_requested_tool(
     assert ensure([flavor], install="never", probe_version=False) == (
         CondaExecutable(override, flavor, None) if named else None
     )
-    assert ensureconda(no_install=True, conda=False) is None
+    assert ensureconda(no_install=True, conda=False) == (override if named else None)
     assert calls == []
 
 
-def test_conda_exe_already_checked_on_path_is_not_retried(
+def test_shell_launchers_also_on_path_are_probed_once_per_target(
     set_conda_exe: Callable[[str], Path],
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     override = set_conda_exe("micromamba.exe")
+    monkeypatch.setenv("MAMBA_EXE", str(override))
     monkeypatch.setenv("PATH", str(override.parent))
     monkeypatch.setattr(determine_versions, "_fingerprint", lambda path: None)
     calls = fake_version_outputs(monkeypatch, {override.name: "1.5.8"})
 
     assert ensure(["micromamba>=2"], install="never") is None
     assert calls == [override.name]
+
+
+@pytest.mark.parametrize("variable", ["MAMBA_EXE", "CONDA_EXE"])
+def test_legacy_api_and_cli_select_mamba_under_its_own_target(
+    variable: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    mamba = executable_file(tmp_path / "mamba")
+    monkeypatch.setenv(variable, str(mamba))
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.setenv("ENSURECONDA_DATA_DIR", str(tmp_path / "empty"))
+    fake_version_outputs(monkeypatch, {mamba.name: "mamba 1.5.12\nconda 24.11.3"})
+
+    assert ensureconda(no_install=True, min_mamba_version=Version("1.5")) == mamba
+    runner = CliRunner()
+    args = ["--no-install", "--verbosity", "0"]
+    plain = runner.invoke(cli.ensureconda_cli, args)
+    assert plain.exit_code == 0
+    assert plain.stdout.strip() == str(mamba)
+    metadata = runner.invoke(cli.ensureconda_cli, [*args, "--json"])
+    assert metadata.exit_code == 0
+    assert (
+        json.loads(metadata.stdout)
+        == CondaExecutable(mamba, "mamba", Version("1.5.12")).to_json()
+    )
 
 
 @pytest.mark.parametrize(

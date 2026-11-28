@@ -111,16 +111,23 @@ constraints in Python packaging's version-specifier syntax, such as `>=2,<3` or
 and such an executable can't satisfy a constraint. Later releases may add
 fields to the result or keys to `ensureconda --json`.
 
-Conda's shell integration sets `CONDA_EXE` to the launcher for that conda
-installation. In Python, `ensure()` checks it first for the `conda` target,
-which accepts conda or conda-standalone. Other targets search the usual
-locations, including `PATH`, and then try `CONDA_EXE` if they still need a
-match. The executable must satisfy the current target's flavor and version
-requirements. For example,
-`ensure(["micromamba>=2", "conda"], install="never")` uses an installed conda
-when `CONDA_EXE` points to micromamba 1.5.8 and the first target finds no
-compatible micromamba. If neither target finds a match, it returns `None`.
-Adding a third bare `micromamba` target explicitly allows the 1.5.8 executable.
+Conda's shell integration sets `CONDA_EXE` to its launcher. Mamba's shell
+integration uses `MAMBA_EXE`, which can name either mamba or micromamba.
+The Python APIs and CLI try the shell launchers before searching ensureconda's
+data directory and `PATH`.
+
+| Requested tool | Shell launchers, in order | Accepted tool |
+| --- | --- | --- |
+| `conda` | `CONDA_EXE` | conda or conda-standalone |
+| `conda-standalone` | `CONDA_EXE` | conda-standalone |
+| `mamba` | `MAMBA_EXE`, then `CONDA_EXE` | mamba |
+| `micromamba` | `MAMBA_EXE`, then `CONDA_EXE` | micromamba |
+
+For example, `ensure(["micromamba>=2", "conda"], install="never")` tries
+the micromamba named by `MAMBA_EXE` first. If it is too old, the search can
+use a compatible micromamba from `CONDA_EXE`, the data directory or `PATH`.
+If none qualifies, the search moves on to conda. Adding a third bare
+`micromamba` target explicitly allows an older micromamba.
 
 When `identify()` probes a wrapper named `conda` that prints both
 `mamba 1.5.12` and `conda 24.11.3`, it reports `mamba` 1.5.12. The second
@@ -161,7 +168,7 @@ they consult the conda-forge release metadata on `api.anaconda.org`. Metadata
 and archive downloads retry transient failures.
 
 `ensureconda()`, the old API, keeps its options, its path-or-`None` result and
-its original search order.
+its original order of targets.
 
 ### Diagnostics
 
