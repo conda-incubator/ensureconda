@@ -154,6 +154,32 @@ def test_unprobed_target_uses_only_a_current_failure(
     assert runs() == 1
 
 
+@pytest.mark.parametrize(
+    "body, expected_flavor",
+    [
+        ("echo 'mamba 1.5.12'\necho 'conda 24.11.3'", "mamba"),
+        ("echo '#' >> \"$0\"\necho 'mamba 1.5.12'\necho 'conda 24.11.3'", "conda"),
+    ],
+    ids=["unchanged", "changed-during-probe"],
+)
+def test_unprobed_conda_fallback_uses_current_flavor(
+    body: str,
+    expected_flavor: api.Flavor,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    runs: Callable[[], int],
+) -> None:
+    alias = stand_in(tmp_path / "conda", body)
+    monkeypatch.setenv("CONDA_EXE", str(alias))
+    monkeypatch.setenv("ENSURECONDA_DATA_DIR", str(tmp_path / "cache"))
+    monkeypatch.setenv("PATH", "")
+
+    result = api.ensure(["conda>=24", "conda"], install="never", probe_version=False)
+
+    assert result == CondaExecutable(alias, expected_flavor, None)
+    assert runs() == 1
+
+
 @pytest.mark.parametrize("probe_version", [True, False])
 def test_bare_target_accepts_prerelease_after_constrained_target(
     probe_version: bool,

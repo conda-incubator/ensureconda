@@ -203,8 +203,9 @@ def ensure(
     satisfy unconstrained targets, with version=None.
 
     With probe_version=False, probe installed candidates only when constrained,
-    and omit unconstrained result versions, even after an earlier target
-    probed the same file. Skip a file if this call still has a valid record
+    and omit unconstrained result versions. The conda target can still use
+    output recorded earlier in this call to identify an unchanged file.
+    Skip a file if this call still has a valid record
     that its version probe exited unsuccessfully. Downloaded executables must
     always run successfully. An unconstrained download can report an unreadable
     version.

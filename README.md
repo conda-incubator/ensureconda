@@ -126,8 +126,10 @@ Renamed mamba 2 and micromamba both print a bare version number and are
 reported as `micromamba`. Renamed conda and conda-standalone both print
 `conda` followed by a version and are reported as `conda`.
 If neither identifies the tool, a bare `conda` target still accepts a usable
-candidate as `conda` with version `None`. With `probe_version=False`, this
-fallback also applies to an unrecognized name without running it.
+candidate as `conda` with version `None`. With `probe_version=False`, a bare
+`conda` target can use an earlier probe from the same call to identify an
+unchanged file. Otherwise it uses the name alone. Its version is `None` in
+both cases.
 
 Version constraints skip prereleases unless you request one, as in
 `micromamba>=2.0rc1`. A plain `micromamba` target can use an installed

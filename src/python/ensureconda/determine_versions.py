@@ -80,16 +80,16 @@ def _run_version(exe: _StrPath) -> Union[str, Exception]:
         return error
 
 
-def _has_failed_probe(path: Path, observations: Optional[_Observations]) -> bool:
+def _recorded_probe(
+    path: Path, observations: Optional[_Observations]
+) -> Union[str, Exception, None]:
     if not observations or not os.path.dirname(path):
-        return False
+        return None
     key = _observation_key(path)
     recorded = observations.get(key) if key is not None else None
-    return (
-        recorded is not None
-        and isinstance(recorded[1], subprocess.CalledProcessError)
-        and recorded[0] == _fingerprint(path)
-    )
+    if recorded is not None and recorded[0] == _fingerprint(path):
+        return recorded[1]
+    return None
 
 
 def _version_output(exe: _StrPath, observations: Optional[_Observations]) -> str:
@@ -433,8 +433,12 @@ def check_executable(
                         reason,
                     )
                 return None
-    elif _has_failed_probe(path, observations):
-        return None
+    else:
+        recorded = _recorded_probe(path, observations)
+        if isinstance(recorded, subprocess.CalledProcessError):
+            return None
+        if flavor == "conda" and isinstance(recorded, str):
+            candidate_flavor = _flavor_from_output(recorded, candidate_flavor)
     match = match_version(version, constraint)
     if match is not VersionMatch.ACCEPTED:
         if rejection_level is not None:
