@@ -207,11 +207,12 @@ def ensure(
     Successful installed commands with unparseable or undecodable output can
     satisfy unconstrained targets, with version=None.
 
-    With probe_version=False, probe installed candidates only when constrained,
-    and omit unconstrained result versions. A target can still identify a
-    shell launcher using output recorded earlier in this call for the unchanged file.
-    Skip a file if this call still has a valid record
-    that its version probe exited unsuccessfully. Downloaded executables must
+    With probe_version=False, probe installed candidates only for constrained
+    targets. A bare target returns version=None. It uses the filename or, if
+    the file is known to be unchanged, output from an earlier probe in this
+    call. Skip a candidate whose last probe exited unsuccessfully or reported
+    an incompatible tool, unless the file is known to have changed.
+    Downloaded executables must
     always run successfully. An unconstrained download can report an unreadable
     version.
     Select the newest package satisfying the constraint before downloading.
@@ -299,7 +300,7 @@ def _ensure(
             )
 
     rejection_level = logging.WARNING if install == "force" else logging.INFO
-    observations: _Observations = {}
+    observations = _Observations()
 
     # A missing download mapping need not prevent using an installed tool.
     unsupported_platform: Optional[UnsupportedPlatformError] = None

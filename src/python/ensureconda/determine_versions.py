@@ -4,7 +4,7 @@ import logging
 import os
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
 from typing import (
@@ -36,12 +36,51 @@ _LEGACY_UNKNOWN_VERSION = Version("0.0.0")
 
 # Device, inode, size, and modification and change times in nanoseconds.
 _Fingerprint = Tuple[int, int, int, int, int]
-# The output of `--version`, or the error from running it, for a fingerprint.
-_Observation = Tuple[_Fingerprint, Union[str, Exception]]
-# The observations of one call, by absolute path, reused for files that don't
-# change during it. Reuse assumes that what a wrapper or script runs doesn't
-# change either. None runs every probe.
-_Observations = Dict[str, _Observation]
+_ProbeResult = Union[str, Exception]
+_Observation = Tuple[_Fingerprint, _ProbeResult]
+
+
+@dataclass
+class _Observations:
+    """Version probes from one resolution, keyed by executable path."""
+
+    verified: Dict[Path, _Observation] = field(default_factory=dict)
+    # Only a bare target may consult this evidence, and only to skip a candidate.
+    unverified: Dict[Path, _ProbeResult] = field(default_factory=dict)
+
+    def probe(self, exe: _StrPath) -> _ProbeResult:
+        key = _observation_key(exe)
+        if key is None:
+            return _run_version(exe)
+        before = _fingerprint(exe)
+        recorded = self.verified.get(key)
+        if recorded is not None and recorded[0] == before:
+            return recorded[1]
+        if before is not None:
+            self.verified.pop(key, None)
+        result = _run_version(exe)
+        # A failure to start, such as a busy text file, may not happen again.
+        if not isinstance(result, OSError):
+            if before is None:
+                self.verified.pop(key, None)
+                self.unverified[key] = result
+            else:
+                # A change during the probe moves the change time past this record.
+                self.unverified.pop(key, None)
+                self.verified[key] = (before, result)
+        return result
+
+    def for_bare_target(self, path: Path) -> Tuple[Optional[_ProbeResult], bool]:
+        """Return earlier evidence and whether it identifies the current file."""
+        key = _observation_key(path)
+        if key is None:
+            return None, False
+        recorded = self.verified.get(key)
+        if recorded is not None:
+            current = _fingerprint(path)
+            if current is None or recorded[0] == current:
+                return recorded[1], current is not None
+        return self.unverified.get(key), False
 
 
 def _fingerprint(path: _StrPath) -> Optional[_Fingerprint]:
@@ -56,15 +95,20 @@ def _fingerprint(path: _StrPath) -> Optional[_Fingerprint]:
     return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
 
 
-def _observation_key(path: _StrPath) -> Optional[str]:
+def _observation_key(path: _StrPath) -> Optional[Path]:
+    # A bare name is looked up on PATH and may run a different file.
+    if not os.path.dirname(path):
+        return None
     try:
-        return os.path.abspath(path)
+        # Preserve '..' because the preceding directory could be a symlink.
+        executable = path if isinstance(path, Path) else Path(path)
+        return executable.absolute()
     except OSError:
         # The working directory was removed.
         return None
 
 
-def _run_version(exe: _StrPath) -> Union[str, Exception]:
+def _run_version(exe: _StrPath) -> _ProbeResult:
     try:
         # Check the exit status before decoding stdout. A decode error on its
         # own means the command ran successfully and its version is unknown.
@@ -80,35 +124,8 @@ def _run_version(exe: _StrPath) -> Union[str, Exception]:
         return error
 
 
-def _recorded_probe(
-    path: Path, observations: Optional[_Observations]
-) -> Union[str, Exception, None]:
-    if not observations or not os.path.dirname(path):
-        return None
-    key = _observation_key(path)
-    recorded = observations.get(key) if key is not None else None
-    if recorded is not None and recorded[0] == _fingerprint(path):
-        return recorded[1]
-    return None
-
-
 def _version_output(exe: _StrPath, observations: Optional[_Observations]) -> str:
-    key: Optional[str] = None
-    current: Optional[_Fingerprint] = None
-    # Running a bare name looks it up on PATH, so it may run another file.
-    if observations is not None and os.path.dirname(exe):
-        key, current = _observation_key(exe), _fingerprint(exe)
-    result: Union[str, Exception]
-    if observations is None or key is None or current is None:
-        result = _run_version(exe)
-    elif key in observations and observations[key][0] == current:
-        result = observations[key][1]
-    else:
-        result = _run_version(exe)
-        # A failure to start, such as a busy text file, may not happen again.
-        if not isinstance(result, OSError):
-            # A change during the probe moves the change time past this record.
-            observations[key] = (current, result)
+    result = _run_version(exe) if observations is None else observations.probe(exe)
     if isinstance(result, Exception):
         raise result
     return result
@@ -121,7 +138,10 @@ def detach_observation(
     if observations is None:
         return None
     key = _observation_key(path)
-    recorded = None if key is None else observations.pop(key, None)
+    if key is None:
+        return None
+    observations.unverified.pop(key, None)
+    recorded = observations.verified.pop(key, None)
     if recorded is None or recorded[0] != _fingerprint(path):
         return None
     return recorded
@@ -133,12 +153,21 @@ def attach_observation(
     recorded: Optional[_Observation],
 ) -> None:
     """Keep a detached result for the file it was renamed to at path."""
-    if observations is None or recorded is None:
+    if observations is None:
         return
-    key, after = _observation_key(path), _fingerprint(path)
+    key = _observation_key(path)
+    if key is None:
+        return
+    # The installer has replaced the target, even if the staged file had no
+    # usable fingerprint. Evidence about the previous executable is obsolete.
+    observations.unverified.pop(key, None)
+    observations.verified.pop(key, None)
+    if recorded is None:
+        return
+    after = _fingerprint(path)
     # A rename updates the change time only.
-    if key is not None and after is not None and recorded[0][:4] == after[:4]:
-        observations[key] = (after, recorded[1])
+    if after is not None and recorded[0][:4] == after[:4]:
+        observations.verified[key] = (after, recorded[1])
 
 
 def determine_mamba_version(exe: _StrPath) -> Version:
@@ -461,12 +490,14 @@ def check_executable(
                         reason,
                     )
                 return None
-    else:
-        recorded = _recorded_probe(path, observations)
+    elif observations is not None:
+        recorded, verified = observations.for_bare_target(path)
         if isinstance(recorded, subprocess.CalledProcessError):
             return None
         if isinstance(recorded, str):
-            candidate_flavor = _flavor_from_output(recorded, candidate_flavor)
+            observed = _flavor_from_output(recorded, candidate_flavor)
+            if verified or not _matches_target_flavor(observed, flavor, constraint):
+                candidate_flavor = observed
     if not _matches_target_flavor(candidate_flavor, flavor, constraint):
         if rejection_level is not None:
             logger.log(

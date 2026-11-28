@@ -50,7 +50,7 @@ def test_unchanged_file_runs_once_per_call(
     tmp_path: Path, runs: Callable[[], int]
 ) -> None:
     micromamba = stand_in(tmp_path / "micromamba", "echo 2.9.0")
-    observations: _Observations = {}
+    observations = _Observations()
 
     for _ in range(2):
         assert _probe_version(micromamba, "micromamba", observations) == (
@@ -65,7 +65,7 @@ def test_unchanged_file_runs_once_per_call(
 
 def test_changed_file_runs_again(tmp_path: Path, runs: Callable[[], int]) -> None:
     micromamba = stand_in(tmp_path / "micromamba", "echo 2.9.0")
-    observations: _Observations = {}
+    observations = _Observations()
 
     _probe_version(micromamba, "micromamba", observations)
     stand_in(micromamba, "echo 2.10.0")
@@ -81,7 +81,7 @@ def test_observer_does_not_cache_a_path_lookup_against_the_local_file(
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     monkeypatch.setenv("PATH", str(bin_dir))
-    observations: _Observations = {}
+    observations = _Observations()
     for version in ("25.1", "25.2"):
         stand_in(bin_dir / "conda", f"echo conda {version}")
         assert _probe_version("conda", "conda", observations) == Version(version)
@@ -91,7 +91,7 @@ def test_file_changed_while_probing_is_not_reused(
     tmp_path: Path, runs: Callable[[], int]
 ) -> None:
     micromamba = stand_in(tmp_path / "micromamba", 'echo "#" >> "$0"\necho 2.9.0')
-    observations: _Observations = {}
+    observations = _Observations()
 
     for _ in range(2):
         _probe_version(micromamba, "micromamba", observations)
@@ -102,7 +102,7 @@ def test_requirements_apply_to_one_observation(
     tmp_path: Path, runs: Callable[[], int]
 ) -> None:
     micromamba = stand_in(tmp_path / "micromamba", "echo 2.9.0")
-    observations: _Observations = {}
+    observations = _Observations()
 
     assert (
         check_executable(
@@ -200,6 +200,25 @@ def test_later_mamba_target_uses_observed_conda_alias(
     assert runs() == 1
 
 
+def test_unverified_alias_does_not_veto_a_different_file_on_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    nested = tmp_path / "elsewhere" / "bin"
+    nested.mkdir(parents=True)
+    link = tmp_path / "link"
+    link.symlink_to(nested, target_is_directory=True)
+    stand_in(nested.parent / "conda", "echo mamba 1.5.12")
+    conda = stand_in(tmp_path / "conda", "echo conda 25.1.0")
+    monkeypatch.setenv("CONDA_EXE", str(link / ".." / "conda"))
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setenv("ENSURECONDA_DATA_DIR", str(tmp_path / "cache"))
+    monkeypatch.setattr(determine_versions, "_fingerprint", lambda path: None)
+
+    assert api.ensure(["mamba>=2", "conda"], install="never", probe_version=False) == (
+        CondaExecutable(conda, "conda", None)
+    )
+
+
 @pytest.mark.parametrize("probe_version", [True, False])
 def test_bare_target_accepts_prerelease_after_constrained_target(
     probe_version: bool,
@@ -230,7 +249,7 @@ def test_failure_and_unknown_version_stay_distinct(
     body: str, expected: object, tmp_path: Path, runs: Callable[[], int]
 ) -> None:
     micromamba = stand_in(tmp_path / "micromamba", body)
-    observations: _Observations = {}
+    observations = _Observations()
 
     for _ in range(2):
         result = check_executable(
@@ -246,7 +265,7 @@ def test_failure_and_unknown_version_stay_distinct(
 @linux_only
 def test_failure_to_start_is_not_kept(tmp_path: Path, runs: Callable[[], int]) -> None:
     micromamba = stand_in(tmp_path / "micromamba", "echo 2.9.0")
-    observations: _Observations = {}
+    observations = _Observations()
 
     with micromamba.open("ab"):
         with pytest.raises(OSError) as busy:
@@ -261,7 +280,7 @@ def test_validation_is_transferred_across_a_rename(
 ) -> None:
     staged = stand_in(tmp_path / "staged", "echo 2.9.0")
     target = tmp_path / "micromamba"
-    observations: _Observations = {}
+    observations = _Observations()
 
     _probe_version(staged, "micromamba", observations)
     validated = detach_observation(observations, staged)
@@ -276,7 +295,7 @@ def test_transfer_requires_the_renamed_file(
 ) -> None:
     staged = stand_in(tmp_path / "staged", "echo 2.9.0")
     target = stand_in(tmp_path / "micromamba", "echo 2.10.0")
-    observations: _Observations = {}
+    observations = _Observations()
 
     _probe_version(staged, "micromamba", observations)
     attach_observation(observations, target, detach_observation(observations, staged))
@@ -286,7 +305,7 @@ def test_transfer_requires_the_renamed_file(
 
 def test_change_during_validation_is_not_transferred(tmp_path: Path) -> None:
     target = tmp_path / "micromamba"
-    observations: _Observations = {}
+    observations = _Observations()
     validation = DownloadValidation(
         "micromamba", SpecifierSet(">=1"), Version("2.9"), observations
     )
@@ -300,6 +319,25 @@ def test_change_during_validation_is_not_transferred(tmp_path: Path) -> None:
         )
         is None
     )
+
+
+def test_replacing_an_unverifiable_file_clears_its_previous_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    target = stand_in(tmp_path / "micromamba", "exit 1")
+    observations = _Observations()
+    monkeypatch.setattr(determine_versions, "_fingerprint", lambda path: None)
+    assert (
+        check_executable(target, "micromamba", None, observations=observations) is None
+    )
+
+    validation = DownloadValidation("micromamba", None, Version("2.9"), observations)
+    with new_executable(target, validation=validation) as staged:
+        staged.write(b"#!/bin/sh\necho 2.9\n")
+
+    assert check_executable(
+        target, "micromamba", None, observations=observations, probe_version=False
+    ) == CondaExecutable(target, "micromamba", None)
 
 
 def test_identify_runs_the_executable_once(
@@ -364,14 +402,14 @@ def test_probes_run_without_a_working_directory(
 @pytest.mark.usefixtures("removed_working_directory")
 def test_transfer_without_a_working_directory(tmp_path: Path) -> None:
     staged = stand_in(tmp_path / "staged", "echo 2.9.0")
-    observations: _Observations = {}
+    observations = _Observations()
     _probe_version(staged, "micromamba", observations)
     recorded = detach_observation(observations, staged)
     assert recorded is not None
 
     assert detach_observation(observations, Path("../staged")) is None
     attach_observation(observations, Path("../staged"), recorded)
-    assert observations == {}
+    assert observations == _Observations()
 
 
 def test_nothing_is_reused_on_windows(
@@ -379,7 +417,7 @@ def test_nothing_is_reused_on_windows(
 ) -> None:
     micromamba = stand_in(tmp_path / "micromamba", "echo 2.9.0")
     monkeypatch.setattr(os, "name", "nt")
-    observations: _Observations = {}
+    observations = _Observations()
 
     for _ in range(2):
         _probe_version(micromamba, "micromamba", observations)

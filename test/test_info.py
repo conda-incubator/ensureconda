@@ -4,7 +4,7 @@ import subprocess
 import sys
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Union, cast
+from typing import Any, Callable, Dict, List, Optional, Union, cast
 
 import pytest
 from click.testing import CliRunner
@@ -472,6 +472,103 @@ def test_shell_launchers_also_on_path_are_probed_once_per_target(
 
     assert ensure(["micromamba>=2"], install="never") is None
     assert calls == [override.name]
+
+
+@pytest.mark.parametrize("verifiable", [True, False], ids=["verified", "unverified"])
+@pytest.mark.parametrize(
+    "targets, name, output, verified_match",
+    [
+        (["conda>=25", "conda"], "conda", "mamba 1.5.12\nconda 24.11.3", None),
+        (["mamba>=2", "conda"], "conda", "mamba 1.5.12\nconda 24.11.3", None),
+        (["conda>=24", "mamba"], "conda", "mamba 1.5.12\nconda 24.11.3", "mamba"),
+        (["conda>=25", "conda"], "wrapper", "conda 24.11.3", "conda"),
+    ],
+)
+def test_earlier_probe_can_veto_but_only_verified_output_can_identify_a_launcher(
+    targets: List[str],
+    name: str,
+    output: str,
+    verified_match: Optional[Flavor],
+    verifiable: bool,
+    set_conda_exe: Callable[[str], Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launcher = set_conda_exe(name + ".exe")
+    fingerprint = (1, 2, 3, 4, 5) if verifiable else None
+    monkeypatch.setattr(determine_versions, "_fingerprint", lambda path: fingerprint)
+    calls = fake_version_outputs(monkeypatch, {launcher.name: output})
+
+    result = ensure(targets, install="never", probe_version=False)
+
+    assert result == (
+        CondaExecutable(launcher, verified_match, None)
+        if verifiable and verified_match is not None
+        else None
+    )
+    assert calls == [launcher.name]
+
+
+def test_unverified_mismatch_falls_through_to_conda_on_path(
+    set_conda_exe: Callable[[str], Path],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    alias = set_conda_exe("conda")
+    conda = executable_file(tmp_path / "bin" / "conda.exe")
+    monkeypatch.setenv("PATH", str(conda.parent))
+    monkeypatch.setattr(determine_versions, "_fingerprint", lambda path: None)
+    calls = fake_version_outputs(monkeypatch, {alias.name: "mamba 1.5.12"})
+
+    assert ensure(["mamba>=2", "conda"], install="never", probe_version=False) == (
+        CondaExecutable(conda, "conda", None)
+    )
+    assert calls == [alias.name]
+
+
+@pytest.mark.parametrize(
+    "first, accepted",
+    [
+        (subprocess.CalledProcessError(1, "conda"), False),
+        (OSError("busy"), True),
+        (b"\xff", True),
+    ],
+    ids=["nonzero-exit", "failed-to-start", "undecodable-output"],
+)
+def test_only_a_nonzero_exit_vetoes_a_later_unprobed_candidate(
+    first: Union[Exception, bytes],
+    accepted: bool,
+    set_conda_exe: Callable[[str], Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    conda = set_conda_exe("conda.exe")
+    monkeypatch.setattr(determine_versions, "_fingerprint", lambda path: None)
+    outputs = iter([first])
+
+    def check_output(*args: object, **kwargs: object) -> bytes:
+        output = next(outputs)
+        if isinstance(output, Exception):
+            raise output
+        return output
+
+    monkeypatch.setattr(subprocess, "check_output", check_output)
+    result = ensure(["conda>=25", "conda"], install="never", probe_version=False)
+    assert result == (CondaExecutable(conda, "conda", None) if accepted else None)
+    assert ensure(["conda"], install="never", probe_version=False) == (
+        CondaExecutable(conda, "conda", None)
+    )
+
+
+def test_later_constrained_target_probes_an_unverifiable_launcher_again(
+    set_conda_exe: Callable[[str], Path], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    conda = set_conda_exe("conda.exe")
+    monkeypatch.setattr(determine_versions, "_fingerprint", lambda path: None)
+    outputs = iter([b"mamba 1.5.12\nconda 24.11.3", b"conda 25.1"])
+    monkeypatch.setattr(subprocess, "check_output", lambda *a, **kw: next(outputs))
+
+    assert ensure(["mamba>=2", "conda>=25"], install="never", probe_version=False) == (
+        CondaExecutable(conda, "conda", Version("25.1"))
+    )
 
 
 @pytest.mark.parametrize("variable", ["MAMBA_EXE", "CONDA_EXE"])
