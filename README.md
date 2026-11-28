@@ -113,12 +113,16 @@ fields to the result or keys to `ensureconda --json`.
 
 The Python `conda` target checks `CONDA_EXE` first. For example, if it points
 to mamba 1.5.12, `ensure(["conda"])` returns that path with flavor `mamba` and
-version `1.5.12`. A constrained target such as `conda>=24` skips mamba and
-micromamba and continues looking for a compatible conda. A conda-standalone
-executable supplied through `CONDA_EXE` can satisfy a conda constraint.
+version `1.5.12`. A constrained target such as `conda>=24` skips candidates
+identified as mamba or micromamba and continues looking for a compatible
+conda. A conda-standalone executable supplied through `CONDA_EXE` can satisfy
+a conda constraint.
 
 As with `identify()`, the file name determines the flavor when recognized.
 For other names, `ensure()` uses the output of `--version` when it probes.
+Renamed mamba 2 and micromamba both print a bare version number and are
+reported as `micromamba`. Renamed conda and conda-standalone both print
+`conda` followed by a version and are reported as `conda`.
 If neither identifies the tool, a bare `conda` target still accepts a usable
 candidate as `conda` with version `None`. With `probe_version=False`, this
 fallback also applies to an unrecognized name without running it.

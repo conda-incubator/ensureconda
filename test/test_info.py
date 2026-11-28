@@ -3,11 +3,11 @@ import subprocess
 import sys
 from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Callable, Dict, List, cast
+from typing import Any, Callable, Dict, List, Union, cast
 
 import pytest
 from click.testing import CliRunner
-from packaging.version import InvalidVersion, Version
+from packaging.version import Version
 
 from ensureconda import api, cli, determine_versions, ensure
 from ensureconda.api import CondaExecutable, Flavor, ensureconda, identify
@@ -126,6 +126,12 @@ def test_ensure_reuses_the_target_version_check(
         # Unrecognized names fall back to the shape of the output.
         ("bin/mm", "2.9.0\n", "micromamba", "2.9.0"),
         ("bin/my-mamba", "mamba 1.5.12\nconda 24.11.3\n", "mamba", "1.5.12"),
+        (
+            "bin/my-mamba",
+            "conda 24.11.3\nmambaforge 9.0\nmamba 1.5.12",
+            "mamba",
+            "1.5.12",
+        ),
         ("bin/my-conda", "conda 26.5.2\n", "conda", "26.5.2"),
     ],
 )
@@ -158,6 +164,25 @@ def set_conda_exe(
         return executable
 
     return create
+
+
+@pytest.mark.parametrize(
+    "banner", ["Loading profile", "mambaforge build 9", "conda-wrapper 9"]
+)
+def test_conda_wrapper_reports_its_version_after_a_banner(
+    banner: str,
+    set_conda_exe: Callable[[str], Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    wrapper = set_conda_exe("conda-wrapper")
+    calls = fake_version_outputs(monkeypatch, {wrapper.name: f"{banner}\nconda 24.1.2"})
+    expected = CondaExecutable(wrapper, "conda", Version("24.1.2"))
+
+    assert ensure(["conda>=24"], install="never") == expected
+    assert ensure(["conda"], install="never") == expected
+    assert identify(wrapper) == expected
+    assert ensureconda(min_conda_version=Version("24"), no_install=True) == wrapper
+    assert calls == [wrapper.name] * 4
 
 
 @pytest.mark.parametrize(
@@ -254,23 +279,25 @@ def test_identify_rejects_unrecognized_executables(
 
 
 @pytest.mark.parametrize(
-    "error",
+    "probe_result",
     [
         subprocess.CalledProcessError(1, ["micromamba", "--version"]),
         OSError(8, "Exec format error"),
-        InvalidVersion("Invalid version: 'garbage'"),
-        UnicodeDecodeError("utf-8", b"\xff", 0, 1, "invalid start byte"),
+        b"garbage",
+        b"\xff",
     ],
     ids=["nonzero-exit", "exec-error", "invalid-version", "undecodable-output"],
 )
 def test_identify_still_reports_unknown_version_after_probe_failure(
-    error: Exception,
+    probe_result: Union[Exception, bytes],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     log_messages: Callable[[], str],
 ) -> None:
     def broken_version(*args: object, **kwargs: object) -> bytes:
-        raise error
+        if isinstance(probe_result, Exception):
+            raise probe_result
+        return probe_result
 
     executable = executable_file(tmp_path / "micromamba")
     monkeypatch.setattr(subprocess, "check_output", broken_version)

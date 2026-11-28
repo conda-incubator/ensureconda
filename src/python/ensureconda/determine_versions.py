@@ -158,10 +158,18 @@ def determine_mamba_version(exe: _StrPath) -> Version:
     return _mamba_version(_version_output(exe, None))
 
 
+def _named_version(output: str, name: str) -> Optional[str]:
+    for line in output.splitlines():
+        fields = line.split()
+        if fields and fields[0] == name:
+            return fields[-1]
+    return None
+
+
 def _mamba_version(output: str) -> Version:
-    for line in output.strip().splitlines(keepends=False):
-        if line.startswith("mamba"):
-            return Version(line.split()[-1])
+    version = _named_version(output, "mamba")
+    if version is not None:
+        return Version(version)
     # Not v1 style output, so fall back to micromamba version detection
     return _micromamba_version(output)
 
@@ -181,10 +189,8 @@ def determine_conda_version(exe: _StrPath) -> Version:
 
 
 def _conda_version(output: str) -> Version:
-    for line in output.strip().splitlines(keepends=False):
-        if line.startswith("conda"):
-            return Version(line.split()[-1])
-    return _LEGACY_UNKNOWN_VERSION
+    version = _named_version(output, "conda")
+    return _LEGACY_UNKNOWN_VERSION if version is None else Version(version)
 
 
 Flavor = Literal["mamba", "micromamba", "conda", "conda_standalone"]
@@ -230,11 +236,11 @@ def _flavor_from_name(executable: _StrPath) -> Optional[Flavor]:
 
 
 def _flavor_from_output(output: str) -> Optional[Flavor]:
-    lines = output.strip().splitlines()
-    if any(line.startswith("mamba") for line in lines):
+    if _named_version(output, "mamba") is not None:
         return "mamba"  # mamba 1 also reports the version of conda
-    if lines and lines[0].startswith("conda"):
+    if _named_version(output, "conda") is not None:
         return "conda"
+    lines = output.strip().splitlines()
     if lines:
         # micromamba prints only its version.
         try:
