@@ -187,6 +187,45 @@ def test_conda_wrapper_reports_its_version_after_a_banner(
 
 
 @pytest.mark.parametrize(
+    "output, flavor, version",
+    [
+        ("mamba 1.5.12\nconda 24.11.3", "mamba", "1.5.12"),
+        (
+            "mamba shell integration enabled\nconda 24.11.3\nmamba 1.5.12",
+            "mamba",
+            "1.5.12",
+        ),
+        ("mamba shell integration enabled\nconda 24.11.3", "conda", "24.11.3"),
+    ],
+)
+def test_conda_name_with_mamba_in_its_output(
+    output: str,
+    flavor: Flavor,
+    version: str,
+    set_conda_exe: Callable[[str], Path],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    alias = set_conda_exe("conda")
+    other = executable_file(tmp_path / "bin" / "conda.exe")
+    monkeypatch.setenv("PATH", str(other.parent))
+    calls = fake_version_outputs(
+        monkeypatch, {alias.name: output, other.name: "conda 25.1"}
+    )
+    expected = CondaExecutable(alias, flavor, Version(version))
+
+    assert identify(alias) == expected
+    assert ensure(["conda"], install="never") == expected
+    constrained = ensure(["conda>=24"], install="never", probe_version=False)
+    if flavor == "mamba":
+        assert constrained == CondaExecutable(other, "conda", Version("25.1"))
+        assert calls == [alias.name] * 3 + [other.name]
+    else:
+        assert constrained == expected
+        assert calls == [alias.name] * 3
+
+
+@pytest.mark.parametrize(
     "name, output, flavor, version",
     [
         ("micromamba", "2.9.0", "micromamba", "2.9.0"),

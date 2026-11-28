@@ -403,11 +403,11 @@ def identify(executable: _StrPath) -> CondaExecutable:
     A relative path names a file in the working directory. The result includes
     its absolute path whenever the working directory can be named.
 
-    The flavor comes from the file name, as for the executables that
-    :func:`ensureconda` finds. For other names it comes from the shape of the
-    ``--version`` output instead, which can't distinguish micromamba from
-    mamba 2, nor conda from conda-standalone; those are reported as
-    "micromamba" and "conda".
+    A ``mamba <version>`` line identifies mamba 1 even under another name.
+    Otherwise, a recognized file name determines the flavor. With an unfamiliar
+    name, a bare version number is reported as "micromamba" (also printed by
+    mamba 2), and a conda version line as "conda" (also printed by
+    conda-standalone).
 
     Raises FileNotFoundError if the executable doesn't exist, PermissionError
     if it isn't executable, and ValueError if it can't be recognized.
@@ -421,7 +421,7 @@ def identify(executable: _StrPath) -> CondaExecutable:
     version = None
     try:
         output = _version_output(path, None)
-        flavor = flavor or _flavor_from_output(output)
+        flavor = _flavor_from_output(output, flavor)
         if flavor is not None:
             version = _parse_version(output, flavor)
     except (subprocess.CalledProcessError, OSError, InvalidVersion, UnicodeDecodeError):

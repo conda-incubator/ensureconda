@@ -118,8 +118,10 @@ identified as mamba or micromamba and continues looking for a compatible
 conda. A conda-standalone executable supplied through `CONDA_EXE` can satisfy
 a conda constraint.
 
-As with `identify()`, the file name determines the flavor when recognized.
-For other names, `ensure()` uses the output of `--version` when it probes.
+When the Python `conda` target or `identify()` probes a wrapper named `conda`
+that prints both `mamba 1.5.12` and `conda 24.11.3`, it reports `mamba`
+1.5.12. The second line describes mamba's bundled conda. A recognized file
+name determines the flavor when the version output is ambiguous.
 Renamed mamba 2 and micromamba both print a bare version number and are
 reported as `micromamba`. Renamed conda and conda-standalone both print
 `conda` followed by a version and are reported as `conda`.

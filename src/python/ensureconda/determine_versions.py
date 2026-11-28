@@ -166,7 +166,22 @@ def _named_version(output: str, name: str) -> Optional[str]:
     return None
 
 
+def _mamba1_version(output: str) -> Optional[Version]:
+    """Read a mamba 1 version line, even if the wrapper prints a banner first."""
+    for line in output.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[0] == "mamba":
+            try:
+                return Version(fields[1])
+            except InvalidVersion:
+                continue
+    return None
+
+
 def _mamba_version(output: str) -> Version:
+    standard = _mamba1_version(output)
+    if standard is not None:
+        return standard
     version = _named_version(output, "mamba")
     if version is not None:
         return Version(version)
@@ -235,7 +250,12 @@ def _flavor_from_name(executable: _StrPath) -> Optional[Flavor]:
     return flavors.get(name)
 
 
-def _flavor_from_output(output: str) -> Optional[Flavor]:
+def _flavor_from_output(
+    output: str, named_flavor: Optional[Flavor]
+) -> Optional[Flavor]:
+    if named_flavor is not None:
+        # The mamba 1 version line identifies the tool even under a conda alias.
+        return "mamba" if _mamba1_version(output) is not None else named_flavor
     if _named_version(output, "mamba") is not None:
         return "mamba"  # mamba 1 also reports the version of conda
     if _named_version(output, "conda") is not None:
@@ -365,9 +385,11 @@ def check_executable(
     if constrained or probe_version:
         try:
             output = None
-            if candidate_flavor is None:
+            if flavor == "conda" and not (
+                constrained and candidate_flavor in ("mamba", "micromamba")
+            ):
                 output = _version_output(path, observations)
-                candidate_flavor = _flavor_from_output(output)
+                candidate_flavor = _flavor_from_output(output, candidate_flavor)
             if (
                 constrained
                 and flavor == "conda"
