@@ -276,6 +276,7 @@ def _ensure(
     *,
     install: InstallPolicy,
     probe_version: bool,
+    selection_level: int = logging.DEBUG,
 ) -> Optional[CondaExecutable]:
     """Resolve typed targets shared by the old and new public APIs."""
     finders: Dict[Flavor, Callable[[], Iterator[Path]]] = {
@@ -406,9 +407,15 @@ def _ensure(
             )
             if result is not None:
                 if result.version is None:
-                    logger.info("Selected %s at %s", flavor, path)
+                    logger.log(selection_level, "Selected %s at %s", flavor, path)
                 else:
-                    logger.info("Selected %s %s at %s", flavor, result.version, path)
+                    logger.log(
+                        selection_level,
+                        "Selected %s %s at %s",
+                        flavor,
+                        result.version,
+                        path,
+                    )
                 return result
     if last_invalid_download is not None:
         raise last_invalid_download

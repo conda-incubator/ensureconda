@@ -192,9 +192,40 @@ def test_selection_without_a_known_version(
     monkeypatch.setattr(
         determine_versions, "_probe_version", lambda path, flavor, observations: None
     )
-    with caplog.at_level(logging.INFO, logger="ensureconda"):
+    with caplog.at_level(logging.DEBUG, logger="ensureconda"):
         result = api.ensure(
             ["micromamba"], install="never", probe_version=probe_version
         )
     assert result == api.CondaExecutable(Path("micromamba"), "micromamba", None)
-    assert caplog.messages == ["Selected micromamba at micromamba"]
+    assert caplog.messages[1:] == ["Selected micromamba at micromamba"]
+
+
+@pytest.mark.parametrize("old_api", [True, False])
+def test_library_selection_is_logged_below_info(
+    old_api: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    path = Path("micromamba")
+    monkeypatch.setattr(api, "micromamba_executables", lambda: iter([path]))
+    fake_version_outputs(monkeypatch, {path.name: "2"})
+    with caplog.at_level(logging.DEBUG, logger="ensureconda"):
+        if old_api:
+            found = api.ensureconda(
+                mamba=False, conda=False, conda_exe=False, no_install=True
+            )
+        else:
+            selected = api.ensure(["micromamba"], install="never")
+            found = None if selected is None else selected.path
+    assert found == path
+    selections = [
+        record.levelno
+        for record in caplog.records
+        if record.getMessage().startswith("Selected micromamba")
+    ]
+    assert selections == [logging.DEBUG]
+    assert not [
+        record.getMessage()
+        for record in caplog.records
+        if record.levelno >= logging.INFO
+    ]

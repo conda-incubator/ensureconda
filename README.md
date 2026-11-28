@@ -144,7 +144,7 @@ its original search order.
 
 Both command lines write diagnostics to stderr, keeping stdout for the
 executable path or `--json` result; `--verbosity` selects how much they say.
-The Python API logs its decisions at INFO under the `ensureconda` logger.
+The Python API logs its decisions under the `ensureconda` logger.
 
 ### Cache location
 
