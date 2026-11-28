@@ -168,7 +168,14 @@ def set_conda_exe(
 
 
 @pytest.mark.parametrize(
-    "banner", ["Loading profile", "mambaforge build 9", "conda-wrapper 9"]
+    "banner",
+    [
+        "Loading profile",
+        "mambaforge build 9",
+        "conda-wrapper 9",
+        "mamba shell integration enabled",
+        "conda shell integration enabled",
+    ],
 )
 def test_conda_wrapper_reports_its_version_after_a_banner(
     banner: str,

@@ -158,19 +158,21 @@ def determine_mamba_version(exe: _StrPath) -> Version:
     return _mamba_version(_version_output(exe, None))
 
 
-def _named_version(output: str, name: str) -> Optional[str]:
+def _named_version(
+    output: str, name: str, *, two_fields: bool = False
+) -> Optional[str]:
     for line in output.splitlines():
         fields = line.split()
-        if fields and fields[0] == name:
+        if fields and fields[0] == name and (not two_fields or len(fields) == 2):
             return fields[-1]
     return None
 
 
-def _mamba1_version(output: str) -> Optional[Version]:
-    """Read a mamba 1 version line, even if the wrapper prints a banner first."""
+def _version_line(output: str, name: str) -> Optional[Version]:
+    """Read a `name version` line, even if a wrapper prints a banner first."""
     for line in output.splitlines():
         fields = line.split()
-        if len(fields) == 2 and fields[0] == "mamba":
+        if len(fields) == 2 and fields[0] == name:
             try:
                 return Version(fields[1])
             except InvalidVersion:
@@ -179,7 +181,7 @@ def _mamba1_version(output: str) -> Optional[Version]:
 
 
 def _mamba_version(output: str) -> Version:
-    standard = _mamba1_version(output)
+    standard = _version_line(output, "mamba")
     if standard is not None:
         return standard
     version = _named_version(output, "mamba")
@@ -204,6 +206,9 @@ def determine_conda_version(exe: _StrPath) -> Version:
 
 
 def _conda_version(output: str) -> Version:
+    standard = _version_line(output, "conda")
+    if standard is not None:
+        return standard
     version = _named_version(output, "conda")
     return _LEGACY_UNKNOWN_VERSION if version is None else Version(version)
 
@@ -255,11 +260,15 @@ def _flavor_from_output(
 ) -> Optional[Flavor]:
     if named_flavor is not None:
         # The mamba 1 version line identifies the tool even under a conda alias.
-        return "mamba" if _mamba1_version(output) is not None else named_flavor
-    if _named_version(output, "mamba") is not None:
-        return "mamba"  # mamba 1 also reports the version of conda
+        return "mamba" if _version_line(output, "mamba") is not None else named_flavor
+    # Mamba 1 also reports its bundled conda. A mamba version line, even
+    # with an unreadable version, takes precedence over that conda line.
+    if _named_version(output, "mamba", two_fields=True) is not None:
+        return "mamba"
     if _named_version(output, "conda") is not None:
         return "conda"
+    if _named_version(output, "mamba") is not None:
+        return "mamba"
     lines = output.strip().splitlines()
     if lines:
         # micromamba prints only its version.
