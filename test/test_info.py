@@ -525,6 +525,30 @@ def test_unverified_mismatch_falls_through_to_conda_on_path(
     assert calls == [alias.name]
 
 
+def test_unprobed_conda_fallback_after_running_a_mamba_shell_launcher(
+    set_conda_exe: Callable[[str], Path],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.chdir(tmp_path)
+    if sys.platform == "win32":
+        alias = set_conda_exe("conda.cmd")
+        preamble = "@echo off\n"
+    else:
+        alias = set_conda_exe("conda")
+        preamble = "#!/bin/sh\n"
+    alias.write_text(
+        preamble + "echo probe>>probes.txt\necho mamba 1.5.12\necho conda 24.11.3\n"
+    )
+
+    for first_target in ("conda>=25", "mamba>=2"):
+        assert (
+            ensure([first_target, "conda"], install="never", probe_version=False)
+            is None
+        )
+    assert (tmp_path / "probes.txt").read_text().splitlines() == ["probe", "probe"]
+
+
 @pytest.mark.parametrize(
     "first, accepted",
     [
