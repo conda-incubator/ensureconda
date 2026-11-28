@@ -132,10 +132,12 @@ If none qualifies, the search moves on to conda. Adding a third bare
 When `identify()` probes a wrapper named `conda` that prints both
 `mamba 1.5.12` and `conda 24.11.3`, it reports `mamba` 1.5.12. The second
 line describes mamba's bundled conda. The `conda` target skips this wrapper.
-A recognized file name determines the flavor when the output is ambiguous.
-Renamed mamba 2 and micromamba both print a bare version number and are
-reported as `micromamba`. Renamed conda and conda-standalone both print
-`conda` followed by a version and are reported as `conda`.
+A launcher named `conda` that prints only `2.9.0` can satisfy
+`micromamba>=2`. A launcher named `micromamba` that prints `conda 25.1.0`
+can satisfy a conda target. The filename distinguishes mamba 2 from
+micromamba when either prints a bare version, and conda from conda-standalone
+when either prints a conda version line. An unfamiliar filename defaults to
+`micromamba` and `conda` respectively.
 With `probe_version=False`, a bare target can use an earlier probe
 from the same call to identify an unchanged file. Otherwise it uses the file
 name alone. It skips an override whose flavor it cannot identify and returns

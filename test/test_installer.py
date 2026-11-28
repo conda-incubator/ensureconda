@@ -511,7 +511,7 @@ def test_install_reuses_an_executable_that_runs_by_default(
         commands.append(args)
         if not runs:
             raise OSError(8, "Exec format error")
-        return b"2.0.0\n"
+        return b"conda 2.0.0\n" if name == "conda_standalone" else b"2.0.0\n"
 
     def request(url: str, **kwargs: Any) -> requests.Response:
         urls.append(url)

@@ -304,12 +304,22 @@ def _parse_version(output: str, flavor: Flavor) -> Optional[Version]:
     return version
 
 
+class _UnexpectedFlavor(ValueError):
+    def __init__(self, expected: Flavor, actual: Flavor) -> None:
+        super().__init__(f"expected {expected}, but the executable reports {actual}")
+        self.actual = actual
+
+
 def _probe_version(
     executable: _StrPath, flavor: Flavor, observations: Optional[_Observations]
 ) -> Optional[Version]:
     if flavor not in _VERSION_PARSERS:
         raise ValueError(f"Unknown executable flavor: {flavor!r}")
-    return _parse_version(_version_output(executable, observations), flavor)
+    output = _version_output(executable, observations)
+    actual = _flavor_from_output(output, flavor)
+    if actual is not None and actual != flavor:
+        raise _UnexpectedFlavor(flavor, actual)
+    return _parse_version(output, flavor)
 
 
 def _requests_prerelease(constraint: SpecifierSet) -> bool:
@@ -408,25 +418,26 @@ def check_executable(
     rejection_level: Optional[int] = logging.INFO,
     from_env: bool = False,
 ) -> Optional[CondaExecutable]:
-    identify_flavor = from_env or flavor == "conda"
-    candidate_flavor = _flavor_from_name(path) if identify_flavor else flavor
+    # A launcher may have any filename. An ordinary finder supplies the tool
+    # name it searched for; the conda finder also returns CONDA_EXE.
+    candidate_flavor = (
+        _flavor_from_name(path) if from_env or flavor == "conda" else flavor
+    )
     version = None
     constrained = has_version_constraint(constraint)
     if constrained or probe_version:
         try:
-            if not identify_flavor:
-                version = _probe_version(path, flavor, observations)
-            elif (
-                candidate_flavor is None
-                or flavor == "mamba"  # mamba 1 identifies itself under any name
-                or _matches_target_flavor(candidate_flavor, flavor, constraint)
-            ):
+            if from_env or flavor == "conda":
                 output = _version_output(path, observations)
                 candidate_flavor = _flavor_from_output(output, candidate_flavor)
                 if candidate_flavor is not None and _matches_target_flavor(
                     candidate_flavor, flavor, constraint
                 ):
                     version = _parse_version(output, candidate_flavor)
+            else:
+                version = _probe_version(path, flavor, observations)
+        except _UnexpectedFlavor as error:
+            candidate_flavor = error.actual
         except (
             subprocess.CalledProcessError,
             OSError,
@@ -454,11 +465,9 @@ def check_executable(
         recorded = _recorded_probe(path, observations)
         if isinstance(recorded, subprocess.CalledProcessError):
             return None
-        if identify_flavor and isinstance(recorded, str):
+        if isinstance(recorded, str):
             candidate_flavor = _flavor_from_output(recorded, candidate_flavor)
-    if identify_flavor and not _matches_target_flavor(
-        candidate_flavor, flavor, constraint
-    ):
+    if not _matches_target_flavor(candidate_flavor, flavor, constraint):
         if rejection_level is not None:
             logger.log(
                 rejection_level,

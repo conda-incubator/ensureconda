@@ -263,6 +263,13 @@ def _installed_candidates(
             launcher = _executable_from_env(variable)
             if launcher is not None and launcher not in seen:
                 seen.add(launcher)
+                # Standalone and regular conda print the same version line.
+                # Only the standalone filename can identify this target.
+                if (
+                    flavor == "conda_standalone"
+                    and _flavor_from_name(launcher) != flavor
+                ):
+                    continue
                 yield launcher, True
     for path in paths:
         if path not in seen:

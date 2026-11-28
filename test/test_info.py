@@ -287,7 +287,7 @@ def test_conda_target_requires_a_conda_family_override(
     in_family = flavor in ("conda", "conda_standalone")
     result = ensure(["conda"], install="never")
     assert result == (info if in_family else None)
-    assert calls == ([name] if in_family or name == "wrapper" else [])
+    assert calls == [name]
 
     calls.clear()
     assert ensure(["conda"], install="never", probe_version=False) == (
@@ -297,6 +297,35 @@ def test_conda_target_requires_a_conda_family_override(
     )
     assert ensureconda(no_install=True) == executable
     assert calls == []
+
+
+@pytest.mark.parametrize(
+    "name, output, actual, version",
+    [
+        ("conda", "2.9.0", "micromamba", "2.9.0"),
+        ("mamba", "conda 25.1.0", "conda", "25.1.0"),
+        ("micromamba", "conda 25.1.0", "conda", "25.1.0"),
+    ],
+)
+def test_wrongly_named_launcher_can_only_satisfy_its_reported_family(
+    name: str,
+    output: str,
+    actual: Flavor,
+    version: str,
+    set_conda_exe: Callable[[str], Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = set_conda_exe(name + ".exe")
+    fake_version_outputs(monkeypatch, {path.name: output})
+    expected = CondaExecutable(path, actual, Version(version))
+    assert ensure([actual + ">=2", name], install="never") == expected
+    assert ensure([name], install="never") is None
+
+    # A conventional filename in ordinary PATH discovery is subject to the same check.
+    monkeypatch.delenv("CONDA_EXE")
+    monkeypatch.setenv("PATH", str(path.parent))
+    assert ensure([name + ">=2"], install="never") is None
+    assert ensure([name], install="never") is None
 
 
 def test_micromamba_minimum_and_conda_fallback(
@@ -499,17 +528,18 @@ def test_only_conda_enabled_skips_a_known_mamba_launcher(
     for minimum_arg in ([], ["--min-conda-version", "0"]):
         result = runner.invoke(cli.ensureconda_cli, [*args, *minimum_arg])
         assert result.exit_code == 1
-    assert calls == []
+    assert calls == [name] * 4
 
     conda = executable_file(tmp_path / "bin" / "conda.exe")
     monkeypatch.setenv("PATH", str(conda.parent))
+    calls.clear()
     result = runner.invoke(cli.ensureconda_cli, [*args, "--json", "--verbosity", "0"])
     assert result.exit_code == 0
     assert (
         json.loads(result.stdout)
         == CondaExecutable(conda, "conda", Version("25.1")).to_json()
     )
-    assert calls == [conda.name]
+    assert calls == [name, conda.name]
 
 
 @pytest.mark.parametrize(
@@ -533,7 +563,6 @@ def test_conda_constraint_skips_mamba_in_conda_exe(
 ) -> None:
     executable = set_conda_exe(name)
     calls = fake_version_outputs(monkeypatch, {name: output, "conda.exe": "conda 25.1"})
-    probes = [name] if name == "wrapper" else []
 
     with caplog.at_level(logging.INFO, logger="ensureconda"):
         assert ensure(["conda>=24"], install="never", probe_version=False) is None
@@ -544,18 +573,18 @@ def test_conda_constraint_skips_mamba_in_conda_exe(
             f"Rejected {executable} ({flavor}): requires conda>=24",
         )
     ]
-    assert calls == probes
+    assert calls == [name]
 
     calls.clear()
     assert ensure(["conda>=1"], install="never") is None
-    assert calls == probes
+    assert calls == [name]
 
     calls.clear()
     conda = executable_file(tmp_path / "cache" / "conda.exe")
     assert ensure(["conda>=24"], install="never") == CondaExecutable(
         conda, "conda", Version("25.1")
     )
-    assert calls == probes + [conda.name]
+    assert calls == [name, conda.name]
 
 
 def test_cli_json_reports_conda_standalone_from_conda_exe(
