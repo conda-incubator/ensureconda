@@ -16,6 +16,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	log "github.com/sirupsen/logrus"
 )
 
 // serveForceInstall serves tiny packages containing shell scripts that report
@@ -127,6 +129,47 @@ func TestForceInstallReplacesFreshCache(t *testing.T) {
 			}
 			if held, err := lockIsHeld(filepath.Join(sitePath(), lockName)); err != nil || held {
 				t.Errorf("download lock was not released: held=%v, error=%v", held, err)
+			}
+		})
+	}
+}
+
+func TestDownloadLogNamesDestination(t *testing.T) {
+	skipOnWindows(t)
+	var output bytes.Buffer
+	logger := log.StandardLogger()
+	previousOutput, previousFormatter := logger.Out, logger.Formatter
+	log.SetOutput(&output)
+	log.SetFormatter(&log.JSONFormatter{DisableTimestamp: true})
+	t.Cleanup(func() { log.SetOutput(previousOutput); log.SetFormatter(previousFormatter) })
+	for _, tool := range []string{"micromamba", "conda-standalone"} {
+		t.Run(tool, func(t *testing.T) {
+			useSitePath(t)
+			serveForceInstall(t)
+			output.Reset()
+			install := installCondaStandalone
+			if tool == "micromamba" {
+				install = installMicromambaForPlatform
+			}
+			target, err := install(nil, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var destinations []string
+			for _, line := range strings.Split(strings.TrimSpace(output.String()), "\n") {
+				var entry struct {
+					Message string `json:"msg"`
+					Path    string `json:"path"`
+				}
+				if err := json.Unmarshal([]byte(line), &entry); err != nil {
+					t.Fatal(err)
+				}
+				if entry.Message == "downloading "+tool {
+					destinations = append(destinations, entry.Path)
+				}
+			}
+			if !slices.Equal(destinations, []string{target}) {
+				t.Errorf("download log names %q, want the destination %q: %s", destinations, target, output.String())
 			}
 		})
 	}

@@ -472,7 +472,38 @@ def test_later_requirement_can_install_after_constraint_miss(
         result = api.ensure(["micromamba>=3", "micromamba>=1"], install=policy)
     assert result is not None and result.version == Version("2")
     (download_url,) = [url for url in urls if url.endswith(".tar.bz2")]
-    assert f"micromamba: downloading {download_url}" in caplog.messages
+    assert (
+        f"micromamba: downloading {download_url} and extracting to {result.path}"
+        in caplog.messages
+    )
+
+
+@pytest.mark.parametrize("tool", ["micromamba", "conda_standalone"])
+def test_download_log_names_destination(
+    tool: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    monkeypatch.setattr(installer, "site_path", lambda: tmp_path)
+    monkeypatch.setattr(
+        determine_versions, "_probe_version", lambda *args: Version("2")
+    )
+    urls = serve_package(monkeypatch, tool)
+    install = (
+        installer.install_micromamba
+        if tool == "micromamba"
+        else installer.install_conda_exe
+    )
+    with caplog.at_level(logging.INFO, logger="ensureconda"):
+        target = install(force=True)
+    assert target.parent == tmp_path
+    (download_url,) = [url for url in urls if url.endswith(".tar.bz2")]
+    name = tool.replace("_", "-")
+    assert (
+        f"{name}: downloading {download_url} and extracting to {target}"
+        in caplog.messages
+    )
 
 
 @pytest.mark.parametrize("target", ["micromamba", "micromamba>=1"])

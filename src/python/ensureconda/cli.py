@@ -155,6 +155,7 @@ def ensureconda_cli(
                     "force" if force_install else "never" if no_install else "fallback"
                 ),
                 probe_version=as_json,
+                selection_level=logging.INFO,
             )
             if exe is not None and not as_json:
                 exe = exe.path

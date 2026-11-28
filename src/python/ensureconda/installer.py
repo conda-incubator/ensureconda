@@ -346,9 +346,15 @@ def stream_conda_executable(
     the downloaded archive against it before extracting anything.
     """
     dest_filename = f"conda_standalone{exe_suffix()}"
+    if data_dir is None:
+        data_dir = site_path()
 
     filename = urlparse(url).path.rsplit("/", 1)[-1]
-    logger.info("conda-standalone: downloading %s", url)
+    logger.info(
+        "conda-standalone: downloading %s and extracting to %s",
+        url,
+        data_dir / dest_filename,
+    )
     with TemporaryFile() as conda:
         request_url_with_retry(url, destination=conda)
         if sha256:
@@ -564,7 +570,7 @@ def install_micromamba(
             return target_path
 
         url, version, sha256 = select_micromamba(subdir, constraint)
-        logger.info("micromamba: downloading %s", url)
+        logger.info("micromamba: downloading %s and extracting to %s", url, target_path)
         validation = DownloadValidation("micromamba", constraint, version, observations)
         resp = request_url_with_retry(url)
         tarball = io.BytesIO(resp.content)

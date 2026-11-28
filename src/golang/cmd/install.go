@@ -170,7 +170,7 @@ func downloadCondaStandalone(obs *observer, channel string, subdir string, targe
 	log.Infof("conda-standalone: selected version %s for %s", chosen.Version, subdir)
 
 	downloadUrl := "https:" + chosen.DownloadUrl
-	log.WithFields(log.Fields{"url": downloadUrl}).Info("downloading conda-standalone")
+	log.WithFields(log.Fields{"url": downloadUrl, "path": target}).Info("downloading conda-standalone")
 	installedExe, err := downloadAndUnpackArchive(
 		downloadUrl, chosen.Sha256, map[string]string{
 			"standalone_conda/conda.exe": target,
@@ -351,7 +351,7 @@ func installMicromamba(obs *observer, url string, forceInstall bool) (string, er
 	if err != nil {
 		return "", err
 	}
-	log.WithFields(log.Fields{"url": chosen.DownloadUrl}).Info("downloading micromamba")
+	log.WithFields(log.Fields{"url": chosen.DownloadUrl, "path": target}).Info("downloading micromamba")
 	return downloadAndUnpackArchive(chosen.DownloadUrl, chosen.Sha256, map[string]string{
 		"Library/bin/micromamba.exe": target,
 		"bin/micromamba":             target,
