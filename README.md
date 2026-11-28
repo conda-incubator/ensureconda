@@ -111,6 +111,42 @@ constraints in Python packaging's version-specifier syntax, such as `>=2,<3` or
 and such an executable can't satisfy a constraint. Later releases may add
 fields to the result or keys to `ensureconda --json`.
 
+Conda's shell integration sets `CONDA_EXE` to its launcher. Mamba's shell
+integration uses `MAMBA_EXE`, which can name either mamba or micromamba.
+The Python APIs and CLI try the shell launchers before searching ensureconda's
+data directory and `PATH`.
+
+| Requested tool | Shell launchers, in order | Accepted tool |
+| --- | --- | --- |
+| `conda` | `CONDA_EXE` | conda or conda-standalone |
+| `conda-standalone` | `CONDA_EXE` | conda-standalone |
+| `mamba` | `MAMBA_EXE`, then `CONDA_EXE` | mamba |
+| `micromamba` | `MAMBA_EXE`, then `CONDA_EXE` | micromamba |
+
+For example, `ensure(["micromamba>=2", "conda"], install="never")` tries
+the micromamba named by `MAMBA_EXE` first. If it is too old, the search can
+use a compatible micromamba from `CONDA_EXE`, the data directory or `PATH`.
+If none qualifies, the search moves on to conda. Adding a third bare
+`micromamba` target explicitly allows an older micromamba.
+
+When `identify()` probes a wrapper named `conda` that prints both
+`mamba 1.5.12` and `conda 24.11.3`, it reports `mamba` 1.5.12. The second
+line describes mamba's bundled conda. The `conda` target skips this wrapper.
+A launcher named `conda` that prints only `2.9.0` can satisfy
+`micromamba>=2`. A launcher named `micromamba` that prints `conda 25.1.0`
+can satisfy a conda target. The filename distinguishes mamba 2 from
+micromamba when either prints a bare version, and conda from conda-standalone
+when either prints a conda version line. An unfamiliar filename defaults to
+`micromamba` and `conda` respectively.
+
+With `probe_version=False`, a bare target can select an installed executable
+without running it and returns `version=None`. It can identify an unchanged file
+from an earlier probe in the same call. When the file has no usable fingerprint
+(including on Windows), the filename must identify the tool. Earlier output
+can still rule it out if it reported a different tool. A probe that exited
+unsuccessfully also rules out that candidate unless ensureconda can tell the
+file changed. Downloads are always validated before installation.
+
 Version constraints skip prereleases unless you request one, as in
 `micromamba>=2.0rc1`. A plain `micromamba` target can use an installed
 prerelease and downloads a stable release if needed.
@@ -138,7 +174,13 @@ they consult the conda-forge release metadata on `api.anaconda.org`. Metadata
 and archive downloads retry transient failures.
 
 `ensureconda()`, the old API, keeps its options, its path-or-`None` result and
-its original search order.
+its original order of targets. A conda-only request in the old API or Python
+CLI now skips a known mamba or micromamba, even with a minimum conda version
+of zero. In v1.7.0, mamba 1 could pass a conda minimum using its bundled
+conda version. With mamba enabled, the Python CLI can still return the same
+path and checks mamba's own version. The old API continues to accept an
+unidentified `CONDA_EXE` wrapper with no minimum, or a runnable wrapper with
+an unknown version when the minimum is zero.
 
 ### Diagnostics
 

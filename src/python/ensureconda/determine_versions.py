@@ -4,7 +4,7 @@ import logging
 import os
 import subprocess
 import sys
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum, auto
 from pathlib import Path
 from typing import (
@@ -13,6 +13,7 @@ from typing import (
     Dict,
     Literal,
     Optional,
+    Set,
     Tuple,
     Union,
 )
@@ -36,17 +37,57 @@ _LEGACY_UNKNOWN_VERSION = Version("0.0.0")
 
 # Device, inode, size, and modification and change times in nanoseconds.
 _Fingerprint = Tuple[int, int, int, int, int]
-# The output of `--version`, or the error from running it, for a fingerprint.
-_Observation = Tuple[_Fingerprint, Union[str, Exception]]
-# The observations of one call, by absolute path, reused for files that don't
-# change during it. Reuse assumes that what a wrapper or script runs doesn't
-# change either. None runs every probe.
-_Observations = Dict[str, _Observation]
+_ProbeResult = Union[str, Exception]
+_Observation = Tuple[_Fingerprint, _ProbeResult]
+
+
+@dataclass
+class _Observations:
+    """Version probes from one resolution, keyed by executable path."""
+
+    verified: Dict[Path, _Observation] = field(default_factory=dict)
+    # Only a bare target may consult this evidence, and only to skip a candidate.
+    unverified: Dict[Path, _ProbeResult] = field(default_factory=dict)
+    reported_failures: Set[Tuple[Path, str]] = field(default_factory=set)
+
+    def probe(self, exe: _StrPath) -> _ProbeResult:
+        key = _observation_key(exe)
+        if key is None:
+            return _run_version(exe)
+        before = _fingerprint(exe)
+        recorded = self.verified.get(key)
+        if recorded is not None and recorded[0] == before:
+            return recorded[1]
+        if before is not None:
+            self.verified.pop(key, None)
+        result = _run_version(exe)
+        # A failure to start, such as a busy text file, may not happen again.
+        if not isinstance(result, OSError):
+            if before is None:
+                self.verified.pop(key, None)
+                self.unverified[key] = result
+            else:
+                # A change during the probe moves the change time past this record.
+                self.unverified.pop(key, None)
+                self.verified[key] = (before, result)
+        return result
+
+    def for_bare_target(self, path: Path) -> Tuple[Optional[_ProbeResult], bool]:
+        """Return earlier evidence and whether it identifies the current file."""
+        key = _observation_key(path)
+        if key is None:
+            return None, False
+        recorded = self.verified.get(key)
+        if recorded is not None:
+            current = _fingerprint(path)
+            if current is None or recorded[0] == current:
+                return recorded[1], current is not None
+        return self.unverified.get(key), False
 
 
 def _fingerprint(path: _StrPath) -> Optional[_Fingerprint]:
     # On Windows st_ctime is the creation time, which a change of contents or
-    # attributes leaves alone, so nothing is reused there.
+    # attributes leaves alone. Each requested version probe must run again.
     if os.name == "nt":
         return None
     try:
@@ -56,15 +97,20 @@ def _fingerprint(path: _StrPath) -> Optional[_Fingerprint]:
     return (st.st_dev, st.st_ino, st.st_size, st.st_mtime_ns, st.st_ctime_ns)
 
 
-def _observation_key(path: _StrPath) -> Optional[str]:
+def _observation_key(path: _StrPath) -> Optional[Path]:
+    # A bare name is looked up on PATH and may run a different file.
+    if not os.path.dirname(path):
+        return None
     try:
-        return os.path.abspath(path)
+        # Preserve '..' because the preceding directory could be a symlink.
+        executable = path if isinstance(path, Path) else Path(path)
+        return executable.absolute()
     except OSError:
         # The working directory was removed.
         return None
 
 
-def _run_version(exe: _StrPath) -> Union[str, Exception]:
+def _run_version(exe: _StrPath) -> _ProbeResult:
     try:
         # Check the exit status before decoding stdout. A decode error on its
         # own means the command ran successfully and its version is unknown.
@@ -80,35 +126,8 @@ def _run_version(exe: _StrPath) -> Union[str, Exception]:
         return error
 
 
-def _has_failed_probe(path: Path, observations: Optional[_Observations]) -> bool:
-    if not observations or not os.path.dirname(path):
-        return False
-    key = _observation_key(path)
-    recorded = observations.get(key) if key is not None else None
-    return (
-        recorded is not None
-        and isinstance(recorded[1], subprocess.CalledProcessError)
-        and recorded[0] == _fingerprint(path)
-    )
-
-
 def _version_output(exe: _StrPath, observations: Optional[_Observations]) -> str:
-    key: Optional[str] = None
-    current: Optional[_Fingerprint] = None
-    # Running a bare name looks it up on PATH, so it may run another file.
-    if observations is not None and os.path.dirname(exe):
-        key, current = _observation_key(exe), _fingerprint(exe)
-    result: Union[str, Exception]
-    if observations is None or key is None or current is None:
-        result = _run_version(exe)
-    elif key in observations and observations[key][0] == current:
-        result = observations[key][1]
-    else:
-        result = _run_version(exe)
-        # A failure to start, such as a busy text file, may not happen again.
-        if not isinstance(result, OSError):
-            # A change during the probe moves the change time past this record.
-            observations[key] = (current, result)
+    result = _run_version(exe) if observations is None else observations.probe(exe)
     if isinstance(result, Exception):
         raise result
     return result
@@ -121,7 +140,10 @@ def detach_observation(
     if observations is None:
         return None
     key = _observation_key(path)
-    recorded = None if key is None else observations.pop(key, None)
+    if key is None:
+        return None
+    observations.unverified.pop(key, None)
+    recorded = observations.verified.pop(key, None)
     if recorded is None or recorded[0] != _fingerprint(path):
         return None
     return recorded
@@ -133,12 +155,21 @@ def attach_observation(
     recorded: Optional[_Observation],
 ) -> None:
     """Keep a detached result for the file it was renamed to at path."""
-    if observations is None or recorded is None:
+    if observations is None:
         return
-    key, after = _observation_key(path), _fingerprint(path)
+    key = _observation_key(path)
+    if key is None:
+        return
+    # The installer has replaced the target, even if the staged file had no
+    # usable fingerprint. Evidence about the previous executable is obsolete.
+    observations.unverified.pop(key, None)
+    observations.verified.pop(key, None)
+    if recorded is None:
+        return
+    after = _fingerprint(path)
     # A rename updates the change time only.
-    if key is not None and after is not None and recorded[0][:4] == after[:4]:
-        observations[key] = (after, recorded[1])
+    if after is not None and recorded[0][:4] == after[:4]:
+        observations.verified[key] = (after, recorded[1])
 
 
 def determine_mamba_version(exe: _StrPath) -> Version:
@@ -158,10 +189,44 @@ def determine_mamba_version(exe: _StrPath) -> Version:
     return _mamba_version(_version_output(exe, None))
 
 
+def _named_version(
+    output: str, name: str, *, two_fields: bool = False
+) -> Optional[str]:
+    fallback = None
+    for line in output.splitlines():
+        fields = line.split()
+        if fields and fields[0] == name:
+            if len(fields) == 2:
+                # The first version declaration counts, even if malformed.
+                return fields[1]
+            if not two_fields and fallback is None:
+                fallback = fields[-1]
+    return fallback
+
+
+def _bare_mamba_version(output: str) -> Optional[Version]:
+    """Read the bare version from mamba 2 or micromamba."""
+    for line in output.strip().splitlines():
+        fields = line.split()
+        if len(fields) > 2 and fields[0] in ("mamba", "micromamba"):
+            continue  # A shell integration banner can precede the version.
+        try:
+            return Version(line.strip())
+        except InvalidVersion:
+            break
+    return None
+
+
 def _mamba_version(output: str) -> Version:
-    for line in output.strip().splitlines(keepends=False):
-        if line.startswith("mamba"):
-            return Version(line.split()[-1])
+    declared = _named_version(output, "mamba", two_fields=True)
+    if declared is not None:
+        return Version(declared)
+    bare = _bare_mamba_version(output)
+    if bare is not None:
+        return bare
+    version = _named_version(output, "mamba")
+    if version is not None:
+        return Version(version)
     # Not v1 style output, so fall back to micromamba version detection
     return _micromamba_version(output)
 
@@ -171,7 +236,13 @@ def determine_micromamba_version(exe: _StrPath) -> Version:
 
 
 def _micromamba_version(output: str) -> Version:
-    for line in output.strip().splitlines(keepends=False):
+    declared = _named_version(output, "micromamba", two_fields=True)
+    if declared is not None:
+        return Version(declared)
+    bare = _bare_mamba_version(output)
+    if bare is not None:
+        return bare
+    for line in output.strip().splitlines():
         return Version(line.split()[-1])
     return _LEGACY_UNKNOWN_VERSION
 
@@ -181,10 +252,8 @@ def determine_conda_version(exe: _StrPath) -> Version:
 
 
 def _conda_version(output: str) -> Version:
-    for line in output.strip().splitlines(keepends=False):
-        if line.startswith("conda"):
-            return Version(line.split()[-1])
-    return _LEGACY_UNKNOWN_VERSION
+    version = _named_version(output, "conda")
+    return _LEGACY_UNKNOWN_VERSION if version is None else Version(version)
 
 
 Flavor = Literal["mamba", "micromamba", "conda", "conda_standalone"]
@@ -214,22 +283,74 @@ class CondaExecutable:
         }
 
 
-def _probe_version(
-    executable: _StrPath, flavor: Flavor, observations: Optional[_Observations]
-) -> Optional[Version]:
-    parse: Callable[[str], Version]
-    if flavor == "mamba":
-        parse = _mamba_version
-    elif flavor == "micromamba":
-        parse = _micromamba_version
-    elif flavor in ("conda", "conda_standalone"):
-        parse = _conda_version
-    else:
-        raise ValueError(f"Unknown executable flavor: {flavor!r}")
-    version = parse(_version_output(executable, observations))
+def _flavor_from_name(executable: _StrPath) -> Optional[Flavor]:
+    name = Path(executable).name.lower()
+    for suffix in (".exe", ".bat", ".cmd"):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+    flavors: Dict[str, Flavor] = {
+        "mamba": "mamba",
+        "micromamba": "micromamba",
+        "conda": "conda",
+        "conda_standalone": "conda_standalone",
+        "conda-standalone": "conda_standalone",
+    }
+    return flavors.get(name)
+
+
+def _flavor_from_output(
+    output: str, named_flavor: Optional[Flavor]
+) -> Optional[Flavor]:
+    # Mamba 1 also reports its bundled conda. A mamba version line, even
+    # with an unreadable version, takes precedence over that conda line.
+    if _named_version(output, "mamba", two_fields=True) is not None:
+        return "mamba"
+    if _named_version(output, "conda", two_fields=True) is not None:
+        return "conda_standalone" if named_flavor == "conda_standalone" else "conda"
+    if _named_version(output, "micromamba", two_fields=True) is not None:
+        return "micromamba"
+    if _bare_mamba_version(output) is not None:
+        return "mamba" if named_flavor == "mamba" else "micromamba"
+    if named_flavor is not None:
+        return named_flavor
+    if _named_version(output, "conda") is not None:
+        return "conda"
+    if _named_version(output, "mamba") is not None:
+        return "mamba"
+    return None
+
+
+_VERSION_PARSERS: Dict[Flavor, Callable[[str], Version]] = {
+    "mamba": _mamba_version,
+    "micromamba": _micromamba_version,
+    "conda": _conda_version,
+    "conda_standalone": _conda_version,
+}
+
+
+def _parse_version(output: str, flavor: Flavor) -> Optional[Version]:
+    version = _VERSION_PARSERS[flavor](output)
     if Version(version.base_version) == _LEGACY_UNKNOWN_VERSION:
         return None
     return version
+
+
+class _UnexpectedFlavor(ValueError):
+    def __init__(self, expected: Flavor, actual: Flavor) -> None:
+        super().__init__(f"expected {expected}, but the executable reports {actual}")
+        self.actual = actual
+
+
+def _probe_version(
+    executable: _StrPath, flavor: Flavor, observations: Optional[_Observations]
+) -> Optional[Version]:
+    if flavor not in _VERSION_PARSERS:
+        raise ValueError(f"Unknown executable flavor: {flavor!r}")
+    output = _version_output(executable, observations)
+    actual = _flavor_from_output(output, flavor)
+    if actual is not None and actual != flavor:
+        raise _UnexpectedFlavor(flavor, actual)
+    return _parse_version(output, flavor)
 
 
 def _requests_prerelease(constraint: SpecifierSet) -> bool:
@@ -307,6 +428,33 @@ def version_satisfies(
     return match_version(version, constraint) is VersionMatch.ACCEPTED
 
 
+def _matches_target_flavor(
+    candidate: Optional[Flavor], target: Flavor, constraint: _VersionConstraint
+) -> bool:
+    if target != "conda":
+        return candidate == target
+    if candidate is None:
+        # The old API allows an unidentified wrapper subject to its minimum.
+        return not isinstance(constraint, SpecifierSet)
+    return candidate in ("conda", "conda_standalone")
+
+
+def _warn_probe_failure(
+    path: Path, error: Exception, observations: Optional[_Observations]
+) -> None:
+    reason = (
+        f"`--version` exited with status {error.returncode}"
+        if isinstance(error, subprocess.CalledProcessError)
+        else str(error)
+    )
+    if observations is not None:
+        failure = (path, reason)
+        if failure in observations.reported_failures:
+            return
+        observations.reported_failures.add(failure)
+    logger.warning("Skipping %s: could not determine its version (%s)", path, reason)
+
+
 def check_executable(
     path: Path,
     flavor: Flavor,
@@ -315,12 +463,27 @@ def check_executable(
     observations: Optional[_Observations],
     probe_version: bool = True,
     rejection_level: Optional[int] = logging.INFO,
+    from_env: bool = False,
 ) -> Optional[CondaExecutable]:
+    # A launcher may have any filename. An ordinary finder supplies the tool
+    # name it searched for; the conda finder also returns CONDA_EXE.
+    named_flavor = _flavor_from_name(path) if from_env or flavor == "conda" else flavor
+    candidate_flavor = named_flavor
     version = None
     constrained = has_version_constraint(constraint)
     if constrained or probe_version:
         try:
-            version = _probe_version(path, flavor, observations)
+            if from_env or flavor == "conda":
+                output = _version_output(path, observations)
+                candidate_flavor = _flavor_from_output(output, candidate_flavor)
+                if candidate_flavor is not None and _matches_target_flavor(
+                    candidate_flavor, flavor, constraint
+                ):
+                    version = _parse_version(output, candidate_flavor)
+            else:
+                version = _probe_version(path, flavor, observations)
+        except _UnexpectedFlavor as error:
+            candidate_flavor = error.actual
         except (
             subprocess.CalledProcessError,
             OSError,
@@ -332,19 +495,31 @@ def check_executable(
             if constrained or isinstance(
                 error, (subprocess.CalledProcessError, OSError)
             ):
-                reason = (
-                    f"`--version` exited with status {error.returncode}"
-                    if isinstance(error, subprocess.CalledProcessError)
-                    else str(error)
-                )
                 if rejection_level is not None:
-                    logger.warning(
-                        "Skipping %s: could not determine its version (%s)",
-                        path,
-                        reason,
-                    )
+                    _warn_probe_failure(path, error, observations)
                 return None
-    elif _has_failed_probe(path, observations):
+    elif observations is not None:
+        recorded, verified = observations.for_bare_target(path)
+        if isinstance(recorded, subprocess.CalledProcessError):
+            return None
+        if isinstance(recorded, str):
+            observed = _flavor_from_output(recorded, candidate_flavor)
+            if verified or not _matches_target_flavor(observed, flavor, constraint):
+                candidate_flavor = observed
+    if not _matches_target_flavor(candidate_flavor, flavor, constraint):
+        if rejection_level is not None:
+            logger.log(
+                (
+                    logging.DEBUG
+                    if from_env and named_flavor != flavor
+                    else rejection_level
+                ),
+                "Rejected %s (%s): requires %s%s",
+                path,
+                candidate_flavor or "unknown flavor",
+                flavor,
+                requirement_text(constraint) if constrained else "",
+            )
         return None
     match = match_version(version, constraint)
     if match is not VersionMatch.ACCEPTED:
@@ -358,4 +533,4 @@ def check_executable(
                 match.rejection_text(constraint),
             )
         return None
-    return CondaExecutable(path, flavor, version)
+    return CondaExecutable(path, candidate_flavor or flavor, version)

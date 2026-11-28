@@ -284,7 +284,7 @@ def test_legacy_minimum_can_have_a_local_version_label(
 def test_zero_sentinel_is_only_used_for_old_api_minimums(
     version: str, flavor: Flavor, minimum: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    path = Path("unknown")
+    path = Path(flavor)
     monkeypatch.setattr(api, f"{flavor}_executables", lambda: iter([path]))
     prefix = "conda " if version and flavor.startswith("conda") else ""
     fake_version_outputs(monkeypatch, {path.name: prefix + version})

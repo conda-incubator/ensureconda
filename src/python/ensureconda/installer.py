@@ -760,7 +760,11 @@ def validate_download(path: Path, validation: DownloadValidation) -> None:
         version = determine_versions._probe_version(
             path, validation.flavor, validation.observations
         )
-    except (OSError, subprocess.CalledProcessError) as error:
+    except (
+        OSError,
+        subprocess.CalledProcessError,
+        determine_versions._UnexpectedFlavor,
+    ) as error:
         raise DownloadedExecutableError(
             f"{tool}: downloaded executable failed its version check: {error}"
         ) from error

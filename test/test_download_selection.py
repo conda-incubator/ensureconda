@@ -413,7 +413,9 @@ def test_one_call_runs_each_unchanged_file_once(
 
 
 @pytest.mark.parametrize("tool", ["micromamba", "conda_standalone"])
-@pytest.mark.parametrize("failure", ["execution", "version", "unknown", "none"])
+@pytest.mark.parametrize(
+    "failure", ["execution", "version", "unknown", "flavor", "none"]
+)
 def test_validate_before_replacing_cache(
     tool: str,
     failure: str,
@@ -425,18 +427,19 @@ def test_validate_before_replacing_cache(
     target.write_bytes(b"old")
     urls = serve_package(monkeypatch, tool)
 
-    def probe(path: Path, flavor: str, observations: object) -> Optional[Version]:
+    def probe(path: Path, observations: object) -> str:
         assert path != target and path.read_bytes() == b"new"
         assert target.read_bytes() == b"old"
         if failure == "execution":
             raise OSError("cannot run")
-        return (
-            None
-            if failure == "unknown"
-            else Version("1" if failure == "version" else "2")
-        )
+        if failure == "unknown":
+            return ""
+        if failure == "flavor":
+            return "conda 25.1" if tool == "micromamba" else "2.9"
+        prefix = "conda " if tool == "conda_standalone" else ""
+        return prefix + ("1" if failure == "version" else "2")
 
-    monkeypatch.setattr(determine_versions, "_probe_version", probe)
+    monkeypatch.setattr(determine_versions, "_version_output", probe)
     install = (
         installer.install_micromamba
         if tool == "micromamba"
@@ -447,7 +450,8 @@ def test_validate_before_replacing_cache(
         assert target.read_bytes() == b"new"
     else:
         with pytest.raises(installer.DownloadedExecutableError):
-            install(SpecifierSet(">=2"), force=True)
+            # A wrong tool must also be rejected for an unconstrained download.
+            install(SpecifierSet("" if failure == "flavor" else ">=2"), force=True)
         assert target.read_bytes() == b"old"
     assert len(urls) == 2
     assert all(

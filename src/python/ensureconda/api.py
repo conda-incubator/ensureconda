@@ -23,8 +23,10 @@ from packaging.version import InvalidVersion, Version
 from ensureconda.determine_versions import CondaExecutable as CondaExecutable
 from ensureconda.determine_versions import Flavor as Flavor
 from ensureconda.determine_versions import (
+    _flavor_from_name,
+    _flavor_from_output,
     _Observations,
-    _probe_version,
+    _parse_version,
     _StrPath,
     _version_output,
     _VersionConstraint,
@@ -49,6 +51,7 @@ from ensureconda.installer import (
 )
 from ensureconda.resolve import (
     UnsupportedPlatformError,
+    _executable_from_env,
     absolute_path,
     conda_executables,
     conda_standalone_executables,
@@ -69,43 +72,6 @@ _INSTALL_POLICIES: Tuple[InstallPolicy, ...] = (
     "per-target",
     "force",
 )
-
-
-def _flavor_from_name(executable: _StrPath) -> Optional[Flavor]:
-    name = Path(executable).name.lower()
-    for suffix in (".exe", ".bat", ".cmd"):
-        if name.endswith(suffix):
-            name = name[: -len(suffix)]
-    flavors: Dict[str, Flavor] = {
-        "mamba": "mamba",
-        "micromamba": "micromamba",
-        "conda": "conda",
-        "conda_standalone": "conda_standalone",
-        "conda-standalone": "conda_standalone",
-    }
-    return flavors.get(name)
-
-
-def _probe_flavor(
-    executable: _StrPath, observations: Optional[_Observations]
-) -> Optional[Flavor]:
-    try:
-        output = _version_output(executable, observations)
-    except (subprocess.CalledProcessError, OSError, UnicodeDecodeError):
-        return None
-    lines = output.strip().splitlines()
-    if any(line.startswith("mamba") for line in lines):
-        return "mamba"  # mamba 1 also reports the version of conda
-    if lines and lines[0].startswith("conda"):
-        return "conda"
-    if lines:
-        # micromamba prints only its version.
-        try:
-            Version(lines[0].strip())
-        except InvalidVersion:
-            return None
-        return "micromamba"  # or mamba 2, whose output is identical
-    return None
 
 
 def _legacy_targets(
@@ -145,6 +111,9 @@ def ensureconda(
     The booleans select targets in the legacy order: mamba, micromamba, conda,
     conda_standalone. Search and attempt installation for each target before
     moving on. Version probes run only when a minimum version is requested.
+    The shell launcher search is the same as for ensure(). A conda-only search
+    skips known mamba and micromamba executables. For compatibility it can
+    still accept an unidentified conda wrapper with no minimum or a zero minimum.
 
     For an ordered target sequence and executable metadata, use :func:`ensure`.
     """
@@ -216,6 +185,11 @@ def ensure(
     A bare target accepts an executable reporting any version, including a
     prerelease. When choosing a package to download, it selects a stable release.
 
+    For mamba and micromamba, try MAMBA_EXE and then CONDA_EXE. For conda
+    and conda_standalone, try CONDA_EXE. If the launchers do not satisfy
+    the current target, continue with the data directory and PATH. The conda
+    target accepts conda or conda_standalone. Other targets match one flavor.
+
     install selects when installation is attempted. Only micromamba and
     conda_standalone can be installed.
 
@@ -233,10 +207,12 @@ def ensure(
     Successful installed commands with unparseable or undecodable output can
     satisfy unconstrained targets, with version=None.
 
-    With probe_version=False, probe installed candidates only when constrained,
-    and omit unconstrained result versions, even after an earlier target
-    probed the same file. Skip a file if this call still has a valid record
-    that its version probe exited unsuccessfully. Downloaded executables must
+    With probe_version=False, probe installed candidates only for constrained
+    targets. A bare target returns version=None. It uses the filename or, if
+    the file is known to be unchanged, output from an earlier probe in this
+    call. Skip a candidate whose last probe exited unsuccessfully or reported
+    an incompatible tool, unless the file is known to have changed.
+    Downloaded executables must
     always run successfully. An unconstrained download can report an unreadable
     version.
     Select the newest package satisfying the constraint before downloading.
@@ -271,6 +247,37 @@ def ensure(
     return _ensure(parsed, install=install, probe_version=probe_version)
 
 
+def _installed_candidates(
+    paths: Iterator[Path], flavor: Flavor
+) -> Iterator[Tuple[Path, bool]]:
+    """Yield each path once per target, with shell launchers first."""
+    seen: Set[Path] = set()
+    # The conda finder already yields CONDA_EXE first and all its paths are
+    # identified. Flag launchers for the other finders to identify as well.
+    if flavor != "conda":
+        variables = (
+            ("CONDA_EXE",)
+            if flavor == "conda_standalone"
+            else ("MAMBA_EXE", "CONDA_EXE")
+        )
+        for variable in variables:
+            launcher = _executable_from_env(variable)
+            if launcher is not None and launcher not in seen:
+                seen.add(launcher)
+                # Standalone and regular conda print the same version line.
+                # Only the standalone filename can identify this target.
+                if (
+                    flavor == "conda_standalone"
+                    and _flavor_from_name(launcher) != flavor
+                ):
+                    continue
+                yield launcher, True
+    for path in paths:
+        if path not in seen:
+            seen.add(path)
+            yield path, False
+
+
 def _ensure(
     parsed: Sequence[Tuple[Flavor, _VersionConstraint]],
     *,
@@ -293,7 +300,7 @@ def _ensure(
             )
 
     rejection_level = logging.WARNING if install == "force" else logging.INFO
-    observations: _Observations = {}
+    observations = _Observations()
 
     # A missing download mapping need not prevent using an installed tool.
     unsupported_platform: Optional[UnsupportedPlatformError] = None
@@ -387,7 +394,7 @@ def _ensure(
                     raise
                 logger.warning("%s; trying %s instead", error, " or ".join(remaining))
                 continue
-            candidates = iter([installed_path])
+            candidates = iter([(installed_path, False)])
         else:
             if has_version_constraint(constraint) or probe_version:
                 logger.debug(
@@ -395,8 +402,8 @@ def _ensure(
                 )
             else:
                 logger.debug("Searching for %s without probing its version", flavor)
-            candidates = finders[flavor]()
-        for path in candidates:
+            candidates = _installed_candidates(finders[flavor](), flavor)
+        for path, from_env in candidates:
             result = check_executable(
                 path,
                 flavor,
@@ -404,15 +411,18 @@ def _ensure(
                 observations=observations,
                 probe_version=probe_version,
                 rejection_level=rejection_level,
+                from_env=from_env,
             )
             if result is not None:
                 if result.version is None:
-                    logger.log(selection_level, "Selected %s at %s", flavor, path)
+                    logger.log(
+                        selection_level, "Selected %s at %s", result.flavor, path
+                    )
                 else:
                     logger.log(
                         selection_level,
                         "Selected %s %s at %s",
-                        flavor,
+                        result.flavor,
                         result.version,
                         path,
                     )
@@ -432,11 +442,10 @@ def identify(executable: _StrPath) -> CondaExecutable:
     A relative path names a file in the working directory. The result includes
     its absolute path whenever the working directory can be named.
 
-    The flavor comes from the file name, as for the executables that
-    :func:`ensureconda` finds. For other names it comes from the shape of the
-    ``--version`` output instead, which can't distinguish micromamba from
-    mamba 2, nor conda from conda-standalone; those are reported as
-    "micromamba" and "conda".
+    A ``mamba <version>`` line identifies mamba 1 even under another name.
+    A bare version is shared by mamba 2 and micromamba. A conda version line
+    is shared by conda and conda-standalone. The filename distinguishes tools
+    within each pair, defaulting to micromamba and conda respectively.
 
     Raises FileNotFoundError if the executable doesn't exist, PermissionError
     if it isn't executable, and ValueError if it can't be recognized.
@@ -446,12 +455,15 @@ def identify(executable: _StrPath) -> CondaExecutable:
         raise FileNotFoundError(errno.ENOENT, "No such executable", str(executable))
     if not os.access(path, os.X_OK):
         raise PermissionError(errno.EACCES, "Not an executable file", str(executable))
-    observations: _Observations = {}
-    flavor = _flavor_from_name(path) or _probe_flavor(path, observations)
+    flavor = _flavor_from_name(path)
+    version = None
+    try:
+        output = _version_output(path, None)
+        flavor = _flavor_from_output(output, flavor)
+        if flavor is not None:
+            version = _parse_version(output, flavor)
+    except (subprocess.CalledProcessError, OSError, InvalidVersion, UnicodeDecodeError):
+        pass
     if flavor is None:
         raise ValueError(f"{executable} is not a recognized conda executable")
-    try:
-        version = _probe_version(path, flavor, observations)
-    except (subprocess.CalledProcessError, OSError, InvalidVersion, UnicodeDecodeError):
-        version = None
     return CondaExecutable(path, flavor, version)

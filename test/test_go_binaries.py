@@ -226,6 +226,7 @@ def test_default_flags(
         ("micromamba", "2.9+Ubuntu_007-000.01abc\n", "2.9+ubuntu.7.0.01abc"),
         ("mamba", "mamba 0.5.0\nconda 4.9.0\n", None),
         ("mamba", "mamba unknown\nconda 25.1.0\n", None),
+        ("mamba", "mamba unknown\nmamba 1.5.12\nconda 25.1.0\n", None),
         ("mamba", "conda 25.1.0\nmamba 1.5.12\n", "1.5.12"),
         ("micromamba", "0.1.0\n2.9.0\n", None),
         ("micromamba", "warning: something\n2.9.0\n", None),
