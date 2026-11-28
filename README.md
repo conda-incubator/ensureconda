@@ -111,11 +111,16 @@ constraints in Python packaging's version-specifier syntax, such as `>=2,<3` or
 and such an executable can't satisfy a constraint. Later releases may add
 fields to the result or keys to `ensureconda --json`.
 
-The Python `conda` target checks `CONDA_EXE` first and accepts an override
-identified as conda or conda-standalone. For example,
+Conda's shell integration sets `CONDA_EXE` to the launcher for that conda
+installation. In Python, `ensure()` checks it first for the `conda` target,
+which accepts conda or conda-standalone. Other targets search the usual
+locations, including `PATH`, and then try `CONDA_EXE` if they still need a
+match. The executable must satisfy the current target's flavor and version
+requirements. For example,
 `ensure(["micromamba>=2", "conda"], install="never")` uses an installed conda
 when `CONDA_EXE` points to micromamba 1.5.8 and the first target finds no
 compatible micromamba. If neither target finds a match, it returns `None`.
+Adding a third bare `micromamba` target explicitly allows the 1.5.8 executable.
 
 When `identify()` probes a wrapper named `conda` that prints both
 `mamba 1.5.12` and `conda 24.11.3`, it reports `mamba` 1.5.12. The second
@@ -124,7 +129,7 @@ A recognized file name determines the flavor when the output is ambiguous.
 Renamed mamba 2 and micromamba both print a bare version number and are
 reported as `micromamba`. Renamed conda and conda-standalone both print
 `conda` followed by a version and are reported as `conda`.
-With `probe_version=False`, a bare `conda` target can use an earlier probe
+With `probe_version=False`, a bare target can use an earlier probe
 from the same call to identify an unchanged file. Otherwise it uses the file
 name alone. It skips an override whose flavor it cannot identify and returns
 `version=None` for an accepted candidate.

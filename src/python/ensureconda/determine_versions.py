@@ -369,14 +369,16 @@ def version_satisfies(
     return match_version(version, constraint) is VersionMatch.ACCEPTED
 
 
-def _matches_conda_target(
-    flavor: Optional[Flavor], constraint: _VersionConstraint
+def _matches_target_flavor(
+    candidate: Optional[Flavor], target: Flavor, constraint: _VersionConstraint
 ) -> bool:
+    if target != "conda":
+        return candidate == target
     if isinstance(constraint, SpecifierSet):
-        return flavor in ("conda", "conda_standalone")
+        return candidate in ("conda", "conda_standalone")
     # The old API accepts an override with no minimum and compares an unknown
     # version as zero when given a minimum.
-    return constraint is None or flavor not in ("mamba", "micromamba")
+    return constraint is None or candidate not in ("mamba", "micromamba")
 
 
 def check_executable(
@@ -387,22 +389,25 @@ def check_executable(
     observations: Optional[_Observations],
     probe_version: bool = True,
     rejection_level: Optional[int] = logging.INFO,
+    from_conda_exe: bool = False,
 ) -> Optional[CondaExecutable]:
-    # CONDA_EXE can name any tool. Other finders search for a specific name.
-    candidate_flavor = _flavor_from_name(path) if flavor == "conda" else flavor
+    identify_flavor = from_conda_exe or flavor == "conda"
+    candidate_flavor = _flavor_from_name(path) if identify_flavor else flavor
     version = None
     constrained = has_version_constraint(constraint)
     if constrained or probe_version:
         try:
-            if flavor != "conda":
+            if not identify_flavor:
                 version = _probe_version(path, flavor, observations)
-            elif candidate_flavor is None or _matches_conda_target(
-                candidate_flavor, constraint
+            elif (
+                candidate_flavor is None
+                or flavor == "mamba"  # mamba 1 identifies itself under any name
+                or _matches_target_flavor(candidate_flavor, flavor, constraint)
             ):
                 output = _version_output(path, observations)
                 candidate_flavor = _flavor_from_output(output, candidate_flavor)
-                if candidate_flavor is not None and _matches_conda_target(
-                    candidate_flavor, constraint
+                if candidate_flavor is not None and _matches_target_flavor(
+                    candidate_flavor, flavor, constraint
                 ):
                     version = _parse_version(output, candidate_flavor)
         except (
@@ -432,15 +437,18 @@ def check_executable(
         recorded = _recorded_probe(path, observations)
         if isinstance(recorded, subprocess.CalledProcessError):
             return None
-        if flavor == "conda" and isinstance(recorded, str):
+        if identify_flavor and isinstance(recorded, str):
             candidate_flavor = _flavor_from_output(recorded, candidate_flavor)
-    if flavor == "conda" and not _matches_conda_target(candidate_flavor, constraint):
+    if identify_flavor and not _matches_target_flavor(
+        candidate_flavor, flavor, constraint
+    ):
         if rejection_level is not None:
             logger.log(
                 rejection_level,
-                "Rejected %s (%s): requires conda%s",
+                "Rejected %s (%s): requires %s%s",
                 path,
                 candidate_flavor or "unknown flavor",
+                flavor,
                 requirement_text(constraint) if constrained else "",
             )
         return None

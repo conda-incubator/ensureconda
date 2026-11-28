@@ -51,6 +51,7 @@ from ensureconda.installer import (
 )
 from ensureconda.resolve import (
     UnsupportedPlatformError,
+    _conda_exe_from_env,
     absolute_path,
     conda_executables,
     conda_standalone_executables,
@@ -183,7 +184,8 @@ def ensure(
 
     The conda target checks CONDA_EXE first. It accepts an override identified
     as conda or conda_standalone and otherwise continues searching for conda.
-    Each target applies its own flavor and version requirements.
+    Other targets check CONDA_EXE after their normal search. Each target
+    applies its own flavor and version requirements to that executable.
 
     install selects when installation is attempted. Only micromamba and
     conda_standalone can be installed.
@@ -203,8 +205,8 @@ def ensure(
     satisfy unconstrained targets, with version=None.
 
     With probe_version=False, probe installed candidates only when constrained,
-    and omit unconstrained result versions. The conda target can still use
-    output recorded earlier in this call to identify an unchanged file.
+    and omit unconstrained result versions. A target can still identify
+    CONDA_EXE using output recorded earlier in this call for the unchanged file.
     Skip a file if this call still has a valid record
     that its version probe exited unsuccessfully. Downloaded executables must
     always run successfully. An unconstrained download can report an unreadable
@@ -239,6 +241,27 @@ def ensure(
         raise TypeError("targets must be a sequence of strings, not a single string")
     parsed = [_parse_target(target) for target in targets]
     return _ensure(parsed, install=install, probe_version=probe_version)
+
+
+def _installed_candidates(
+    paths: Iterator[Path], flavor: Flavor, constraint: _VersionConstraint
+) -> Iterator[Tuple[Path, bool]]:
+    """Yield candidate paths and flag overrides that need flavor identification."""
+    # The conda finder already tries CONDA_EXE first. Only the ordered API
+    # offers it as a fallback to the other finders.
+    override = (
+        _conda_exe_from_env()
+        if flavor != "conda" and isinstance(constraint, SpecifierSet)
+        else None
+    )
+    tried_override = False
+    for path in paths:
+        is_override = path == override
+        if is_override:
+            tried_override = True
+        yield path, is_override
+    if override is not None and not tried_override:
+        yield override, True
 
 
 def _ensure(
@@ -357,7 +380,7 @@ def _ensure(
                     raise
                 logger.warning("%s; trying %s instead", error, " or ".join(remaining))
                 continue
-            candidates = iter([installed_path])
+            candidates = iter([(installed_path, False)])
         else:
             if has_version_constraint(constraint) or probe_version:
                 logger.debug(
@@ -365,8 +388,8 @@ def _ensure(
                 )
             else:
                 logger.debug("Searching for %s without probing its version", flavor)
-            candidates = finders[flavor]()
-        for path in candidates:
+            candidates = _installed_candidates(finders[flavor](), flavor, constraint)
+        for path, from_conda_exe in candidates:
             result = check_executable(
                 path,
                 flavor,
@@ -374,6 +397,7 @@ def _ensure(
                 observations=observations,
                 probe_version=probe_version,
                 rejection_level=rejection_level,
+                from_conda_exe=from_conda_exe,
             )
             if result is not None:
                 if result.version is None:

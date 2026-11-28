@@ -84,15 +84,22 @@ def resolve_executable(exe_name: str) -> Iterator[Path]:
                 yield exe_path
 
 
-def conda_executables() -> Iterator[Path]:
-    conda_exe_from_env = os.environ.get("CONDA_EXE")
+def _conda_exe_from_env() -> Optional[Path]:
+    value = os.environ.get("CONDA_EXE")
     # Path("./conda") loses the distinction between a path and a command name.
-    if conda_exe_from_env and not os.path.dirname(conda_exe_from_env):
-        conda_exe_from_env = which_no_shims(conda_exe_from_env)
-    if conda_exe_from_env:
-        path = absolute_path(Path(conda_exe_from_env))
+    if value and not os.path.dirname(value):
+        value = which_no_shims(value)
+    if value:
+        path = absolute_path(Path(value))
         if is_exe(path):
-            yield path
+            return path
+    return None
+
+
+def conda_executables() -> Iterator[Path]:
+    override = _conda_exe_from_env()
+    if override is not None:
+        yield override
     yield from resolve_executable("conda")
 
 
