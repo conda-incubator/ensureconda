@@ -214,22 +214,58 @@ class CondaExecutable:
         }
 
 
-def _probe_version(
-    executable: _StrPath, flavor: Flavor, observations: Optional[_Observations]
-) -> Optional[Version]:
-    parse: Callable[[str], Version]
-    if flavor == "mamba":
-        parse = _mamba_version
-    elif flavor == "micromamba":
-        parse = _micromamba_version
-    elif flavor in ("conda", "conda_standalone"):
-        parse = _conda_version
-    else:
-        raise ValueError(f"Unknown executable flavor: {flavor!r}")
-    version = parse(_version_output(executable, observations))
+def _flavor_from_name(executable: _StrPath) -> Optional[Flavor]:
+    name = Path(executable).name.lower()
+    for suffix in (".exe", ".bat", ".cmd"):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+    flavors: Dict[str, Flavor] = {
+        "mamba": "mamba",
+        "micromamba": "micromamba",
+        "conda": "conda",
+        "conda_standalone": "conda_standalone",
+        "conda-standalone": "conda_standalone",
+    }
+    return flavors.get(name)
+
+
+def _flavor_from_output(output: str) -> Optional[Flavor]:
+    lines = output.strip().splitlines()
+    if any(line.startswith("mamba") for line in lines):
+        return "mamba"  # mamba 1 also reports the version of conda
+    if lines and lines[0].startswith("conda"):
+        return "conda"
+    if lines:
+        # micromamba prints only its version.
+        try:
+            Version(lines[0].strip())
+        except InvalidVersion:
+            return None
+        return "micromamba"  # or mamba 2, whose output is identical
+    return None
+
+
+_VERSION_PARSERS: Dict[Flavor, Callable[[str], Version]] = {
+    "mamba": _mamba_version,
+    "micromamba": _micromamba_version,
+    "conda": _conda_version,
+    "conda_standalone": _conda_version,
+}
+
+
+def _parse_version(output: str, flavor: Flavor) -> Optional[Version]:
+    version = _VERSION_PARSERS[flavor](output)
     if Version(version.base_version) == _LEGACY_UNKNOWN_VERSION:
         return None
     return version
+
+
+def _probe_version(
+    executable: _StrPath, flavor: Flavor, observations: Optional[_Observations]
+) -> Optional[Version]:
+    if flavor not in _VERSION_PARSERS:
+        raise ValueError(f"Unknown executable flavor: {flavor!r}")
+    return _parse_version(_version_output(executable, observations), flavor)
 
 
 def _requests_prerelease(constraint: SpecifierSet) -> bool:

@@ -23,8 +23,10 @@ from packaging.version import InvalidVersion, Version
 from ensureconda.determine_versions import CondaExecutable as CondaExecutable
 from ensureconda.determine_versions import Flavor as Flavor
 from ensureconda.determine_versions import (
+    _flavor_from_name,
+    _flavor_from_output,
     _Observations,
-    _probe_version,
+    _parse_version,
     _StrPath,
     _version_output,
     _VersionConstraint,
@@ -69,43 +71,6 @@ _INSTALL_POLICIES: Tuple[InstallPolicy, ...] = (
     "per-target",
     "force",
 )
-
-
-def _flavor_from_name(executable: _StrPath) -> Optional[Flavor]:
-    name = Path(executable).name.lower()
-    for suffix in (".exe", ".bat", ".cmd"):
-        if name.endswith(suffix):
-            name = name[: -len(suffix)]
-    flavors: Dict[str, Flavor] = {
-        "mamba": "mamba",
-        "micromamba": "micromamba",
-        "conda": "conda",
-        "conda_standalone": "conda_standalone",
-        "conda-standalone": "conda_standalone",
-    }
-    return flavors.get(name)
-
-
-def _probe_flavor(
-    executable: _StrPath, observations: Optional[_Observations]
-) -> Optional[Flavor]:
-    try:
-        output = _version_output(executable, observations)
-    except (subprocess.CalledProcessError, OSError, UnicodeDecodeError):
-        return None
-    lines = output.strip().splitlines()
-    if any(line.startswith("mamba") for line in lines):
-        return "mamba"  # mamba 1 also reports the version of conda
-    if lines and lines[0].startswith("conda"):
-        return "conda"
-    if lines:
-        # micromamba prints only its version.
-        try:
-            Version(lines[0].strip())
-        except InvalidVersion:
-            return None
-        return "micromamba"  # or mamba 2, whose output is identical
-    return None
 
 
 def _legacy_targets(
@@ -446,12 +411,15 @@ def identify(executable: _StrPath) -> CondaExecutable:
         raise FileNotFoundError(errno.ENOENT, "No such executable", str(executable))
     if not os.access(path, os.X_OK):
         raise PermissionError(errno.EACCES, "Not an executable file", str(executable))
-    observations: _Observations = {}
-    flavor = _flavor_from_name(path) or _probe_flavor(path, observations)
+    flavor = _flavor_from_name(path)
+    version = None
+    try:
+        output = _version_output(path, None)
+        flavor = flavor or _flavor_from_output(output)
+        if flavor is not None:
+            version = _parse_version(output, flavor)
+    except (subprocess.CalledProcessError, OSError, InvalidVersion, UnicodeDecodeError):
+        pass
     if flavor is None:
         raise ValueError(f"{executable} is not a recognized conda executable")
-    try:
-        version = _probe_version(path, flavor, observations)
-    except (subprocess.CalledProcessError, OSError, InvalidVersion, UnicodeDecodeError):
-        version = None
     return CondaExecutable(path, flavor, version)

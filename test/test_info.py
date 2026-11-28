@@ -138,9 +138,10 @@ def test_identify(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     executable = executable_file(tmp_path / path)
-    fake_version_outputs(monkeypatch, {executable.name: output})
+    calls = fake_version_outputs(monkeypatch, {executable.name: output})
 
     assert identify(executable) == CondaExecutable(executable, flavor, Version(version))
+    assert calls == [executable.name]
 
 
 def test_identify_rejects_unrecognized_executables(
@@ -169,13 +170,11 @@ def test_identify_still_reports_unknown_version_after_probe_failure(
     monkeypatch: pytest.MonkeyPatch,
     log_messages: Callable[[], str],
 ) -> None:
-    def broken_version(
-        executable: object, flavor: object, observations: object
-    ) -> Version:
+    def broken_version(*args: object, **kwargs: object) -> bytes:
         raise error
 
     executable = executable_file(tmp_path / "micromamba")
-    monkeypatch.setattr(api, "_probe_version", broken_version)
+    monkeypatch.setattr(subprocess, "check_output", broken_version)
 
     assert identify(executable) == CondaExecutable(executable, "micromamba", None)
     assert log_messages() == ""
