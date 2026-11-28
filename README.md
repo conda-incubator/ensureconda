@@ -111,6 +111,18 @@ constraints in Python packaging's version-specifier syntax, such as `>=2,<3` or
 and such an executable can't satisfy a constraint. Later releases may add
 fields to the result or keys to `ensureconda --json`.
 
+The Python `conda` target checks `CONDA_EXE` first. For example, if it points
+to mamba 1.5.12, `ensure(["conda"])` returns that path with flavor `mamba` and
+version `1.5.12`. A constrained target such as `conda>=24` skips mamba and
+micromamba and continues looking for a compatible conda. A conda-standalone
+executable supplied through `CONDA_EXE` can satisfy a conda constraint.
+
+As with `identify()`, the file name determines the flavor when recognized.
+For other names, `ensure()` uses the output of `--version` when it probes.
+If neither identifies the tool, a bare `conda` target still accepts a usable
+candidate as `conda` with version `None`. With `probe_version=False`, this
+fallback also applies to an unrecognized name without running it.
+
 Version constraints skip prereleases unless you request one, as in
 `micromamba>=2.0rc1`. A plain `micromamba` target can use an installed
 prerelease and downloads a stable release if needed.

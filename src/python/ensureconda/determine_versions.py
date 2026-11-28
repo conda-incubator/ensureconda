@@ -352,11 +352,19 @@ def check_executable(
     probe_version: bool = True,
     rejection_level: Optional[int] = logging.INFO,
 ) -> Optional[CondaExecutable]:
+    # CONDA_EXE can name any tool. Other finders search for a specific name.
+    candidate_flavor = _flavor_from_name(path) if flavor == "conda" else flavor
     version = None
     constrained = has_version_constraint(constraint)
     if constrained or probe_version:
         try:
-            version = _probe_version(path, flavor, observations)
+            if candidate_flavor is None:
+                output = _version_output(path, observations)
+                candidate_flavor = _flavor_from_output(output)
+                if candidate_flavor is not None:
+                    version = _parse_version(output, candidate_flavor)
+            else:
+                version = _probe_version(path, candidate_flavor, observations)
         except (
             subprocess.CalledProcessError,
             OSError,
@@ -382,6 +390,20 @@ def check_executable(
                 return None
     elif _has_failed_probe(path, observations):
         return None
+    if (
+        constrained
+        and flavor == "conda"
+        and candidate_flavor in ("mamba", "micromamba")
+    ):
+        if rejection_level is not None:
+            logger.log(
+                rejection_level,
+                "Rejected %s (%s): requires conda%s",
+                path,
+                candidate_flavor,
+                requirement_text(constraint),
+            )
+        return None
     match = match_version(version, constraint)
     if match is not VersionMatch.ACCEPTED:
         if rejection_level is not None:
@@ -394,4 +416,4 @@ def check_executable(
                 match.rejection_text(constraint),
             )
         return None
-    return CondaExecutable(path, flavor, version)
+    return CondaExecutable(path, candidate_flavor or flavor, version)

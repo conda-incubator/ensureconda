@@ -181,6 +181,10 @@ def ensure(
     A bare target accepts an executable reporting any version, including a
     prerelease. When choosing a package to download, it selects a stable release.
 
+    The conda target checks CONDA_EXE first. A bare conda target accepts mamba
+    or micromamba there and reports its own flavor and version. A conda version
+    constraint requires conda or conda_standalone.
+
     install selects when installation is attempted. Only micromamba and
     conda_standalone can be installed.
 
@@ -372,12 +376,14 @@ def _ensure(
             )
             if result is not None:
                 if result.version is None:
-                    logger.log(selection_level, "Selected %s at %s", flavor, path)
+                    logger.log(
+                        selection_level, "Selected %s at %s", result.flavor, path
+                    )
                 else:
                     logger.log(
                         selection_level,
                         "Selected %s %s at %s",
-                        flavor,
+                        result.flavor,
                         result.version,
                         path,
                     )
