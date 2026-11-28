@@ -13,6 +13,7 @@ from typing import (
     Dict,
     Literal,
     Optional,
+    Set,
     Tuple,
     Union,
 )
@@ -47,6 +48,7 @@ class _Observations:
     verified: Dict[Path, _Observation] = field(default_factory=dict)
     # Only a bare target may consult this evidence, and only to skip a candidate.
     unverified: Dict[Path, _ProbeResult] = field(default_factory=dict)
+    reported_failures: Set[Tuple[Path, str]] = field(default_factory=set)
 
     def probe(self, exe: _StrPath) -> _ProbeResult:
         key = _observation_key(exe)
@@ -437,6 +439,22 @@ def _matches_target_flavor(
     return candidate in ("conda", "conda_standalone")
 
 
+def _warn_probe_failure(
+    path: Path, error: Exception, observations: Optional[_Observations]
+) -> None:
+    reason = (
+        f"`--version` exited with status {error.returncode}"
+        if isinstance(error, subprocess.CalledProcessError)
+        else str(error)
+    )
+    if observations is not None:
+        failure = (path, reason)
+        if failure in observations.reported_failures:
+            return
+        observations.reported_failures.add(failure)
+    logger.warning("Skipping %s: could not determine its version (%s)", path, reason)
+
+
 def check_executable(
     path: Path,
     flavor: Flavor,
@@ -449,9 +467,8 @@ def check_executable(
 ) -> Optional[CondaExecutable]:
     # A launcher may have any filename. An ordinary finder supplies the tool
     # name it searched for; the conda finder also returns CONDA_EXE.
-    candidate_flavor = (
-        _flavor_from_name(path) if from_env or flavor == "conda" else flavor
-    )
+    named_flavor = _flavor_from_name(path) if from_env or flavor == "conda" else flavor
+    candidate_flavor = named_flavor
     version = None
     constrained = has_version_constraint(constraint)
     if constrained or probe_version:
@@ -478,17 +495,8 @@ def check_executable(
             if constrained or isinstance(
                 error, (subprocess.CalledProcessError, OSError)
             ):
-                reason = (
-                    f"`--version` exited with status {error.returncode}"
-                    if isinstance(error, subprocess.CalledProcessError)
-                    else str(error)
-                )
                 if rejection_level is not None:
-                    logger.warning(
-                        "Skipping %s: could not determine its version (%s)",
-                        path,
-                        reason,
-                    )
+                    _warn_probe_failure(path, error, observations)
                 return None
     elif observations is not None:
         recorded, verified = observations.for_bare_target(path)
@@ -501,7 +509,11 @@ def check_executable(
     if not _matches_target_flavor(candidate_flavor, flavor, constraint):
         if rejection_level is not None:
             logger.log(
-                rejection_level,
+                (
+                    logging.DEBUG
+                    if from_env and named_flavor != flavor
+                    else rejection_level
+                ),
                 "Rejected %s (%s): requires %s%s",
                 path,
                 candidate_flavor or "unknown flavor",

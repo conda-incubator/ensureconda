@@ -693,11 +693,92 @@ def test_cli_json_reports_conda_standalone_from_conda_exe(
     result = CliRunner().invoke(cli.ensureconda_cli, ["--json", "--no-install"])
 
     assert result.exit_code == 0
+    assert "Rejected" not in result.output
     assert f"Selected conda_standalone 25.1 at {executable}" in result.output
     assert (
         json.loads(result.stdout.splitlines()[-1])
         == CondaExecutable(executable, "conda_standalone", Version("25.1")).to_json()
     )
+
+
+@pytest.mark.parametrize(
+    "variable, flavor, output, version, minimum_option",
+    [
+        ("CONDA_EXE", "conda", "conda 25.1", "25.1", "--min-conda-version"),
+        ("MAMBA_EXE", "micromamba", "2.9", "2.9", "--min-mamba-version"),
+    ],
+)
+def test_cli_shows_cross_tool_launcher_checks_only_at_debug(
+    variable: str,
+    flavor: str,
+    output: str,
+    version: str,
+    minimum_option: str,
+    set_conda_exe: Callable[[str], Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launcher = set_conda_exe(flavor + ".exe")
+    monkeypatch.delenv("CONDA_EXE")
+    monkeypatch.setenv(variable, str(launcher))
+    monkeypatch.setattr(
+        determine_versions, "_fingerprint", lambda path: (1, 2, 3, 4, 5)
+    )
+    calls = fake_version_outputs(monkeypatch, {launcher.name: output})
+    runner = CliRunner()
+
+    normal = runner.invoke(cli.ensureconda_cli, ["--no-install"])
+    assert normal.exit_code == 0
+    assert f"Selected {flavor} {version} at {launcher}" in normal.output
+    assert "Rejected" not in normal.output
+    assert calls == [launcher.name]
+
+    debug = runner.invoke(cli.ensureconda_cli, ["--no-install", "-v", "2"])
+    assert debug.exit_code == 0
+    assert f"Rejected {launcher} ({flavor}): requires mamba" in debug.output
+
+    too_old = runner.invoke(cli.ensureconda_cli, ["--no-install", minimum_option, "99"])
+    assert too_old.exit_code == 1
+    assert f"Rejected {launcher} {version}: requires >=99" in too_old.output
+
+
+@pytest.mark.parametrize("verifiable", [True, False], ids=["verified", "unverified"])
+def test_broken_launcher_warns_once_per_resolution(
+    verifiable: bool,
+    set_conda_exe: Callable[[str], Path],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    launcher = set_conda_exe("wrapper.exe")
+    fingerprint = (1, 2, 3, 4, 5) if verifiable else None
+    monkeypatch.setattr(determine_versions, "_fingerprint", lambda path: fingerprint)
+    fake_version_outputs(monkeypatch, {})
+
+    for _ in range(2):
+        result = CliRunner().invoke(cli.ensureconda_cli, ["--no-install"])
+        assert result.exit_code == 1
+        assert result.output.count(f"Skipping {launcher}:") == 1
+
+
+def test_probe_warnings_distinguish_files_and_exit_statuses(
+    set_conda_exe: Callable[[str], Path],
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    conda = set_conda_exe("conda.exe")
+    mamba = executable_file(conda.with_name("mamba.exe"))
+    monkeypatch.setenv("MAMBA_EXE", str(mamba))
+    monkeypatch.setattr(determine_versions, "_fingerprint", lambda path: None)
+    statuses = {mamba: iter([1, 1]), conda: iter([1, 2, 2])}
+
+    def check_output(args: List[Any], **kwargs: Any) -> bytes:
+        raise subprocess.CalledProcessError(next(statuses[args[0]]), args)
+
+    monkeypatch.setattr(subprocess, "check_output", check_output)
+    with caplog.at_level(logging.WARNING, logger="ensureconda"):
+        assert ensure(["mamba", "micromamba", "conda"], install="never") is None
+    assert caplog.messages == [
+        f"Skipping {path}: could not determine its version (`--version` exited with status {status})"
+        for path, status in [(mamba, 1), (conda, 1), (conda, 2)]
+    ]
 
 
 def test_unrecognized_conda_exe_is_only_a_legacy_fallback(
