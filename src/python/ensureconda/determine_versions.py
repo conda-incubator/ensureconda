@@ -364,13 +364,30 @@ def check_executable(
     constrained = has_version_constraint(constraint)
     if constrained or probe_version:
         try:
+            output = None
             if candidate_flavor is None:
                 output = _version_output(path, observations)
                 candidate_flavor = _flavor_from_output(output)
-                if candidate_flavor is not None:
-                    version = _parse_version(output, candidate_flavor)
-            else:
-                version = _probe_version(path, candidate_flavor, observations)
+            if (
+                constrained
+                and flavor == "conda"
+                and candidate_flavor in ("mamba", "micromamba")
+            ):
+                if rejection_level is not None:
+                    logger.log(
+                        rejection_level,
+                        "Rejected %s (%s): requires conda%s",
+                        path,
+                        candidate_flavor,
+                        requirement_text(constraint),
+                    )
+                return None
+            if candidate_flavor is not None:
+                version = (
+                    _probe_version(path, candidate_flavor, observations)
+                    if output is None
+                    else _parse_version(output, candidate_flavor)
+                )
         except (
             subprocess.CalledProcessError,
             OSError,
@@ -395,20 +412,6 @@ def check_executable(
                     )
                 return None
     elif _has_failed_probe(path, observations):
-        return None
-    if (
-        constrained
-        and flavor == "conda"
-        and candidate_flavor in ("mamba", "micromamba")
-    ):
-        if rejection_level is not None:
-            logger.log(
-                rejection_level,
-                "Rejected %s (%s): requires conda%s",
-                path,
-                candidate_flavor,
-                requirement_text(constraint),
-            )
         return None
     match = match_version(version, constraint)
     if match is not VersionMatch.ACCEPTED:

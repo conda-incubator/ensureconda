@@ -1,4 +1,5 @@
 import json
+import logging
 import subprocess
 import sys
 from collections.abc import Iterable
@@ -221,25 +222,50 @@ def test_conda_exe_metadata(
     assert calls == []
 
 
-@pytest.mark.parametrize("name", ["mamba", "wrapper"])
+@pytest.mark.parametrize(
+    "name, output, flavor",
+    [
+        ("mamba", "mamba 1.5.12\nconda 24.11.3", "mamba"),
+        ("micromamba.exe", "garbage", "micromamba"),
+        ("wrapper", "mamba 1.5.12\nconda 24.11.3", "mamba"),
+        ("wrapper", "mamba garbage\nconda 24.11.3", "mamba"),
+        ("wrapper", "2.9.0", "micromamba"),
+    ],
+)
 def test_conda_constraint_skips_mamba_in_conda_exe(
     name: str,
+    output: str,
+    flavor: Flavor,
     set_conda_exe: Callable[[str], Path],
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
 ) -> None:
-    set_conda_exe(name)
-    fake_version_outputs(
-        monkeypatch, {name: "mamba 1.5.12\nconda 24.11.3", "conda.exe": "conda 25.1"}
-    )
+    executable = set_conda_exe(name)
+    calls = fake_version_outputs(monkeypatch, {name: output, "conda.exe": "conda 25.1"})
+    probes = [name] if name == "wrapper" else []
 
-    assert ensure(["conda>=24"], install="never") is None
+    with caplog.at_level(logging.INFO, logger="ensureconda"):
+        assert ensure(["conda>=24"], install="never", probe_version=False) is None
+    assert caplog.record_tuples == [
+        (
+            determine_versions.__name__,
+            logging.INFO,
+            f"Rejected {executable} ({flavor}): requires conda>=24",
+        )
+    ]
+    assert calls == probes
+
+    calls.clear()
     assert ensure(["conda>=1"], install="never") is None
+    assert calls == probes
 
+    calls.clear()
     conda = executable_file(tmp_path / "cache" / "conda.exe")
     assert ensure(["conda>=24"], install="never") == CondaExecutable(
         conda, "conda", Version("25.1")
     )
+    assert calls == probes + [conda.name]
 
 
 def test_cli_json_reports_conda_standalone_from_conda_exe(
